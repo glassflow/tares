@@ -236,6 +236,7 @@ def labels_read(s) -> dict:
     for label in ("repo", "key_value", "flow", "type", "branch"):
         out[label] = listing(s._list_entities_scan(label, [SRC], 50))
         out[f"{label}, every source"] = listing(s._list_entities_scan(label, None, 50))
+        s._saved_counts.clear()          # each side counts its own, not the saved ones (TR-1716)
         out[f"{label}, hidden project"] = listing(s.list_entities(label, [SRC], exclude=HIDDEN))
         out[f"{label}, hidden, shared unknown"] = listing(s.list_entities(
             label, [SRC], exclude={"ids": ["uc_hidden"], "names": ["secret"]}))

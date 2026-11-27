@@ -67,13 +67,14 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import memory_route
 from .integrations.builtin import memory_tares
-from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
+from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, milestone_summary, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
 from . import edition as edition_mod
 from . import factory_home, request_memo, sre_home, screens, start_steps
 from . import sre as sre_mod
 from . import watch as watch_mod
 from . import feedback as feedback_mod
 from . import incidents as incidents_mod
+from . import report as report_mod
 from . import linear as _linear
 from .integrations import hooks as integrations_hooks, registry as integrations_registry, tickets as _tickets_integ
 from . import github_tickets as _gh_tickets
@@ -87,7 +88,7 @@ from . import timeline
 from . import goal as goal_mod
 from .slack import SETTING_KEY as SLACK_TOKEN_SETTING, resolve_token as resolve_slack_token
 from .tracing import PROVIDERS as tracing_providers, status as tracing_status
-from .store import Store, StoreUnavailable
+from .store import ReadExclude, Store, StoreUnavailable
 from .projects import Engine as ProjectEngine, ProjectError
 from .reads import resolve_read
 
@@ -742,6 +743,8 @@ def make_app() -> FastAPI:
         waiting_task = asyncio.create_task(_waiting_slack.run(loop_stop))
         # sessions idle for a week move from the session store to the archive, once an hour (TR-1506)
         archive_task = asyncio.create_task(session_archive.run(store, loop_stop))
+        # the weekly figures the report reads, built once and then kept current (TR-1666)
+        report_task = asyncio.create_task(report_mod.run(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -766,6 +769,7 @@ def make_app() -> FastAPI:
         licence_task.cancel()
         waiting_task.cancel()
         archive_task.cancel()
+        report_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -859,6 +863,9 @@ def make_app() -> FastAPI:
         if method == "POST" and path == "/api/crew/machine":
             return "ingest"  # the command line's report after `tares login` (TR-1312): a name and a
                              # version, from a key that can write the crew's settings
+        if method == "PUT" and path == "/api/crew/codex-limits":
+            return "ingest"  # a crew's own reading of its Codex account's limits (TR-1597), as its
+                             # Claude plan reading comes in over /ingest/claude_code. A read key is refused
         if (method == "PUT" and path == "/api/crew/settings") or (
                 method == "POST" and _PERSONAL_LINES.match(path)):
             return "ingest"  # a person's own crew settings and personal docs (TR-624): the
@@ -916,6 +923,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/tickets$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
         ("GET", re.compile(r"^/milestones$"), "read"),
+        ("GET", re.compile(r"^/milestones/[^/]+/summary$"), "read"),
         ("GET", re.compile(r"^/crew$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+/messages$"), "read"),
         ("GET", re.compile(r"^/assumptions$"), "read"),
@@ -1063,17 +1071,23 @@ def make_app() -> FastAPI:
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_ids() -> set[str]:
-        return {p["id"] for p in _hidden_projects()}
+        """The projects the caller cannot see: the private ones they are not on and, for every
+        caller, the private ones that were deleted (TR-1697)."""
+        private, deleted = store.private_and_deleted()
+        return {p["id"] for p in private if not _can_see(p)} | deleted
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _read_exclude() -> dict | None:
-        """What event reads leave out: the rows of the projects the caller cannot see."""
-        hp = _hidden_projects()
-        if not hp:
+        """What event reads leave out: the rows of the projects the caller cannot see, the
+        deleted private ones among them for every caller."""
+        private, deleted, records = store.private_and_records()
+        hp = [p for p in private if not _can_see(p)]
+        if not hp and not deleted:
             return None
-        return {"ids": [p["id"] for p in hp], "names": [p["name"] for p in hp],
-                "shared": sorted(n for n, c in runtime.catalog.sources.items()
-                                 if c.connector in _SHARED_CONNECTORS)}
+        return ReadExclude(
+            {"ids": [p["id"] for p in hp] + sorted(deleted), "names": [p["name"] for p in hp],
+             "shared": sorted(n for n, c in runtime.catalog.sources.items()
+                              if c.connector in _SHARED_CONNECTORS)}, records)
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_sources(hidden: set[str]) -> set[str]:
@@ -4897,6 +4911,7 @@ def make_app() -> FastAPI:
                                                         exclude=exclude)
                 if not count:
                     await _practice_ingest(w["name"], w["sample"])
+                    exclude = _read_exclude()   # again: the lines just sent may change it
                 break
         if not key:
             # the newest event the wake-up would count (its filters) in the last day, with the
@@ -5390,7 +5405,7 @@ def make_app() -> FastAPI:
                                       "made_by", "person", "by_label")},
                  "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
                 for a in store.list_assumptions(uid, ticket=t["id"])]
-            out.update(factory_api.review_state(store, uid, t, _cc_source()))
+            out.update(factory_api.review_state(h, uid, t, _cc_source()))
             lab = out["label"]
             ds = store.list_decisions(uid, all_=True)
             out["decisions"] = ([d for d in ds if lab in d["tickets"]]
@@ -5854,6 +5869,37 @@ def make_app() -> FastAPI:
         out = next(x for x in _milestones_out(uid) if x["id"] == m["id"])
         return {**out, "opened": factory_mod.label(store.get_ticket(uid, opened)) if opened else None}
 
+    # ── the summary of an accepted milestone (TR-1645, milestone_summary.py) ─────────────
+    summaries = milestone_summary.Summaries(store, _record_ask_usage)
+
+    def _summary_of(uid: str, ref: str) -> tuple[dict, bool]:
+        """(the milestone, whether it is accepted), for a project the caller may see."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        return m, next((x["accepted"] for x in _milestones_out(uid) if x["id"] == m["id"]), False)
+
+    @app.get("/api/projects/{uid}/milestones/{ref}/summary")
+    def read_milestone_summary(uid: str, ref: str):
+        """{milestone, summary: {text, source, figures, written_at} | null, writing}: a few lines
+        on what an accepted milestone delivered, the decisions taken on the way and what is left.
+        Written once, when it is accepted or else on the first read, in the background: `writing`
+        says to ask again shortly. A milestone not accepted has none."""
+        m, accepted = _summary_of(uid, ref)
+        if not accepted:
+            return summaries.answer(m["id"], None, False)
+        return summaries.read(uid, m["id"])
+
+    @app.post("/api/projects/{uid}/milestones/{ref}/summary/rewrite", status_code=202)
+    def rewrite_milestone_summary(uid: str, ref: str, request: Request):
+        """Write an accepted milestone's summary again, from today's figures. Answers at once with
+        the kept text and `writing`."""
+        m, accepted = _summary_of(uid, ref)
+        if factory_api.caller(request)["station"]:
+            _err(ValueError("a person asks for a summary again, not a station"), 403)
+        if not accepted:
+            _err(ValueError(f"{m['name']} is not accepted yet, so it has no summary"), 409)
+        return summaries.rewrite(uid, m["id"])
+
     @app.post("/api/projects/{uid}/milestones/{ref}/accept")
     def accept_milestone(uid: str, ref: str, request: Request, body: dict = Body(default={})):
         """The person accepts a milestone as it is (TR-1017): every ticket merged, whatever checks
@@ -5864,6 +5910,7 @@ def make_app() -> FastAPI:
             _err(ValueError("a person accepts a milestone, not a station"), 403)
         person = _current_person(request)
         store.accept_milestone(uid, m["id"], _by(request, body), (person or {}).get("id"), now_utc())
+        summaries.queue(uid, m["id"])   # written in the background (TR-1645); never raises
         # the answer to the milestone's home item (TR-1450), in the words the item asked
         from . import factory_waiting as _fw
         place = next((i for i, x in enumerate(store.milestones_by_project([uid]).get(uid) or [], 1)
@@ -5971,11 +6018,14 @@ def make_app() -> FastAPI:
     def list_project_sessions(uid: str):
         """The sessions that worked in the project (the spec session among them), newest activity
         first, each with its state (working, idle between turns, waiting for the person, ended) and, for a waiting
-        one, the last thing it said (`last_said`)."""
+        one, the last thing it said (`last_said`). A session that also worked in a private project
+        the caller cannot see is not listed, unless it is the caller's own station's (TR-1710)."""
         _project_or_404(uid)
         src = next((n for n, c in runtime.catalog.sources.items()
                     if c.connector == "claude_code"), "claude_code")
         out = store.project_sessions(uid)
+        unread = factory_api.unread_sessions(h, [s["session"] for s in out])
+        out = [s for s in out if s["session"] not in unread]
         now = now_utc()
         for s in out:
             # a session whose end never reached Tares does not wait forever (TR-473)
@@ -5988,9 +6038,11 @@ def make_app() -> FastAPI:
     @app.get("/api/projects/{uid}/sessions/{sid}")
     def get_project_session(uid: str, sid: str, limit: int = 200, offset: int = 0):
         """One session's lines, oldest first, the ones from before it named the project
-        included."""
+        included. A session the list leaves out for this caller answers as one that did not work
+        here (TR-1710)."""
         _project_or_404(uid)
-        if not any(s["session"] == sid for s in store.project_sessions(uid)):
+        if (not any(s["session"] == sid for s in store.project_sessions(uid))
+                or factory_api.unread_sessions(h, [sid])):
             _err(KeyError(f"session {sid!r} did not work in this project"), 404)
         src = next((n for n, c in runtime.catalog.sources.items()
                     if c.connector == "claude_code"), "claude_code")
@@ -6023,7 +6075,9 @@ def make_app() -> FastAPI:
                 return max(before, key=lambda s: s["last_at"] or s["started_at"])
         return live[0]
 
-    def _pickup(uid: str) -> dict:
+    def _pickup(uid: str) -> tuple[dict, dict | None]:
+        """The hand-over as the caller may see it, and the session that was on the ticket, which
+        the caller may not read (TR-1710): then `previous_session` in the hand-over is None."""
         tickets = store.list_tickets(uid)
         ready = factory_mod.readiness(tickets)
         # the ticket a session stopped on: in progress, and not waiting on someone else (in
@@ -6044,11 +6098,14 @@ def make_app() -> FastAPI:
             open_ = prev["state"] in ("idle", "waiting") or (
                 prev["state"] in (None, "working") and quiet is not None and quiet < _QUIET_MIN)
             src = _cc_source()
-            out["previous_session"] = {
-                "session": prev["session"], "repo": prev["repo"], "state": prev["state"],
-                "reason": prev["state_reason"], "last_at": prev["last_at"], "quiet_minutes": quiet,
-                "said_lately": store.said_lately(src, prev["session"], 3),
-                "files_touched": store.files_touched(src, prev["session"])}
+            # no other session takes its place: the build was on this one, readable or not
+            if not factory_api.unread_sessions(h, [prev["session"]]):
+                out["previous_session"] = {
+                    "session": prev["session"], "repo": prev["repo"], "state": prev["state"],
+                    "reason": prev["state_reason"], "last_at": prev["last_at"],
+                    "quiet_minutes": quiet,
+                    "said_lately": store.said_lately(src, prev["session"], 3),
+                    "files_touched": store.files_touched(src, prev["session"])}
             out["may_be_open"] = bool(open_)
         gmem = _global_ids().get("memory")
         mem = next((d for d in store.list_docs(uid, "memory") if d["id"] != gmem), None)
@@ -6082,33 +6139,35 @@ def make_app() -> FastAPI:
                 t["status"] == "todo" for t in tickets) else
              "Every ticket is finished." if tickets else
              "The project has no tickets yet: spec it first (/tares:spec)."])
-        return out
+        return out, prev
 
     @app.get("/api/projects/{uid}/pickup")
     def get_pickup(uid: str):
         """What a fresh session needs to pick the build up where a session stopped: the ticket in
         progress (else the next) with its working doc, the session that was on it (its state,
         last messages, files it touched, whether it may still be open), the builders' notes and
-        a checklist. Reads only."""
+        a checklist. `previous_session` is null when that session also worked in a private project
+        the caller cannot see and is not their own station's (TR-1710). Reads only."""
         _project_or_404(uid)
-        return _pickup(uid)
+        return _pickup(uid)[0]
 
     @app.post("/api/projects/{uid}/pickup")
     def take_over(uid: str, body: dict = Body(default={})):
         """A fresh session takes the build over: the previous session is marked replaced, so two
         sessions never work the same ticket. When it may still be open (waiting, or active in
-        the last minutes) this needs {"take_over": true}."""
+        the last minutes) this needs {"take_over": true}. A caller who must not read that session
+        takes the build over all the same, and is told neither its state nor its id (TR-1710)."""
         _project_or_404(uid)
-        out = _pickup(uid)
-        prev = out["previous_session"]
+        out, prev = _pickup(uid)
+        shown = out["previous_session"]
         if prev and out["may_be_open"] and not body.get("take_over"):
-            _err(ValueError("the session that was building may still be open "
-                            f"({prev['state'] or 'active'}); ask the person, then take over with "
-                            "take_over"), 409)
+            state = f" ({shown['state'] or 'active'})" if shown else ""
+            _err(ValueError(f"the session that was building may still be open{state}; ask the "
+                            "person, then take over with take_over"), 409)
         if prev:
             store.set_session_state(prev["session"], "replaced",
                                     "a fresh session picked the build up", now_utc(), force=True)
-        return {**out, "taken_over": prev["session"] if prev else None}
+        return {**out, "taken_over": shown["session"] if shown else None}
 
     # ── the crew's standup report: before factory_api, whose /api/crew/{name} would take it ──
     def _standup_range(since: str | None, until: str | None) -> tuple[datetime, datetime]:
@@ -6265,6 +6324,7 @@ def make_app() -> FastAPI:
         ensure_globals=lambda uid: _ensure_globals(uid),
         tickets_out=lambda uid: _tickets_out(uid),
         caller=_CALLER.get, project_key=_pk, hidden_project=_hidden_project,
+        auth_off=lambda: not AUTH_TOKEN,
         projects=lambda: projects,
         licence_state=lambda: licence.current(store),
         licence_required=licence.licence_required)
@@ -6555,7 +6615,7 @@ def make_app() -> FastAPI:
             _err(e)
 
     # what the Claude Code sessions spend: the plan's limits and tokens by project
-    claude_usage.register(app, store)
+    claude_usage.register(app, store, _hidden_ids)
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
     # in. Tares reads from Linear; write_ticket and write_milestone create there through Tares ──

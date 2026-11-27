@@ -30,10 +30,10 @@ import re
 import sys
 import time
 
-from . import claude, launch, lifecycle, locks, pace, state
+from . import claude, launch, lifecycle, locks, pace, proc, state
 from .claude import SessionListUnreadableError
 from .client import TaresClient, TaresHTTPError, cksum, uri
-from .errors import CrewError, NotBetweenTurnsError
+from .errors import CrewError, LimitHeldError, NotBetweenTurnsError
 from .paths import CrewPaths
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder")
@@ -250,7 +250,7 @@ def _stall_items(doc, client: TaresClient, paths: CrewPaths) -> list:
         if stage == "changes" and isinstance(holder, str) and holder in known:   # a station this crew does not know is not ours to call gone
             if holder not in running:
                 try:
-                    running[holder] = claude.is_alive(holder, "", claude.claude_bin(client.env), paths)
+                    running[holder] = proc.is_alive(holder, "", proc.binary(client.env, paths), paths)
                 except (SessionListUnreadableError, CrewError):
                     running[holder] = True   # not known to be gone: no wake on a reading that failed
             if not running[holder]:
@@ -305,7 +305,7 @@ def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
     work_keys = [] if items is None else [i["key"] for i in items]
     orch = state.crew_orchestrator(paths)
     base = state.wake_read(orch, paths)["baseline"]
-    act = claude.station_updated(orch, paths)   # an answer the orchestrator itself recorded is not news to it
+    act = proc.station_updated(orch, paths)   # an answer the orchestrator itself recorded is not news to it
     answers = [a for a in _list(_get(desk, "desk"))
                if _get(a, "command") is None and _get(a, "closed_at") is not None]
     dmax = max((a["closed_at"] for a in answers), default="")
@@ -420,6 +420,13 @@ def _after(n: int, base: int, level: int) -> int:
     return 1800 if n == 1 else 2700
 
 
+def state_for(client: TaresClient, paths: CrewPaths, s: str) -> str:
+    """The idle_wake setting as it applies to station `s`. A Codex station holds no schedule of its own, so the
+    factory is what wakes it: for it the setting is always on (TR-1598)."""
+    st = launch.idle_wake_state(client)
+    return "on" if st == "off" and proc.on_codex(s, paths) else st
+
+
 def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=None):
     """What to tell station `s` now, or None when it is not to be woken. A dict with the station, the state
     of the setting it was decided under, the time, the reason, the prompt, the keys of what is pending, the
@@ -429,13 +436,13 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
         return None
     if state.halted(paths) or not state.stations_get(s, "sessionId", paths=paths):
         return None
-    st = launch.idle_wake_state(client)
+    st = state_for(client, paths, s)
     if st == "off":
         if state.wake_read(s, paths)["released"] is not True:
             return None
     elif st != "on":
         return None
-    if claude.attached(s, paths) or not claude.at_rest(s, claude_bin, paths):
+    if proc.attached(s, paths) or not proc.at_rest(s, claude_bin, paths):
         return None
     now = state.now_s() if now is None else now
     out = {"station": s, "state": st, "now": now, "keys": [], "baseline": None, "n": 0, "work": False}
@@ -449,7 +456,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
         settle = _settle(client.env)
     except ScanError:
         return None
-    upd = claude.station_updated(s, paths)
+    upd = proc.station_updated(s, paths)
     level = pace_level(paths, client.env)
     hold = role == "builder" and level >= 2   # a builder told to hold gets no work wake
     c0 = _alt(w["clock"], now)
@@ -475,12 +482,14 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
     except OSError:
         pass
     out.update(keys=keys, baseline=scan.get("baseline"), n=n)
-    note = launch.idle_wake_note()
+    note = launch.idle_wake_note(proc.runtime(s, paths))
     if new:
         texts = "; ".join(p["text"] for p in new)
         out.update(work=True, n=0, reason=f"work: {texts}",
                    prompt=f"{work_prompt(role, texts)} {woke_on([p['key'] for p in new])} {note} Carry on from your report.")
-    elif scan["live"] and w["released"] is not True:
+    elif scan["live"] and w["released"] is not True and not proc.on_codex(s, paths):
+        # (a Codex station holds no tick to drop: the release below is for Claude Code's; its wake file is
+        # marked released by the send that follows any wake)
         # Switched on under a running station: it still holds the tick it armed itself, so tell it now.
         out.update(n=0, reason="release: idle_wake was switched on, telling the station to drop its tick",
                    prompt=f"idle_wake was switched on. {note} Carry on from your report.")
@@ -501,15 +510,18 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
     try:
         if not fresh.tares_on():
             return
-        if launch.idle_wake_state(fresh) != p["state"]:
+        if state_for(fresh, paths, s) != p["state"]:
             return   # the setting changed since the round began
-        if (state.halted(paths) or claude.attached(s, paths)
-                or not claude.at_rest(s, claude_bin, paths)):
+        if (state.halted(paths) or proc.attached(s, paths)
+                or not proc.at_rest(s, claude_bin, paths)):
             return   # it started something since the first check, or it waits on a prompt
         client.say(f"waking {s} ({p['reason'].split(':')[0]}); restarting it in the same conversation")
         try:
             lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True,
                               prompt_wait=math.inf)
+        except LimitHeldError as e:   # TR-1597: the wake waits for the account's limit to reset
+            client.say(f"{e}; the wake is kept for after the reset")
+            return
         except NotBetweenTurnsError:
             client.say(f"{s} started a turn; not waking it, will look again next round")
             return
@@ -548,7 +560,7 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
     if not names:
         return
     if claude_bin is None:
-        claude_bin = claude.claude_bin(env)
+        claude_bin = proc.binary(env, paths)
     client = TaresClient(paths, env)
     try:
         for s in names:
@@ -560,7 +572,7 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
             if s in watch_revive.last.handled:
                 continue
             try:
-                if not claude.is_alive(s, "", claude_bin, paths):
+                if not proc.is_alive(s, "", claude_bin, paths):
                     continue
             except SessionListUnreadableError:
                 client.say(f"skipping {s} this round")
@@ -619,10 +631,10 @@ def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
         if latest <= _ANSWERED_DONE.get(home, ""):
             return
         if claude_bin is None:
-            claude_bin = claude.claude_bin(env)
+            claude_bin = proc.binary(env, paths)
         try:
-            if (not claude.is_alive(orch, "", claude_bin, paths) or claude.attached(orch, paths)
-                    or not claude.at_rest(orch, claude_bin, paths)):
+            if (not proc.is_alive(orch, "", claude_bin, paths) or proc.attached(orch, paths)
+                    or not proc.at_rest(orch, claude_bin, paths)):
                 return   # not now: the next tick asks again
             p = plan(client, paths, orch, claude_bin=claude_bin)
             if p is None or not p["work"]:   # nothing new for it; a release note or a liveness wake waits for the round

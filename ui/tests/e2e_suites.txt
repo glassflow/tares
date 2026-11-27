@@ -17,6 +17,7 @@ edition-routes
 edition-shell
 ee-chunk
 ee-project-access
+embedded
 explore
 factory-crew
 factory-docs
@@ -47,6 +48,7 @@ projects-list
 raise-limit
 reads
 redirects
+report
 resources
 session-picker
 settings-people

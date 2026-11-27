@@ -404,6 +404,8 @@ def prs_to_review(store, fx, now, handovers: dict | None = None) -> list[dict]:
             tickets=[q["ticket"]]), o, ids, p if ids == o.project(p) else None)
         if absorbs:
             item["absorbs"] = absorbs
+            # the desk question this row stands for, so a link to it (#desk-Dn) finds the row
+            item["desk_labels"] = list(absorbs)
         out.append(item)
     return out
 
@@ -470,9 +472,11 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
     # a call in a batch on the desk waits for whoever the batch is for (its addressee, else the
     # project's owner); any other call, for the project's owner. One item per project and owners.
     batched: dict[tuple[str, str], tuple[str, ...]] = {}
+    held: dict[tuple[str, str], list[str]] = {}      # the batches that hold each call
     for d in store.list_desk("open", None):
         for x in d.get("assumptions") or ():
             batched[(d["project"], x)] = o.desk(d, open_ps.get(d["project"]))
+            held.setdefault((d["project"], x), []).append(d["label"])
     by: dict[tuple, list[dict]] = {}
     for a in rows:
         if a["project"] in names:
@@ -488,7 +492,7 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
         keep = "both" if n == 2 else "it" if n == 1 else "them"
         roles = list(dict.fromkeys(_ROLE_WORD.get(a["made_role"] or "", "the crew") for a in items))
         since = min((a["made_at"] for a in items), key=lambda t: fh._dt(t) or now)
-        out.append(owners_mod.tag(fh.home_item(
+        item = owners_mod.tag(fh.home_item(
             "calls_to_confirm", label="1 crew answer to confirm" if n == 1 else f"{n} crew answers to confirm",
             title=names[pid], detail="The crew decided without you:", lines=shown,
             meta="Made by " + _and(roles), since=since, now=now,
@@ -498,7 +502,11 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
                      {"label": {"both": "Keep both", "it": "Keep it", "them": "Keep all"}[keep],
                       "primary": True, "do": "keep_assumptions", "project": pid,
                       "refs": [a["label"] for a in items]}]), o, ids,
-            open_ps[pid] if ids == o.project(open_ps[pid]) else None))
+            open_ps[pid] if ids == o.project(open_ps[pid]) else None)
+        desks = list(dict.fromkeys(d for a in items for d in held.get((pid, a["label"]), ())))
+        if desks:
+            item["desk_labels"] = desks    # as above: the batches this row stands for
+        out.append(item)
     return out
 
 
@@ -674,11 +682,18 @@ def projects_to_close(store, fx, now, handovers: dict | None = None) -> list[dic
 def rules_to_decide(store, fx, now) -> list[dict]:
     """Each open rule proposal (TR-443): a finding that kept coming back in review, offered as a
     rule. Accept and Reject live on the Crew page; Home says one waits (TR-1275). A proposal about
-    one project carries it, so a private project's proposal stays with that project's people. The
-    tickets it came from are not named here: the Crew page leaves out the ones a caller may not see."""
+    one project carries it, so a private project's proposal stays with that project's people, and
+    one about a private project that was deleted is left out (TR-1713). The tickets it came from
+    are not named here: the Crew page leaves out the ones a caller may not see."""
     names = {p["id"]: p["name"] for p in store.list_projects()}
+    offers = store.list_rule_proposals("open")
+    gone = set()
+    if any(rp.get("project") and rp["project"] not in names for rp in offers):
+        gone = store.private_and_deleted()[1]
     out = []
-    for rp in store.list_rule_proposals("open"):
+    for rp in offers:
+        if rp.get("project") in gone:
+            continue
         pid = rp.get("project") if rp.get("project") in names else None
         out.append(fh.home_item(
             "rule", label="Rule proposed", title=names[pid] if pid else "Every project",

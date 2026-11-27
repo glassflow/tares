@@ -1,7 +1,7 @@
 """Take a table over in place (TR-1480): what a table's revision does.
 
-A revision does not import this module: revisions 0010 onward call the frozen copy in
-migrations/frozen/takeover.py. The exception is 0008, written before that rule.
+A revision does not import this module: revisions 0013 onward call the frozen copy in
+migrations/frozen/takeover.py. The exception is 0011, written before that rule.
 
 A table that moves out of DuckDB already exists in the cell's state Postgres, made by the old
 DDL, with rows in it. A revision of the session store must not rebuild it: `takeover(conn, table)`

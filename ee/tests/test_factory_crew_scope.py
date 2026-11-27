@@ -187,6 +187,26 @@ async def main():
         ck("and shows on every screen for it", root["settings"][0] == "L3-review"
            and root["home"]["autonomy"] == "L3-review" and MERGES not in root["crew"]["text"], str(root))
 
+        # the licensed Home answers in place, so its rows are read by id, not by a link
+        print("== a question about no project is on the Crew page of whom Home asks (TR-1669) ==")
+        asked = {}
+        for who, text, to in (("kim", "Kim, where do the notes go?", pids["kim"]),
+                              ("root", "Which region for every project?", None)):
+            asked[who] = (store.add_desk_item(None, text, "", [], "yes", "why", "", [], False,
+                                              "crew-orchestrator", [], now_utc(),
+                                              to_person_id=to)["label"], text)
+        for who in ("kim", "alex", "root"):
+            fh.clear_cache()
+            r = await call(who, "GET", "/api/factory/crew")
+            got = [q["label"] for q in r.json().get("questions_for_you", [])]
+            home = (await call(who, "GET", "/api/home")).json()["waiting_for_you"]
+            homes = [i["id"][len("desk:"):] for i in home if str(i.get("id", "")).startswith("desk:")]
+            want = [asked[who][0]] if who in asked else []
+            ck(f"{who}: the page has what is theirs, the same rows Home asks them",
+               got == want and homes == want, (got, homes, want))
+            ck(f"{who}: and no other question's text",
+               not [t for k, (_, t) in asked.items() if k != who and t in r.text], r.text[:400])
+
     print(f"\n{P} passed, {F} failed")
     return F
 

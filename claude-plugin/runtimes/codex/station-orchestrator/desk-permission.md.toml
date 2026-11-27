@@ -1,0 +1,5 @@
+# The orchestrator's page on a refused permission, as a Codex station reads it (TR-1599).
+
+[[edit]]
+find = '''Show it like any desk item, but end its block with where to allow it (the Crew page or the project page in Tares) instead of "Reply with a letter"; a yes typed in your session doesn't allow it, so point them there. Once Tares shows it answered, take it as done.'''
+with = '''Write its question so it says where to allow it (the Crew page or the project page in Tares): an answer in words doesn't allow it. Once Tares shows it answered, take it as done.'''

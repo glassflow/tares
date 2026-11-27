@@ -38,7 +38,7 @@ from pathlib import Path
 
 import psutil
 
-from . import claude, contract, doctor_lsp, state, version
+from . import claude, contract, doctor_codex, doctor_lsp, proc, state, version
 from .client import TaresClient, _say as client_say, cksum, key_name, settings_missing
 from .errors import ClaudeNotFoundError, CrewError, JobStateUnreadableError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -253,6 +253,8 @@ class Doctor:
         self.checks: list = []
         self.client: TaresClient | None = None
         self.claude_path = ""
+        self.codex = False            # is this a crew on Codex (its stations', else the cell's runtime slot)?
+        self.codex_version = ""       # the installed Codex, for such a crew
         self.sessions = None          # the session list, when it could be read (bash: $list)
         self._trust = None
 
@@ -304,7 +306,20 @@ class Doctor:
 
     # -- the checks --
 
+    def add_rows(self, rows) -> None:
+        """The rows of doctor_codex. They are not marked `new`: that mark sets a check aside when a Claude Code
+        crew's output is compared with the old bash doctor's, and bash never ran a crew on Codex."""
+        for level, cid, message, fix in rows:
+            self.add(level, cid, message, fix)
+
     def check_basics(self) -> None:
+        if self.codex:   # a crew on Codex is never asked for claude (TR-1593)
+            rows, self.codex_version = doctor_codex.machine(self.env)
+            self.add_rows(rows)
+            self.ok("crew_home", f"crew home: {self.paths.raw}")
+            self.check_tares_version()
+            self.check_tares_path()
+            return
         try:
             self.claude_path = claude.claude_bin(self.env)
         except ClaudeNotFoundError as e:
@@ -506,7 +521,9 @@ class Doctor:
         if not self.paths.crew_cfg.is_file():
             self.warn("crew", f"no crew yet in {self.paths.raw}: {ME} crew up creates it", f"{ME} crew up")
             return
-        for r in ("orchestrator", "reviewer", "releaser", "builder"):
+        if self.codex:   # auto mode and its models are Claude Code's; a Codex crew is told what a Claude model does
+            self.add_rows(doctor_codex.models(self.paths))
+        for r in () if self.codex else ("orchestrator", "reviewer", "releaser", "builder"):
             m = state.ccfg("stations", r, "model", paths=self.paths)
             if "haiku" in m:
                 self.no(f"model_{r}", f"station {r} uses {m}: auto mode doesn't run on Haiku, use sonnet or opus",
@@ -549,7 +566,7 @@ class Doctor:
                     self.ok(tool, tool)
                 else:
                     self.no(tool, msg, fix)
-        if settings.get("claude_update") is False:
+        if settings.get("claude_update") is False and not self.codex:
             self.warn("claude_update", "crew setting claude_update is off: the watch does not move stations onto a new "
                       "Claude Code (one that restarts for another reason starts on it); "
                       f"{ME} crew update moves them", f"{ME} crew update")
@@ -562,7 +579,11 @@ class Doctor:
                     self.warn(cid, text, fix)
         except Exception:
             pass
-        if not missing and settings.get("challenger") is True:
+        if not missing and settings.get("challenger") is True and self.codex:   # TR-1599: said, never silently off
+            self.warn("challenger", "challenger is on, but no challenger runs on a Codex station yet: nothing reviews a "
+                      "builder's commits before the crew reviewer does (builders say so in their pull requests)",
+                      "turn it off in the crew settings, or keep it for crews on Claude Code")
+        if not missing and settings.get("challenger") is True and not self.codex:   # a Codex crew's codex is checked first
             if shutil.which("codex", path=self.env.get("PATH")):
                 self.ok("codex", "codex (challenger on)")
             else:
@@ -598,7 +619,9 @@ class Doctor:
             if not os.path.isdir(repo):
                 self.no(f"project_{p}_{rid}", f"project {p}: {repo} does not exist on this machine", "fix the repo path on Tares")
                 continue
-            if self.trusted(repo):
+            if self.codex:
+                pass   # a Codex station marks its folder not trusted itself; Claude Code's trust is not asked
+            elif self.trusted(repo):
                 self.ok(f"project_{p}_{rid}_trust", f"project {p}: {repo} trusted")
             else:
                 self.no(f"project_{p}_{rid}_trust", f"project {p}: Claude Code has not trusted {repo} (its git root must be "
@@ -710,6 +733,11 @@ class Doctor:
         except CrewError:
             return
         active = [(s, row) for s, row in stations.items() if isinstance(row, dict) and row.get("status") == "active"]
+        if self.codex:
+            for s, row in active:
+                if not (self.paths.home / "stations" / f"{s}.done").is_file():
+                    self.add_rows(doctor_codex.station(self.paths, s, row, self.env, self.codex_version))
+            return
         if self.sessions is not None:
             target = claude.claude_version(self.claude_path or None)
             for s, _row in active:
@@ -751,15 +779,18 @@ class Doctor:
         except Exception:   # a process that cannot be read must not end the doctor
             return
         cl = found["claude"]
-        if cl:
-            self.warn("claude_processes", f"Claude processes the crew does not own ({len(cl)}): {strays.listing(cl)}",
-                      strays.CLAUDE_FIX, True)
+        if self.codex:
+            pass   # a crew on Codex owns no Claude process and needs no background service of Claude Code's
         else:
-            self.ok("claude_processes", "Claude processes: none the crew does not own", True)
-        if found["service"]:
-            self.no("claude_service", "Claude's background service runs in the wrong session", found["service"], True)
-        else:
-            self.ok("claude_service", "Claude's background service: runs where the crew does", True)
+            if cl:
+                self.warn("claude_processes", f"Claude processes the crew does not own ({len(cl)}): {strays.listing(cl)}",
+                          strays.CLAUDE_FIX, True)
+            else:
+                self.ok("claude_processes", "Claude processes: none the crew does not own", True)
+            if found["service"]:
+                self.no("claude_service", "Claude's background service runs in the wrong session", found["service"], True)
+            else:
+                self.ok("claude_service", "Claude's background service: runs where the crew does", True)
         orph = found["orphan"]
         if orph:
             self.warn("orphan_processes", f"orphaned crew processes older than an hour ({len(orph)}): "
@@ -773,9 +804,12 @@ class Doctor:
         # bash runs this before a local-only command such as doctor: the template's defaults under crew.json,
         # then the person's key copied for the stations (and its warning, on stderr, when Tares refuses it)
         state.merge_crew_defaults(self.paths)
-        self.check_basics()
         with TaresClient(self.paths, self.env, say=lambda _m: None) as c:
             self.client = c
+            # A crew on Codex (its recorded stations say so; for a crew that has started none, the cell's
+            # runtime slot does) gets the checks of doctor_codex and none of Claude Code's.
+            self.codex = proc.planned_runtime(c, self.paths) == proc.CODEX
+            self.check_basics()
             c.tares_on()
             quiet, c.say = c.say, client_say
             try:
@@ -784,14 +818,18 @@ class Doctor:
                 c.say = quiet
             on = self.check_tares(c)
             self.check_key_files()
-            self.check_sessions()
-            self.check_trust_and_plugin()
+            if self.codex:   # no session list of Claude Code's, no trust of its, no plugin loaded by it
+                self.add_rows(doctor_codex.kit(self.root, self.env))
+            else:
+                self.check_sessions()
+                self.check_trust_and_plugin()
             self.check_mcp(c)
             self.check_crew(c) if on else self.check_crew_offline()
-            self.check_allow()
-            self.check_cmux()
-            if on:
-                self.check_lsp(c)
+            if not self.codex:   # the MCP servers and plugins a role keeps, cmux and the language servers are Claude Code's
+                self.check_allow()
+                self.check_cmux()
+                if on:
+                    self.check_lsp(c)
         self.check_git()
         self.check_gh()
         self.check_stations()
@@ -802,6 +840,9 @@ class Doctor:
         """Tares does not answer: bash still reads crew.json (models, or no crew yet)."""
         if not self.paths.crew_cfg.is_file():
             self.warn("crew", f"no crew yet in {self.paths.raw}: {ME} crew up creates it", f"{ME} crew up")
+            return
+        if self.codex:
+            self.add_rows(doctor_codex.models(self.paths))
             return
         for r in ("orchestrator", "reviewer", "releaser", "builder"):
             m = state.ccfg("stations", r, "model", paths=self.paths)

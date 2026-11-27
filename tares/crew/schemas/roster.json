@@ -18,7 +18,9 @@
           "role": {"type": ["string", "null"]},
           "project": {"description": "The project id; empty for a station that serves all projects.", "type": "string"},
           "turn": {"description": "Whose turn the session is on, as Claude Code says it; `gone` when it has no live session.", "type": "string"},
-          "claude_code": {"description": "The Claude Code version the station runs; says `(older than X)` when it is behind the installed one.", "type": "string"}
+          "claude_code": {"description": "The Claude Code version the station runs; says `(older than X)` when it is behind the installed one. Empty for a station on another runtime.", "type": "string"},
+          "runtime": {"description": "What runs the station, when it is not Claude Code: `codex`. Absent for a station on Claude Code.", "type": "string"},
+          "codex": {"description": "The Codex version a station on Codex was started on; absent for a station on Claude Code.", "type": "string"}
         },
         "additionalProperties": false
       }

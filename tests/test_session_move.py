@@ -610,7 +610,7 @@ def thread():
 
 
 def revision():
-    print("== revision 0011_session_moves ==")
+    print("== revision 0014_session_moves ==")
     d = tempfile.mkdtemp()
     schema = dsn = None
     if PG:
@@ -642,7 +642,7 @@ def revision():
         with sdb.begin() as c:
             cfg = sdb._config()
             cfg.attributes["connection"] = c
-            command.downgrade(cfg, "0009_session_origin")
+            command.downgrade(cfg, "0012_session_origin")
         names = inspect(sdb.engine).get_table_names()
         with sdb.begin() as c:
             kept = c.execute(text("SELECT lines_complete FROM sessions WHERE session = 'x'")).scalar()
@@ -654,9 +654,9 @@ def revision():
            marks == ["other_mark"], marks)
         sdb.upgrade()
         ck("an upgrade builds it again", "session_moves" in inspect(sdb.engine).get_table_names()
-           and version(sdb) == ["0019_brain_tables"])
+           and version(sdb) == ["0022_brain_tables"])
         sdb.upgrade()
-        ck("an upgrade at the head changes nothing", version(sdb) == ["0019_brain_tables"])
+        ck("an upgrade at the head changes nothing", version(sdb) == ["0022_brain_tables"])
         sdb.close()
     finally:
         if PG:

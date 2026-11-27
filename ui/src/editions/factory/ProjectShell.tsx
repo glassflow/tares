@@ -13,6 +13,7 @@ import {
   type FactoryProjectData, type ProjectCall, type ProjectMilestone,
 } from "./FactoryProject.api";
 import type { HomeItem } from "./home.types";
+import { deskTarget } from "./waitingGroups";
 import { InlineIcon } from "./ProjectIcon";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
 
@@ -318,8 +319,10 @@ export function ProjectShell({ page, onOther, children }: {
     if (!hash || !ready) return;
     let at = hash.slice(1);
     try { at = decodeURIComponent(at); } catch { /* a malformed address keeps its raw text */ }
-    // a #desk-* one (a permission request named for its desk) waits in Waiting for you
-    const el = document.getElementById(at) ?? (at.startsWith("desk-") ? document.getElementById("waiting") : null);
+    // a #desk-D7 one goes to the row that stands for that desk item, else to Waiting for you
+    const desk = deskTarget(hash);
+    const el = (desk ? document.querySelector(`[data-desk~="${desk}"]`) : null)
+      ?? document.getElementById(at) ?? (at.startsWith("desk-") ? document.getElementById("waiting") : null);
     el?.scrollIntoView({ block: "start" });
   }, [hash, ready]);
 

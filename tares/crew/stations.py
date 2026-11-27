@@ -13,7 +13,7 @@ import re
 import subprocess
 import sys
 
-from . import claude, launch, locks, pace, state
+from . import claude, launch, locks, pace, proc, state
 from .client import TaresClient
 from .errors import CrewError
 from .paths import ME, CrewPaths
@@ -167,6 +167,15 @@ def _helper_plan(paths: CrewPaths, kind: str, args: list) -> dict:
 
 
 def helper_prompt(paths: CrewPaths, parent: str, task: str) -> str:
+    """The first prompt of a helper. On Codex (the parent's runtime) its rules are in its instructions, and it
+    tells its parent it is done with the Tares tool `send_to_station` (TR-1599); where that tool is missing, the
+    DONE line of its report says it."""
+    from . import proc   # here: proc imports launch, which imports this module
+    if proc.on_codex(parent, paths):
+        return (f"Boot as a helper of the station {parent}: your rules are in your instructions (the rules of "
+                f"{parent}'s role). Do only the task below, write the results to your report, and when it is "
+                f"finished send {parent} DONE with the Tares tool `send_to_station` (with no such tool, end your "
+                f"report with the line DONE).\n\nYour task:\n{task}")
     return (f"Boot as a helper of the station {parent}: load the skills factory-protocol and "
             f"station-{launch.parent_role(parent, paths)}, do only the task below, write results to your report, "
             f"and send {parent} DONE when it is finished.\n\nYour task:\n{task}")
@@ -192,7 +201,7 @@ def spawn(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin=None)
         raise CrewError("spawn takes builder or helper")
     station, cwd = plan["station"], plan["cwd"]
     locks.station_lock(station, paths)
-    if claude.is_alive(station, cwd, claude_bin, paths):
+    if proc.is_alive(station, cwd, claude_bin, paths):
         raise CrewError(f"{station} is already running; message it instead")
     if plan["role"] == "builder":
         state.stations_put(station, {"autonomy": plan["autonomy"], "project_id": plan["project_id"]}, paths)

@@ -42,6 +42,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 from fake_launch import launch_answer  # noqa: E402
+
+IDENTITY_HEADERS = ("X-Tares-Station", "X-Tares-Role", "X-Tares-Parent", "X-Tares-Crew", "X-Tares-Project")
 from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 PLUGIN = ROOT / "claude-plugin"
 
@@ -53,6 +55,12 @@ DEFAULT_WORLD = {
     "token": "",             # when set, Tares wants this key as a Bearer token
     "health": True,
     "mcp": True,             # does POST /mcp answer `initialize` like an MCP server (the spawn command wants one)
+    "mcp_tool": "[]",        # the text a tool call at /mcp answers with, for a key the cell takes
+    "mcp_key": None,         # the key the cell takes from a tool call at /mcp, when it is another than `token`
+    "desk": [],              # the desk's items, as POST /api/desk files them (FakeTares.reply answers one as a person)
+    "answers": [],           # the cell's record of answers people gave (GET /api/answers)
+    "ingested": [],          # every fact a Codex station's recorder posted to /ingest/codex, in order
+    "ingest_fail": 0,        # how many posts to /ingest/codex to take and then answer 500, as if the answer was lost
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
     "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"],   # what /health lists
@@ -61,6 +69,7 @@ DEFAULT_WORLD = {
     "launch_status": 200,    # the status of GET /api/factory/stations/<station>/launch (not 200: that status, {"detail": ...})
     "launch_detail": "launch",   # the "detail" of that answer
     "launch": None,          # its body; None: the real runtime builds the spec (fake_launch.py), from the rules above
+    "runtime": "claude_code",   # the factory's runtime: the spec is built by that one (`codex` for the Codex runtime)
     "routes": {},            # any other GET: "<path>[?query]" -> [status, body] (the full path with its query wins over the path)
 }
 
@@ -88,10 +97,64 @@ class FakeTares:
                 self.wfile.write(raw)
 
             def do_POST(self):
-                outer.log.append({"path": self.path, "auth": self.headers.get("Authorization"), "post": True})
-                self.rfile.read(int(self.headers.get("Content-Length") or 0))
-                if self.path == "/mcp" and outer.world["mcp"]:
+                # /mcp answers as the real endpoint does (tares/mcp_server.py): `initialize` wants a bearer, any
+                # bearer, when the server has a key of its own; a tool call is passed on to the cell, and a key the
+                # cell refuses comes back as the tool's text, "error 401: ...", with no error flag
+                auth = self.headers.get("Authorization")
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                try:
+                    asked = json.loads(raw.decode() or "{}")
+                except ValueError:
+                    asked = {}
+                asked_list = asked if isinstance(asked, list) else [asked]
+                asked = asked if isinstance(asked, dict) else {}
+                params = asked.get("params") if isinstance(asked.get("params"), dict) else {}
+                outer.log.append({"path": self.path, "auth": auth, "post": True, "method": asked.get("method"),
+                                  "tool": params.get("name"), "arguments": params.get("arguments"),
+                                  **{h.lower(): self.headers.get(h) for h in IDENTITY_HEADERS if self.headers.get(h)}})
+                w = outer.world
+                if self.path == "/mcp" and w["mcp"]:
+                    if w["token"] and not auth:
+                        return self._send(401, {"detail": "unauthorized"})
+                    if asked.get("method") == "tools/call":
+                        text = w["mcp_tool"]
+                        if w["token"] and auth != f"Bearer {w['mcp_key'] or w['token']}":
+                            text = "error 401: authentication required"
+                        return self._send(200, {"jsonrpc": "2.0", "id": asked.get("id"),
+                                                "result": {"content": [{"type": "text", "text": text}]}})
                     return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "fake"}}})
+                # the desk, as the cell keeps it (tares/factory_api.py): a station files nothing unless it is the
+                # orchestrator, and answers nothing at all
+                u = urlparse(self.path)
+                if w["token"] and auth != f"Bearer {w['token']}":
+                    return self._send(401, {"detail": "unauthorized"})
+                if u.path == "/ingest/codex":
+                    w["ingested"].extend(asked_list)
+                    if w["ingest_fail"]:
+                        w["ingest_fail"] -= 1
+                        return self._send(500, {"detail": "the answer was lost"})
+                    return self._send(200, {"ok": True})
+                if u.path == "/api/desk":
+                    if self.headers.get("X-Tares-Station") and self.headers.get("X-Tares-Role") != "orchestrator":
+                        return self._send(403, {"detail": "only the orchestrator may do this"})
+                    n = len(w["desk"]) + 1
+                    item = {"id": f"dk_{n:04d}", "number": n, "label": f"D{n}", "state": "open", "command": None,
+                            **{k: asked.get(k) for k in ("question", "recommendation", "why", "options", "context",
+                                                         "station", "project", "blocking", "asked_by")}}
+                    w["desk"].append(item)
+                    return self._send(201, item)
+                parts = u.path.strip("/").split("/")
+                if len(parts) == 4 and parts[:2] == ["api", "desk"]:
+                    found = [d for d in w["desk"] if parts[2] in (d["label"], d["id"])]
+                    if not found:
+                        return self._send(404, {"detail": f"no desk item {parts[2]!r}"})
+                    if parts[3] in ("reply", "allow", "answer") and self.headers.get("X-Tares-Station"):
+                        return self._send(403, {"detail": "a person answers this in the console"})
+                    if parts[3] == "withdraw":
+                        if found[0]["state"] != "open":
+                            return self._send(409, {"detail": f"{found[0]['label']} is already {found[0]['state']}"})
+                        found[0].update(state="withdrawn", reason=asked.get("reason"))
+                        return self._send(200, found[0])
                 return self._send(404, {"detail": "no"})
 
             def do_GET(self):
@@ -124,7 +187,7 @@ class FakeTares:
                     if w["launch"] is not None:
                         return self._send(200, w["launch"])
                     hit = launch_answer(self.path, self.headers, w["projects"], outer.rules_for,
-                                        w["settings"].get("autonomy", "L4-ship"), outer.url)
+                                        w["settings"].get("autonomy", "L4-ship"), outer.url, runtime=w["runtime"])
                     if hit:
                         return self._send(*hit)
                 if u.path == RULES_PATH:
@@ -143,12 +206,31 @@ class FakeTares:
                 hit = w["routes"].get(self.path) or w["routes"].get(u.path)
                 if hit:
                     return self._send(hit[0], hit[1])
+                if u.path == "/api/desk":
+                    want = (parse_qs(u.query).get("state") or ["open"])[0]
+                    return self._send(200, {"desk": [d for d in w["desk"] if d["state"] == want]})
+                if u.path == "/api/answers":
+                    item = (parse_qs(u.query).get("item") or [""])[0]
+                    return self._send(200, {"answers": [a for a in w["answers"] if a["id"] == item]})
+                if u.path == "/api/factory/integrations/effective":   # what a crew that has started nothing asks
+                    return self._send(200, {"project": None, "slots": [
+                        {"slot": "runtime", "integration": w["runtime"], "title": w["runtime"], "source": "factory",
+                         "reason": ""}]})
                 return self._send(404, {"detail": "no"})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         # a short poll interval: shutdown() waits for one, which was half a second per step
         self.thread = threading.Thread(target=lambda: self.server.serve_forever(poll_interval=0.02), daemon=True)
+
+    def reply(self, label: str, said: str, via: str = "console", by: str = "Pat") -> None:
+        """A person answers a desk item, as the console's reply does: the item is closed and the cell's record
+        of answers gets a row. `via` and `by` are what that row says of where and who."""
+        for d in self.world["desk"]:
+            if d["label"] == label:
+                d["state"] = "answered"
+        self.world["answers"].append({"id": f"question:{label}", "kind": "question", "choice": None, "said": said,
+                                      "via": via, "by": by})
 
     def rules_for(self, name: str, role: str) -> dict:
         """The rendered rules the launch route gives a station of `role` under project `name`."""

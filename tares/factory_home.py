@@ -134,7 +134,10 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
             "ask": ask, "holds_up": holds_up, "checks": checks,
             # whom it waits for (factory_owners.tag): the people, whether any admin may act, and
             # whether it fell to the admins because its project has no lead
-            "for_people": [], "for_admin": False, "no_lead": False}
+            "for_people": [], "for_admin": False, "no_lead": False,
+            # the desk questions this row stands for beside its own id, as labels (D7), so a link
+            # to one (#desk-D7) finds the row (TR-1669)
+            "desk_labels": []}
 
 
 OLDER_DAYS = 7
@@ -419,11 +422,14 @@ def _plan_title(store, owner: str | None, fx, request) -> str:
     return f"{name}'s Claude plan" if name else "Claude plan"
 
 
-def _plan(store, now: datetime, names: dict, fx=None, request=None, week: list | None = None) -> dict:
-    """`week` is the 7-day usage by project when the caller already has it (Crew shows it twice)."""
+def _plan(store, now: datetime, names: dict, hidden, fx=None, request=None,
+          week: list | None = None) -> dict:
+    """The plan's limits and who used it this week. `hidden` is the ids of the projects the caller
+    cannot see: their cost is no part of any share. `week` is the 7-day usage by project, hidden
+    ones left out, when the caller has it already (Crew shows it twice)."""
     plan = claude_usage.plan(store)
     if week is None:
-        week = claude_usage.week_by_project(store, now)
+        week = claude_usage.week_by_project(store, now, hidden)
     limits = []
     shown = [x for x in (plan or {}).get("limits") or [] if x["kind"] in _LIMITS]
     for x in shown:
@@ -557,16 +563,18 @@ def split_waiting(store, items: list[dict], caller: dict, now) -> tuple[list[dic
     return mine, order_waiting(owners_mod.for_others(owners_mod.Owners(store), rest), now)
 
 
-def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
+def home(store, fx, now, credential_key: str = "open", request=None, hidden=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
-    is addressed to the caller's person (TR-739); its keys replace the single-person ones."""
+    is addressed to the caller's person (TR-739); its keys replace the single-person ones.
+    `hidden` is the caller's hidden project ids when the caller of this has read them already."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
     team = team_of(fx, request, now, stations)
     # a private project the caller is not on is left out of every count and name
-    hidden = fx.hidden_ids() if fx else set()
+    if hidden is None:
+        hidden = fx.hidden_ids() if fx else set()
     projects = store.list_projects(kind="software_factory", exclude_ids=hidden)
     # a project kept for later is off the home until someone starts it
     open_ps = [p for p in projects if p["status"] not in ("done", "later")]
@@ -612,7 +620,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
             "finished_count": len(projects) - len(open_ps) - later_count, "later_count": later_count,
             "crew": crew,
-            "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, fx, request),
+            "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, hidden, fx, request),
             # how a project is planned with the crew: the home's empty Projects list shows it
             "plan_command": start_steps.SPEC_COMMAND,
             "start": start_steps.checklist(
@@ -673,9 +681,12 @@ def drop_cache(store, request) -> None:
             _cache.pop(k, None)
 
 
-def cached(page: str, store, request, make) -> dict:
-    """`make()`, the body of `page` for this caller, kept for CACHE_SECONDS."""
-    key = _cache_key(store, request, page)
+def cached(page: str, store, request, make, hidden=frozenset()) -> dict:
+    """`make()`, the body of `page` for this caller, kept for CACHE_SECONDS. `hidden` is the ids of
+    the projects the caller cannot see."""
+    # the hidden projects are part of the key: one credential can read with more or less in view
+    # (`x-tares-viewer: public`), and a body is only for callers who see the same projects
+    key = (*_cache_key(store, request, page), frozenset(hidden))
     with _cache_lock:
         hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
@@ -695,8 +706,9 @@ def build(store, fx=None, request=None, now=None) -> dict:
     if now is not None:
         return home(store, fx, now, request=request)
     name = _cache_key(store, request)[1]   # the credential's name: whose Start checklist
+    hidden = fx.hidden_ids() if fx else set()
     return cached("home", store, request,
-                  lambda: home(store, fx, now_utc(), name, request))
+                  lambda: home(store, fx, now_utc(), name, request, hidden), hidden)
 
 
 # the builders of the waiting items register themselves on import (TR-769)

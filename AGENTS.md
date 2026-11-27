@@ -69,7 +69,8 @@ from `ui/src/pages`, whose inline styles predate the kit.
   `/dev/components` (`ui/src/pages/dev/Components.tsx`) before writing a component. A new shared
   component goes in `components/edition`, with a gallery section and a check in
   `ui/tests/component-gallery.e2e.cjs` in the same PR. `components/ui` holds the primitives the kit
-  wraps; screens do not import them.
+  wraps; screens do not import them. The field controls (`Checkbox`, `Input`, `Select`, `Switch`,
+  `Tabs`, `Textarea`) have no copy there: import them from `@paper-kit/ui/*`.
 - **The edition primitives are re-exports.** `Button`, `Checkbox`, `Dialog`, `Field`, `Input`,
   `Select`, `StatusLabel`, `Switch`, `Tabs` and `Textarea` in `ui/src/components/edition` are one-line
   `export * from "@paper-kit/<Name>"` over the shared kit vendored in `ui/paper-kit/`. A change to one
@@ -85,8 +86,9 @@ from `ui/src/pages`, whose inline styles predate the kit.
 - **Colour.** The roles are listed under Colour budget in `.impeccable.md`, and the utilities come
   from `ui/src/paper/paper-theme.css` (vendored, never edited by hand). A colour or motion token
   is added in arche-design and synced; a value only the console reads goes in the console-only
-  `:root` block of `ui/src/styles.css`. `npm run token-contract` runs through
-  `ui/eslint-token-contract.config.mjs`.
+  `:root` block of `ui/src/styles.css`. No `--kit-*` outside the token block.
+  `npm run token-contract` runs through `ui/eslint-token-contract.config.mjs`; it scans every string
+  in `ui/src` (CSS holds the definitions and is exempt).
 - **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`. The platform pages are
   checked too, each held at its count in `ui/words-contract.baseline.json`: add none, and when you
   remove some, `npm run words-baseline` lowers the count in the same PR.
@@ -102,6 +104,17 @@ from `ui/src/pages`, whose inline styles predate the kit.
   Every e2e suite takes Chromium from `ui/tests/browser.cjs`, which asks for reduced motion, so a
   check never reads something halfway in. `npm run motion-contract` also fails on a raw time in CSS,
   on `motion.ts` drifting from the tokens and on a suite that loads playwright itself.
+- **Embedded in the Tares desktop.** The desktop opens the console with `?embed=desktop&theme=light|dark`
+  (`ui/src/embed.ts`, and the boot script in `ui/index.html` before first paint). Embedded, the console
+  draws no header of its own (brand, cell name, workspace switcher, search box, account menu) and no
+  theme switch or sign out anywhere: the desktop shows the cell, owns the sign-in and sets the theme.
+  The menu stays, with search at its top; a page's header actions (`useHeaderSlots().actions`) sit in a
+  row above the page, and below 768px a slim bar keeps Menu and search. `theme` wins over a choice saved
+  in a browser visit and is never saved; without it the console follows the OS. Both values are kept in
+  `sessionStorage` for the tab, so a move inside the console keeps the mode; `?embed=` with another
+  value leaves it. No user-agent sniffing. A browser visit without the params is unchanged.
+  `ui/tests/embedded.e2e.cjs` checks both. A screen that adds chrome of its own to the header checks
+  it in embedded mode too.
 - **Before you push** a console change:
   `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
   npm run test:time && npm run design-contract && npm run motion-contract && npm run build`,

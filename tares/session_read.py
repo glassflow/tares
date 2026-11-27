@@ -262,7 +262,7 @@ def tool_result(store, source: str, session: str, tool_use_id: str):
 def newest_payloads(store, source: str, limit: int, hidden_sessions: set, hidden_line) -> list[str]:
     """The payload texts of the `limit` newest lines `session_lines` holds for the sessions of
     `source`, newest first, leaving out the sessions of `hidden_sessions` and the lines
-    `hidden_line(labels, payload)` names. Archived lines are not read. `session_lines` has no source
+    `hidden_line(labels, payload, at)` names. Archived lines are not read. `session_lines` has no source
     and is indexed by `(session, at)`, so the sessions are taken newest first by their last line and
     reading stops when no session left can hold a newer line than the ones in hand."""
     s, t = sessions.c, session_lines.c
@@ -287,7 +287,7 @@ def newest_payloads(store, source: str, limit: int, hidden_sessions: set, hidden
                                      .order_by(t.at.desc(), t.seq.desc())
                                      .limit(limit).offset(start)).all()
                     mine += [(r.at or _MIN, r.seq, r.payload) for r in rows
-                             if not hidden_line(r.labels, r.payload)]
+                             if not hidden_line(r.labels, r.payload, r.at)]
                     if len(rows) < limit:
                         break
                     start += limit

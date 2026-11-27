@@ -52,6 +52,40 @@ class NotBetweenTurnsError(CrewError):
     code = "not_between_turns"
 
 
+class GuardOffError(CrewError):
+    """A Codex station's guard was found not to run, or not alone (TR-1594): the station was stopped. `why`
+    is what was seen, `turn` the turn that showed it when a comparison did."""
+
+    code = "guard_off"
+
+    def __init__(self, station: str, why: str, turn: str = ""):
+        self.station, self.why, self.turn = station, why, turn
+        super().__init__(f"{station} was stopped, since its guard cannot be relied on: {why}")
+
+
+class NeverComparedError(CrewError):
+    """A Codex station's conversation cannot be loaded, and what its last turn ran was never compared with the
+    guard's record (TR-1593): nothing starts it in a new conversation by itself. `thread` is the conversation,
+    `why` what stopped the load."""
+
+    code = "never_compared"
+
+    def __init__(self, station: str, thread: str, why: str):
+        self.station, self.thread, self.why = station, thread, why
+        super().__init__(
+            f"the conversation of {station} cannot be loaded ({why}), and what its last turn ran was never compared "
+            f"with the guard's record. It is not started in a new conversation by itself: `tares factory revive "
+            f"{station} --fresh` starts it in a new one without that comparison")
+
+
+class LimitHeldError(NotBetweenTurnsError):
+    """A Codex station whose last turn the account's limit ended is held until the limit resets (TR-1597): no
+    wake, grant, kit or pace note is handed to it meanwhile. A kind of NotBetweenTurnsError, so every caller
+    that would try again later does."""
+
+    code = "limit_held"
+
+
 class ClaudeNotFoundError(CrewError):
     """No usable `claude` binary: none on PATH or in the known install folders, and CLAUDE_BIN is not set."""
 

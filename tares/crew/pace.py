@@ -16,6 +16,16 @@ none of this runs and no file is written.
 
 Per station: stations/<station>.pace ({stretched, held}); crew-wide: pace.json (the stopped ones).
 
+A crew on Codex (TR-1597)
+  The limits are the Codex account's, not a Claude plan's (tares.crew.codex_pace). At the top of a round the
+  step asks a station's app-server for them, sends them to Tares, and reads the pace Tares works out from
+  that reading alone (GET /api/crew/pace?runtime=codex). Everything after that is the same: the thresholds,
+  the pace file, what the revive step asks. A reading Tares does not have, or one that is too old, or an
+  account that reports no limits, is "unknown" and changes nothing. What a station is told is worded without
+  Claude Code's Cron tools. A Codex station whose turn the limit ended is still running (its app-server
+  outlives the turn), so the revive step never sees it: this step holds it and carries it on once after the
+  reset (codex_pace.limit_step).
+
 Differences from bash
   * Bash reads the pace at the top of the round, so every branch of the round sees the same reading. Here the
     steps are separate passes and the watch has no hook at the start of a round: the pace step reads the pace
@@ -38,7 +48,7 @@ import os
 import sys
 import time
 
-from . import claude, locks, state, watch_revive
+from . import claude, codex_pace, locks, proc, state, watch_revive
 from .client import TaresClient, TaresHTTPError
 from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -119,10 +129,23 @@ def _read(client: TaresClient) -> Reading:
     if not client.tares_on():
         return Reading()
     try:
-        p = state.loads_json(client.tares_http("GET", "/api/crew/pace"))
+        p = state.loads_json(client.tares_http("GET", pace_path(client.paths)))
     except (TaresHTTPError, ValueError):
         return Reading()
     return _read_doc(p)
+
+
+def pace_path(paths: CrewPaths) -> str:
+    """Where this crew asks for its pace. A crew on Codex says so: its pace is worked out from the Codex
+    account's limits, whatever runtime the cell would start a new crew on, and never from Claude's plan."""
+    return codex_pace.PACE_PATH if proc.crew_on_codex(paths) else "/api/crew/pace"
+
+
+def take_codex(client: TaresClient) -> None:
+    """For a crew on Codex: read the account's limits from a station and send them to Tares, so the pace read
+    next is of now. Nothing for a Claude Code crew, whose reading its sessions send themselves."""
+    if proc.crew_on_codex(client.paths):
+        codex_pace.refresh(client, client.paths)
 
 
 def _read_doc(p) -> Reading:
@@ -178,6 +201,7 @@ def round_start(paths: CrewPaths, env=None) -> None:
     env = os.environ if env is None else env
     client = TaresClient(paths, env)
     try:
+        take_codex(client)
         r = read(client)
     finally:
         client.close()
@@ -262,7 +286,8 @@ def hold_down(paths: CrewPaths, station: str, reading: Reading) -> None:
         pass
     if said is not True:
         until = f" until {reading.until}" if reading.until else ""
-        _say(f"the plan's limit is full{until}, so a stopped station is not revived now ({station} is the "
+        whose = "the account's" if proc.on_codex(station, paths) else "the plan's"
+        _say(f"{whose} limit is full{until}, so a stopped station is not revived now ({station} is the "
              "first); the watch revives each one in its own conversation after the reset")
 
 
@@ -317,6 +342,8 @@ def tidy(paths: CrewPaths, reading: Reading) -> None:
 def resume_prompt(client: TaresClient) -> str:
     """A short one: the conversation is its own, so it needs no reload of the skills."""
     from . import lifecycle
+    if proc.crew_on_codex(client.paths):
+        return codex_pace.resume_prompt(client)
     return ("The plan's limit was reset. Carry on from where you stopped: "
             f"{lifecycle.REPORT_READ} and your work on Tares, {lifecycle.rearm_text(client)}, then continue.")
 
@@ -324,6 +351,8 @@ def resume_prompt(client: TaresClient) -> str:
 def fresh_prompt(client: TaresClient, paths: CrewPaths, station: str) -> str:
     """Its conversation could not be resumed."""
     from . import lifecycle
+    if proc.on_codex(station, paths):
+        return codex_pace.fresh_prompt(client, paths, station)
     role = state.stations_get(station, "role", paths=paths)
     return ("The plan's limit was reset, but your last conversation could not be resumed, so this is a new one "
             "under the same name. Nothing from it carries over except your report and what is on Tares. Reload "
@@ -387,27 +416,31 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, reading: Reading, *, cla
         return None
     if state.halted(paths) or not state.stations_get(s, "sessionId", paths=paths):
         return None
-    if claude.attached(s, paths) or not claude.at_rest(s, claude_bin, paths):
+    if proc.attached(s, paths) or not proc.at_rest(s, claude_bin, paths):
         return None
 
     note = reading.note
+    codex = proc.on_codex(s, paths)   # a Codex station has no Cron tools: the same steps, in its own words
+    stretch = codex_pace.STRETCH_TEXT if codex else STRETCH_TEXT
     new_stretched, new_held = True, False
     if want == "stretch":
         if role == "builder" and reading.level >= 2:
-            prompt = f"{note} {STRETCH_TEXT} {HOLD_TEXT}"
+            prompt = f"{note} {stretch} {HOLD_TEXT}"
             new_held = True
         else:
-            prompt = f"{note} {STRETCH_TEXT} Carry on from your report."
+            prompt = f"{note} {stretch} Carry on from your report."
     elif want == "hold":
         prompt = f"{note} {HOLD_TEXT}"
         new_held = True
     elif want == "unhold":
-        prompt = ("The plan's limit has room for builders again: pick up where your report says you stopped. "
-                  "Keep your tick at 45 minutes while the factory still paces the crew.")
+        prompt = codex_pace.UNHOLD_TEXT if codex else (
+            "The plan's limit has room for builders again: pick up where your report says you stopped. "
+            "Keep your tick at 45 minutes while the factory still paces the crew.")
     else:
-        prompt = ("The factory has stopped pacing the crew (the plan has room, or pace was turned off). Put your "
-                  "tick back to its normal interval: delete the 45-minute CronCreate tick and create it again as "
-                  "your manual says. Then carry on from your report, including anything you held back.")
+        prompt = codex_pace.RELEASE_TEXT if codex else (
+            "The factory has stopped pacing the crew (the plan has room, or pace was turned off). Put your "
+            "tick back to its normal interval: delete the 45-minute CronCreate tick and create it again as "
+            "your manual says. Then carry on from your report, including anything you held back.")
         new_stretched = False
     return {"station": s, "want": want, "prompt": prompt, "stretched": new_stretched, "held": new_held}
 
@@ -424,8 +457,8 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
             return
         if idle_wake_state(fresh) != "off":
             return   # the setting changed since the round began
-        if (state.halted(paths) or claude.attached(s, paths)
-                or not claude.at_rest(s, claude_bin, paths)):
+        if (state.halted(paths) or proc.attached(s, paths)
+                or not proc.at_rest(s, claude_bin, paths)):
             return   # it started something since the first check, or it waits on a prompt
         client.say(f"pacing: telling {s} ({want}) in the same conversation")
         try:
@@ -511,14 +544,17 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
         if taken is not None:
             reading = taken
         else:
+            take_codex(client)
             reading = read(client)
             tidy(paths, reading)
         names = [k for k, v in state.stations_load(paths).items()
                  if isinstance(v, dict) and v.get("status") == "active"]
-        if not names or reading.state == "unknown":
+        # A reading that is missing changes nothing. On Codex one thing is still looked at then: a turn the
+        # account's limit ended is recorded whether or not the limits can be read (codex_pace.limit_step).
+        if not names or (reading.state == "unknown" and not proc.crew_on_codex(paths)):
             return
         if claude_bin is None:
-            claude_bin = claude.claude_bin(env)
+            claude_bin = proc.binary(env, paths)
         for s in names:
             role = state.stations_get(s, "role", paths=paths)
             if role == "helper":
@@ -526,7 +562,11 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
             if role == "builder" and paths.station_file(s, "done").is_file():
                 continue
             try:
-                if not claude.is_alive(s, "", claude_bin, paths):
+                if not proc.is_alive(s, "", claude_bin, paths):
+                    continue
+                if proc.on_codex(s, paths) and codex_pace.limit_step(client, paths, s, reading, claude_bin=claude_bin):
+                    continue   # the limit ended its turn: it is held, or was just carried on
+                if reading.state == "unknown":
                     continue
                 p = plan(client, paths, s, reading, claude_bin=claude_bin)
                 if p is not None:

@@ -16,7 +16,12 @@ PLACEHOLDERS: dict[str, str] = {
     "WT_REPOS": "the sentence naming the repositories whose worktree folders the station may use",
     "REPOS": "the sentence naming the repositories checked out on that machine",
     "TOKEN_FILE": "the file that holds the crew's key (the key itself is never in a spec)",
+    "TOKEN_FILE_SHELL": "the same file written as one word for the shell that runs the MCP headers helper",
     "SETTINGS_FILE": "the settings file the station is started with (--settings)",
+    "STATION_SOCKET": "the private socket the station's own Codex app-server listens on",
+    "CODEX_HOME": "the station's own Codex folder; of the person's it holds a link to their login and nothing else",
+    "ROLE_MANUAL": "the station's operating rules, rendered from the kit's skills for a runtime that reads no skills "
+                   "(empty for a role the kit has no rendering for)",
 }
 
 

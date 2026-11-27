@@ -13,8 +13,11 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB = os.path.join(tempfile.mkdtemp(prefix="tares-projects-test-"), "t.duckdb")   # a folder of its own: tares.sqlite sits beside it
-CATALOG = "/tmp/tares-projects-test.catalog.yaml"
+# a folder per run: the session store is a file next to the database, and in a shared folder one
+# checkout's newer schema would stop every other checkout's run
+TMP = tempfile.mkdtemp(prefix="tares-projects-test-")
+DB = os.path.join(TMP, "projects.duckdb")
+CATALOG = os.path.join(TMP, "projects.catalog.yaml")
 os.environ["TARES_DB"] = DB
 os.environ["TARES_CATALOG"] = CATALOG
 

@@ -63,7 +63,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn
 
-from . import claude, locks, state, tidy
+from . import claude, locks, proc, state, tidy
 from .client import TaresClient, TaresHTTPError, cksum
 from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -465,7 +465,7 @@ def reset() -> None:
 def movable(paths: CrewPaths, station: str, kit: str, frozen: Frozen, binary: str) -> bool:
     """It runs another version, has a conversation to resume, and is quiet."""
     return (stale_kit(paths, station, kit, frozen) and bool(state.stations_get(station, "sessionId", paths=paths))
-            and claude.quiet(station, None, binary, paths))
+            and proc.quiet(station, None, binary, paths))
 
 
 @locks.scoped   # the station's lock goes when its upgrade ends, as with bash's per-station subshell (TR-1171)
@@ -474,6 +474,9 @@ def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: st
     idle any more or the crew froze since the round began, 1 it could not be restarted. Says what happened."""
     from . import lifecycle
     skill = state.stations_get(station, "role", paths=paths)
+    if skill == "helper":   # a helper works under its parent's role: its skill is that role's (as revive says)
+        from . import launch
+        skill = launch.parent_role(state.stations_get(station, "parent", paths=paths), paths)
     rc = 0
     with TaresClient(paths, client.env, client.say) as fresh:   # Tares and the settings are asked again, as in bash's subshell
         try:
@@ -483,15 +486,16 @@ def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: st
                 fresh.crew_settings()
                 if Frozen(paths, fresh).on:
                     rc = 4   # frozen since the round began
-                elif not claude.quiet(station, None, claude_bin, paths):
+                elif not proc.quiet(station, None, claude_bin, paths):
                     rc = 4   # it started something since the first check
                 else:
                     client.say(f"{station} runs an older version of the plugin; restarting it on this one now that it's "
                                "idle, in the same conversation")
+                    reload = lifecycle.reload_text(paths, station, skill, may_change=True)
                     lifecycle.restart(fresh, paths, [station, (
                         "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with "
-                        f"fresh settings. Reload the skills factory-protocol and station-{skill} (they may have changed), "
-                        f"{lifecycle.REPORT_READ}, {lifecycle.rearm_text(fresh)}, then carry on where you were.")],
+                        f"fresh settings. {reload}, {lifecycle.REPORT_READ}, {lifecycle.rearm_text(fresh, station)}, "
+                        "then carry on where you were.")],
                         claude_bin=claude_bin, only_between_turns=True, prompt_wait=None)
                     state.event("upgraded", station, kit, paths=paths)
         except NotBetweenTurnsError:
@@ -563,7 +567,7 @@ def step(paths: CrewPaths, env: Mapping | None = None, claude_bin: str | None = 
         if last.unread:
             return False   # the revive step said so; nothing is moved this round
         try:
-            binary = claude_bin or claude.claude_bin(env)
+            binary = claude_bin or proc.binary(env, paths)
             candidate = "" if frozen.on else pick(paths, kit, frozen, binary, last.started)
         except CrewError:
             return False

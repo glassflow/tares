@@ -25,7 +25,7 @@ from sqlalchemy import event, func, insert, select  # noqa: E402
 from sqlalchemy.engine import Engine  # noqa: E402
 
 from tares import claude_usage_hourly as hourly  # noqa: E402
-from tares import session_archive, session_ingest, session_move, session_read  # noqa: E402
+from tares import report, session_archive, session_ingest, session_move, session_read  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store import SessionStore, copy as store_copy  # noqa: E402
 from tares.session_store.tables import (session_archive_parts, session_lines,  # noqa: E402
@@ -282,6 +282,17 @@ def reads(s):
         "files_touched": lambda: s.files_touched(SRC, "s1"),
         "session_projects": lambda: s.session_projects("s1"),
         "list_connections": lambda: s.list_connections("tickets"),
+        "usage_by_week": s.usage_by_week,
+        "sessions_in": lambda: s.sessions_in(["s1"], {"p1"}),
+        "sessions_counting_for": lambda: s.sessions_counting_for(["s1"], {"p1"}),
+        "sessions_tied_to": lambda: s.sessions_tied_to(["s1"], {"p1"}),
+        "unread_among": lambda: s.unread_among(["s1"], {"p1"}, set()),
+        "all_stage_changes": s.all_stage_changes,
+        "all_reviews": s.all_reviews,
+        "all_review_findings": s.all_review_findings,
+        "report.read_weeks": lambda: report.read_weeks(s),
+        "get_report_text": lambda: s.get_report_text("project", "p1"),
+        "private_and_records": s.private_and_records,
     }
     agreeing = {
         "station_rollup": fresh(lambda: s.station_rollup(SRC)),

@@ -1,7 +1,8 @@
 """The launch route of a fake Tares (GET /api/factory/stations/{station}/launch, TR-867), for the crew tests.
 
 A station start (TR-870) takes its launch from the cell, so a fake Tares has to give one. The answer is not
-written out by hand: it is built by the real runtime, `RuntimeClaudeCode().launch_spec(...)`, from the same
+written out by hand: it is built by the real runtime (`RuntimeClaudeCode().launch_spec(...)`, or the Codex
+runtime's when the world names it), from the same
 kind of ctx the real route builds, so a test sees the spec the cell would give. What the fake supplies is
 what a real cell reads from its own store: the project rows, the rules (a function of the project's name
 and the work role) and the crew's autonomy.
@@ -22,6 +23,7 @@ if str(ROOT) not in sys.path:
 
 from tares.crew.state import STATION_NAME_RULE, station_name_ok  # noqa: E402
 from tares.integrations.builtin.runtime_claude_code import RuntimeClaudeCode  # noqa: E402
+from tares.integrations.builtin.runtime_codex import RuntimeCodex  # noqa: E402
 
 CAPABILITY = "launch_spec"
 _ROUTE = re.compile(r"^/api/factory/stations/([^/]+)/launch$")
@@ -29,13 +31,14 @@ WORK_ROLES = ("orchestrator", "reviewer", "releaser", "builder")
 
 
 def launch_answer(raw_path: str, headers: dict, projects: list, rules, crew_autonomy: str, base: str,
-                  monitoring=None):
+                  monitoring=None, runtime: str = "claude_code"):
     """The launch route's answer for `raw_path` (path and query), or None when it is another route.
 
     headers: the request's headers (X-Tares-Station says who asks; without it the call is refused, as a key
     alone is). projects: the project rows ({id, name, ...}). rules(project_name, work_role): the rendered
     {allow, soft_deny} of the station's work role. crew_autonomy: the crew's level. base: the cell's own
-    address. monitoring: an instance for the spec's monitoring env and settings, or None."""
+    address. monitoring: an instance for the spec's monitoring env and settings, or None. runtime: the
+    factory's runtime, `claude_code` or `codex`; the spec is that runtime's, and the answer names it."""
     u = urlparse(raw_path)
     m = _ROUTE.match(u.path)
     if not m:
@@ -75,8 +78,8 @@ def launch_answer(raw_path: str, headers: dict, projects: list, rules, crew_auto
         "rules": rules(p["name"] if p else "", work_role), "monitoring": monitoring,
     }
     try:
-        spec = RuntimeClaudeCode().launch_spec(role, station, ctx)
+        spec = (RuntimeCodex() if runtime == "codex" else RuntimeClaudeCode()).launch_spec(role, station, ctx)
     except ValueError as e:
         return 422, {"detail": str(e)}
-    return 200, {"runtime": "claude_code", "station": station, "role": role, "command": spec.command,
+    return 200, {"runtime": runtime, "station": station, "role": role, "command": spec.command,
                  "env": spec.env, "settings": spec.settings, "placeholders": spec.placeholders}

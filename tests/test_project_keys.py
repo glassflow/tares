@@ -16,22 +16,22 @@ Run: .venv/bin/python tests/test_project_keys.py
 import asyncio
 import json
 import os
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from _env import remove_db
 
-DB = "/tmp/tares-project-keys.duckdb"
-OPEN_DB = "/tmp/tares-project-keys-open.duckdb"
+# a folder per run: the session store is a file next to the database, and in a shared folder one
+# checkout's newer schema would stop every other checkout's run
+TMP = tempfile.mkdtemp(prefix="tares-project-keys-")
+DB = os.path.join(TMP, "keys.duckdb")
+OPEN_DB = os.path.join(TMP, "keys-open.duckdb")
 ROOT = "root-token-project-keys"
 os.environ["TARES_DB"] = DB
-os.environ["TARES_CATALOG"] = "/tmp/tares-project-keys.catalog.yaml"
+os.environ["TARES_CATALOG"] = os.path.join(TMP, "catalog.yaml")
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
-remove_db(DB, OPEN_DB)
-if os.path.exists(os.environ["TARES_CATALOG"]):
-    os.remove(os.environ["TARES_CATALOG"])
 
 import httpx
 from fastapi.routing import APIRoute
@@ -240,6 +240,8 @@ async def main():
                   ("GET", "/api/projects/{uid}/pickup"),
                   # the factory's plan (TR-411)
                   ("GET", "/api/projects/{uid}/milestones"),
+                  # what an accepted milestone delivered (TR-1645)
+                  ("GET", "/api/projects/{uid}/milestones/{ref}/summary"),
                   # the crew that works on it (TR-422)
                   ("GET", "/api/projects/{uid}/crew"),
                   # the crew's messages about a ticket (TR-429)

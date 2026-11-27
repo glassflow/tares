@@ -71,7 +71,9 @@ RESTART_USAGE = "usage: tares factory crew watch --restart [--if-running] [--onl
 RESTART_FLAGS = ("--restart", "--if-running", "--only-under", "--json")
 
 # What a round does, in this order. A later ticket registers the function for its name.
-STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates", "docker", "strays")
+# "codex" (a Codex crew's own round, TR-1593) comes first: it records what each station did before any other
+# step can start another turn, and does nothing for a crew on Claude Code.
+STEP_NAMES = ("codex", "revive", "mail", "regrant", "idle_wake", "pace", "updates", "docker", "strays")
 # What a nap does on each of its ticks (the readings the Crew page asks for, TR-967).
 TICK_NAME = "readings"
 # What a nap also does on each tick: look for a desk answer, so the orchestrator hears it at once.
@@ -620,6 +622,14 @@ from . import regrant as _regrant  # noqa: E402  (after the registry above; regr
 from . import watch_revive   # noqa: E402  (TR-959: revive a stopped station, restart a stuck one)
 
 register("revive", watch_revive.step)
+
+from . import codex_round as _codex_round  # noqa: E402
+
+register("codex", _codex_round.step)   # TR-1593: what a Codex station needs once a round (its questions to the person)
+
+from . import codex_mail as _codex_mail  # noqa: E402
+
+register("mail", _codex_mail.step)   # TR-1599: messages between Codex stations, handed over between turns
 register("regrant", _regrant.step)   # TR-960: restart a station between turns when its grants change
 
 from . import pace as _pace  # noqa: E402

@@ -6,6 +6,7 @@ through here; the MCP server never touches the DB directly.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -34,8 +35,8 @@ from . import (edition, metrics, session_archive, session_digest, session_events
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.pr_columns import fill_pr_columns, pr_columns
-from .session_store.tables import (MOVED_TABLE_NAMES, project_sessions, session_stations,
-                                   session_states)
+from .session_store.tables import (MOVED_TABLE_NAMES, project_sessions, report_texts, report_weeks,
+                                   session_stations, session_states)
 from .session_store.tables import settings as settings_table
 from .session_store.tables import api_keys as api_keys_table
 from .session_store.tables import people as people_table
@@ -56,6 +57,7 @@ from .session_store.tables import (session_archive_parts, session_files, session
                                    session_lines, session_said, session_turns)
 from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
+from .saved_counts import UNSAVED, SavedCounts
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -379,6 +381,19 @@ _ENTITY_CARDINALITY_CAP = int(os.getenv("TARES_ENTITY_CARDINALITY_CAP", "10000")
 # finding back, one value per run, so they are never counted as an entity axis.
 _PROVENANCE_LABELS = {"run_id", "dispatch_id"}
 
+# the setting that remembers the deleted private projects (Store.deleted_private_projects)
+_DELETED_PRIVATE = "deleted_private_projects"
+_DELETED_PRIVATE_LOCK = threading.Lock()   # two deletes at once must not lose one
+
+
+def _name_digest(name: str) -> str:
+    return hashlib.sha256((name or "").encode()).hexdigest()
+
+
+def _digest_of(record) -> str:
+    """The name's digest in one deleted private project's record (Store._deleted_records)."""
+    return record["name"] if isinstance(record, dict) else record
+
 
 def _accum_entity(ent: dict, source: str, label: str, value, ingest_time) -> None:
     """Fold one (source, label, value) observation into the batch's entity_counts deltas. Skips
@@ -483,8 +498,21 @@ def _scope_sql(scope) -> tuple[str, list]:
     return sql + ")", params
 
 
+class ReadExclude(dict):
+    """One request's `exclude` (see _exclude_sql): the same dict, with room for what Store._exclude
+    works out from it, so a request that reads several times looks each thing up once. `records` is
+    the deleted private projects' records as read when the dict was built (None: look them up). It
+    belongs to the request that built it: nothing here is kept for the next one."""
+
+    def __init__(self, exclude: dict, records: dict | None = None):
+        super().__init__(exclude)
+        self.records = records
+        self.built: dict = {}
+
+
 # Licence-independent by design (TR-915): never consult licence or team here.
-def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
+def _exclude_sql(exclude, sources=None, sessions=None, digests=None,
+                 moved=None) -> tuple[str, list]:
     """Rows that belong to projects the caller cannot see -> ('AND ...' SQL, params). `exclude` is
     {"ids": [project ids], "names": [project names], "shared": [the shared finding and
     memory sources, or None for every source]}, or None/empty for no filter (the common
@@ -493,11 +521,17 @@ def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
     project_sessions, or when a shared finding or memory row was recorded in one (payload
     `project`). A row with none of those is kept. `sources` is what the query reads: the payload
     test is left out when none of them is a shared source. `sessions` is the keys linked in
-    project_sessions to those projects (Store._exclude_sql reads them from the state, which may
-    be Postgres while the events are in DuckDB)."""
+    project_sessions to those projects (Store._exclude reads them from the state, which may
+    be Postgres while the events are in DuckDB). `digests` is (digest of a name, until) for the
+    deleted private projects among them (Store._deleted_names): a row whose `tares_project`
+    label has that name is left out, when it is older than `until` if there is one. `moved` is
+    (source, until) for the sources only those deleted projects had (Store._moved_sources): the
+    source's rows older than `until` are left out."""
     if not exclude or not (exclude.get("ids") or exclude.get("names")):
         return "", []
-    ids = list(exclude.get("ids") or [])
+    # every list is sorted, so the same rows left out give the same SQL and parameters
+    # (SavedCounts keys on them)
+    ids = sorted(exclude.get("ids") or [])
     both = sorted({v.lower() for v in [*ids, *(exclude.get("names") or [])]})
     ph = lambda n: ", ".join(["?"] * n)
     # NOT COALESCE(x IN (...), FALSE) keeps a row with no value: x is NULL, so is the test. It
@@ -505,8 +539,8 @@ def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
     # The payload is the dear column to open, so it is only looked into for the shared sources
     # that can carry another project's rows (`shared`); no list given means every source.
     shared = exclude.get("shared")
-    if shared is not None and sources is not None:
-        shared = [x for x in shared if x in sources]
+    if shared is not None:
+        shared = sorted(x for x in shared if sources is None or x in sources)
     if shared is None:
         pay, pparams = (f" AND NOT COALESCE(json_extract_string(payload, '$.project') "
                         f"IN ({ph(len(ids))}), FALSE)"), ids
@@ -518,20 +552,36 @@ def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
         pay, pparams = "", []
     sql = (f" AND NOT COALESCE(lower(json_extract_string(labels, '$.tares_project')) "
            f"IN ({ph(len(both))}), FALSE){pay}")
-    sessions = list(sessions or [])
+    sessions = sorted(sessions or [])
     if sessions:
         sql += f" AND NOT COALESCE(key_value IN ({ph(len(sessions))}), FALSE)"
-    return sql, [*both, *pparams, *sessions]
+    always = [d for d, until in digests or () if until is None]
+    before = [(d, until) for d, until in digests or () if until is not None]
+    digest = "sha256(json_extract_string(labels, '$.tares_project'))"
+    tests = [f"{digest} IN ({ph(len(always))})"] if always else []
+    tests += [f"({digest} = ? AND event_time < ?)"] * len(before)
+    if tests:
+        sql += f" AND NOT COALESCE({' OR '.join(tests)}, FALSE)"
+    moved = sorted(((s, until) for s, until in moved or () if sources is None or s in sources),
+                   key=lambda pair: pair[0])
+    if moved:
+        old = " OR ".join(["(source = ? AND event_time < ?)"] * len(moved))
+        sql += f" AND NOT COALESCE({old}, FALSE)"
+    return sql, [*both, *pparams, *sessions, *always, *(v for pair in before for v in pair),
+                 *(v for pair in moved for v in pair)]
 
 
-def _line_hidden(exclude, source: str):
-    """The label and payload tests of `_exclude_sql` for a line read from `session_lines`: a
-    function of (labels, payload), both JSON texts, true when the line is left out. The session
+def _line_hidden(exclude, source: str, digests=(), moved=()):
+    """The label, payload, name and source tests of `_exclude_sql` for a line read from
+    `session_lines`: a function of (labels, payload, at), the first two JSON texts and `at` the
+    line's time, true when the line is left out. `digests` and `moved` are as there. The session
     test is the caller's."""
     ids = list((exclude or {}).get("ids") or [])
     names = list((exclude or {}).get("names") or [])
     if not (ids or names):
-        return lambda labels, payload: False
+        return lambda labels, payload, at=None: False
+    digests = dict(digests)
+    moved_until = dict(moved).get(source)
     both = {v.lower() for v in [*ids, *names]}
     shared = exclude.get("shared")
     in_payload = shared is None or source in shared
@@ -542,9 +592,17 @@ def _line_hidden(exclude, source: str):
         except (ValueError, TypeError, AttributeError):
             return None
 
-    def hidden(labels, payload) -> bool:
+    def hidden(labels, payload, at=None) -> bool:
         tag = field(labels, "tares_project")
-        if tag is not None and str(tag).lower() in both:
+        if tag is not None:
+            if str(tag).lower() in both:
+                return True
+            digest = _name_digest(str(tag)) if digests else None
+            if digest in digests:      # a deleted private project's name
+                until = digests[digest]
+                if until is None or (at is not None and at < until):
+                    return True
+        if moved_until is not None and at is not None and at < moved_until:
             return True
         return in_payload and field(payload, "project") in ids
     return hidden
@@ -654,6 +712,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._archive_on = None            # whether an archive backend exists (settled at first use)
         self._factory_mode = None          # (is the edition factory, until when), see _lines_skip_duckdb
         self._challenges_unreadable: set = set()    # challenger lines already logged as unreadable
+        # entity counts of the filtered reads (list_entities with `exclude`); used under _lock
+        self._saved_counts = SavedCounts()
+        # held while a batch is written and added to them, and while a count is made to be saved
+        # (TR-1716), so no line lands between the two. Taken after _sess_lock, before _lock.
+        self._counts_lock = threading.RLock()
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
@@ -1354,7 +1417,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 _accum_entity(ent, e.source, lname, lval, e.ingest_time)
             if last is None or e.ingest_time > last:
                 last = e.ingest_time
-        with self._lock:
+        with self._counts_lock, self._lock:
+            for name in {source, *(r[0] for r in rows)}:
+                self._saved_counts.drop(name)
             self.con.execute("BEGIN TRANSACTION")
             try:
                 for tbl in ("events", "source_stats", "entity_counts", "entity_label_state"):
@@ -1421,22 +1486,23 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         A DuckDB failure takes the session store's write back before it is raised. Lines of a
         session the store refused are never held back from DuckDB: the drain copies them from there.
         Returns the lines that were held back. Called under `_sess_lock`."""
-        try:
-            written = session_ingest.record_first(self, cc)
-        except session_ingest.LinesNotStored:
-            # a challenger line is sent once, with no retry, so its verdict is still written (a
-            # repeat is skipped). That keeps it when the database refused one session's row alone
-            # (TR-1647) or takes writes again. While it takes none, the verdict is lost, said in
-            # the log and counted: accepted (decision A9)
-            self._keep_challenges(envelopes)
-            raise
-        held = [e for e in held if e.key_value not in written.refused]
-        try:
-            self._append(envelopes, held)
-        except Exception:
-            session_ingest.take_back(self, written)
-            raise
-        return held
+        with self._counts_lock:   # no count is saved between the two writes (TR-1716)
+            try:
+                written = session_ingest.record_first(self, cc)
+            except session_ingest.LinesNotStored:
+                # a challenger line is sent once, with no retry, so its verdict is still written (a
+                # repeat is skipped). That keeps it when the database refused one session's row alone
+                # (TR-1647) or takes writes again. While it takes none, the verdict is lost, said in
+                # the log and counted: accepted (decision A9)
+                self._keep_challenges(envelopes)
+                raise
+            held = [e for e in held if e.key_value not in written.refused]
+            try:
+                self._append(envelopes, held)
+            except Exception:
+                session_ingest.take_back(self, written)
+                raise
+            return held
 
     _HELD_MODE_TTL = 30.0                  # seconds the edition answer of `_lines_skip_duckdb` is kept
 
@@ -1540,7 +1606,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # The event inserts and every derived counter update run in one transaction so a counter can
         # never drift from the rows it counts (a crash rolls back all of them together).
         chunk = 2000
-        with self._lock:
+        with self._counts_lock, self._lock:
             self.con.execute("BEGIN TRANSACTION")
             try:
                 for i in range(0, len(rows), chunk):
@@ -1561,6 +1627,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             except Exception:
                 self.con.execute("ROLLBACK")
                 raise
+            # a held line counts as well: it has no ingest time of its own, so a read that
+            # counts the stored lines gives it the line's time
+            self._keep_saved_counts(rows + [
+                (e.source, e.source_type, e.key_value, e.event_type, e.text, json.dumps(e.payload),
+                 json.dumps(e.labels), e.event_time, e.event_time) for e in held])
         self._keep_challenges(envelopes)
 
     def _keep_challenges(self, envelopes) -> None:
@@ -1681,11 +1752,59 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return [r[:n] for r in rows]
 
     def _exclude(self, exclude, sources=None) -> tuple[str, list]:
-        """The module's _exclude_sql, with the sessions linked to the hidden projects read from
-        the state first."""
-        ids = list((exclude or {}).get("ids") or [])
-        sessions = self.sessions_of_projects(ids) if ids else []
-        return _exclude_sql(exclude, sources, sessions)
+        """The module's _exclude_sql, with what the state knows of the hidden projects read
+        first: the sessions linked to them, and the names and sources of the deleted ones. A
+        ReadExclude keeps both, so one request looks them up once and builds each filter once."""
+        built = getattr(exclude, "built", {})     # a plain dict keeps nothing
+        ids = tuple((exclude or {}).get("ids") or [])
+        spot = ("sql", ids, None if sources is None else frozenset(sources))
+        got = built.get(spot)
+        if got is None:
+            got = built[spot] = _exclude_sql(exclude, sources, *self._looked(exclude))
+        return got[0], list(got[1])
+
+    def _looked(self, exclude) -> tuple:
+        """What _looked_up gives for the projects `exclude` names, kept on a ReadExclude."""
+        built = getattr(exclude, "built", {})
+        ids = tuple((exclude or {}).get("ids") or [])
+        looked = built.get(("looked", ids))
+        if looked is None:
+            looked = built["looked", ids] = self._looked_up(
+                list(ids), getattr(exclude, "records", None))
+        return looked
+
+    def _looked_up(self, ids: list, records: dict | None) -> tuple:
+        """(sessions, digests, moved) for _exclude_sql: what the state knows of the projects
+        `ids`. `records` is the deleted private projects' records, when already read."""
+        if not ids:
+            return [], [], []
+        sessions = self.sessions_of_projects(ids)
+        if records is None:
+            records = self._deleted_records()
+        gone = [records[i] for i in ids if i in records]
+        return sessions, self._deleted_names(gone), self._moved_sources(gone)
+
+    @staticmethod
+    def _moved_sources(gone: list) -> list[tuple]:
+        """(source, until) for the sources that only one of the deleted private projects `gone`
+        (`_deleted_records`) had: what each recorded before that delete stays unread. A record
+        made before sources were noted is the name's digest alone."""
+        until: dict[str, datetime] = {}
+        for r in gone:
+            for name in r.get("sources", ()) if isinstance(r, dict) else ():
+                at = datetime.fromisoformat(r["at"])
+                until[name] = max(at, until.get(name, at))
+        return sorted(until.items())
+
+    def _deleted_names(self, gone: list) -> list[tuple]:
+        """(digest of the name, until) for each of the deleted private projects `gone`
+        (`_deleted_records`). `until` is when the project that has the name now was made, as lines
+        from then on are its own, or None when no project has it."""
+        digests = {_digest_of(r) for r in gone}
+        if not digests:
+            return []
+        taken = {_name_digest(p["name"]): p["created_at"] for p in self.list_projects()}
+        return [(d, taken.get(d)) for d in sorted(digests)]
 
     def _row_owners(self, rows: list, n: int) -> set[str]:
         """The ids of the projects the `rows` belong to, by the three tests _exclude_sql hides by:
@@ -2794,6 +2913,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 id=uid, recipe=template, name=name, params=params, status=status, created_at=ts,
                 updated_at=ts, last_error=None, goal=goal or None,
                 lead_person_id=lead_person_id or None, scope="team", icon=icon or None))
+        # an id made again (a setup that was undone puts its draft back) is no deleted project
+        self._change_deleted_private(lambda d: d.pop(uid, None))
 
     def update_project(self, uid: str, params: dict | None = None, status: str | None = None,
                        last_error: str | None = "", name: str | None = None,
@@ -2872,6 +2993,72 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             rows = conn.execute(select(projects_table.c.id, projects_table.c.name).where(
                 projects_table.c.scope == "private")).all()
         return [{"id": r[0], "name": r[1], "scope": "private"} for r in rows]
+
+    # ── private projects that were deleted (TR-1697) ──────────────────────────
+    # Their cost counts in no total and what they recorded stays unread (TR-1708), so Tares has
+    # to remember which they were: {id: {name: a digest of the name, at: when it was deleted,
+    # sources: the ones only it had}}. A record from before that is the digest alone. The digest
+    # is only there to know a line stamped with the name.
+    def _deleted_records(self) -> dict:
+        return json.loads(self.get_setting(_DELETED_PRIVATE) or "{}")
+
+    def deleted_private_projects(self) -> dict[str, str]:
+        """{id: the digest of the name} of the deleted private projects."""
+        return {uid: _digest_of(r) for uid, r in self._deleted_records().items()}
+
+    def _change_deleted_private(self, change) -> None:
+        with _DELETED_PRIVATE_LOCK:
+            have = self._deleted_records()
+            new = dict(have)
+            change(new)
+            if new != have:
+                self.set_setting(_DELETED_PRIVATE, json.dumps(new, sort_keys=True) if new else None)
+
+    # Licence-independent by design (TR-915): never consult licence or team here.
+    def private_and_deleted(self) -> tuple[list[dict], set[str]]:
+        """`private_projects()` and the ids of the deleted private projects, in one query."""
+        private, deleted, _ = self.private_and_records()
+        return private, deleted
+
+    # Licence-independent by design (TR-915): never consult licence or team here.
+    @kept
+    def private_and_records(self) -> tuple[list[dict], set[str], dict]:
+        """`private_and_deleted()` and the records it read them from (`_deleted_records`)."""
+        q = union_all(
+            select(projects_table.c.id, projects_table.c.name).where(
+                projects_table.c.scope == "private"),
+            select(null(), settings_table.c.value).where(settings_table.c.key == _DELETED_PRIVATE))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q).all()
+        private = [{"id": r[0], "name": r[1], "scope": "private"} for r in rows if r[0] is not None]
+        records = next((json.loads(r[1]) for r in rows if r[0] is None), {})
+        # one that is still there (its delete stopped half way) is still its members' to see
+        return private, set(records) - {p["id"] for p in private}, records
+
+    @staticmethod
+    def deleted_private_ref(ref: str, deleted: dict[str, str]) -> str | None:
+        """The one of `deleted` (`deleted_private_projects`) that `ref`, an id or a name, stood
+        for."""
+        if ref in deleted:
+            return ref
+        digest = _name_digest(ref)
+        return next((uid for uid, d in deleted.items() if d == digest), None)
+
+    def usage_project(self, ref: str, session: str = "") -> str | None:
+        """The project a recorded line's `tares_project` (an id or a name) stands for: the one
+        with that id; else the deleted private one of that name the line's `session` is tied to;
+        else the one of that name there is; else the deleted private one it named."""
+        p = self.get_project(ref)
+        if p:
+            return p["id"]
+        deleted = self.deleted_private_projects()
+        digest = _name_digest(ref)
+        named = {uid for uid, d in deleted.items() if d == digest}
+        tied = named & set(self.session_projects(session)) if named and session else set()
+        if tied:
+            return min(tied)
+        p = self.get_project_by_name(ref)
+        return p["id"] if p else self.deleted_private_ref(ref, deleted)
 
     @kept
     def get_project(self, uid: str) -> dict | None:
@@ -2996,6 +3183,19 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return next((u for u in self.list_projects() if u["name"] == name), None)
 
     def delete_project(self, uid: str) -> None:
+        milestones = [m["id"] for m in self.list_milestones(uid)]
+        gone = self.get_project(uid)
+        private = bool(gone) and gone["scope"] == "private"
+        if private:   # remembered before anything goes, so its cost is never counted in between
+            only = [n for n, uids in self.source_memberships().items() if uids == [uid]]
+            at = now_utc().isoformat()
+
+            def remember(d):
+                had = d.get(uid)   # a delete that stopped half way already took its sources out
+                had = had.get("sources", []) if isinstance(had, dict) else []
+                d[uid] = {"name": _name_digest(gone["name"]), "at": at,
+                          "sources": sorted({*had, *only})}
+            self._change_deleted_private(remember)
         with self._swrite:
             # the state rows first: a delete that stops half way leaves session rows with no
             # project, which every reader ignores
@@ -3024,13 +3224,43 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             with self.sessions_db.begin() as conn:
                 conn.execute(delete(plog_table).where(plog_table.c.usecase_id == uid))
                 conn.execute(delete(projects_table).where(projects_table.c.id == uid))
-        self._usage_forget_project(uid)
+        self._usage_forget_project(uid, private)   # before a team project's links go, below
+        over = sorted({uid, *self.deleted_private_projects()})   # their links keep no state
         with self.sessions_db.begin() as conn:
-            conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
+            # a private project's session links stay (TR-1708): they mark what its sessions
+            # recorded as not to be read, by the same tests as while it was there
+            if not private:
+                conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
+            # its weekly figures (report.py); a pass running now sees the project gone, above
+            conn.execute(delete(report_weeks).where(report_weeks.c.project == uid))
             # a crew station's session serves every project: its state stays
+            linked = select(project_sessions.c.session).where(project_sessions.c.project.not_in(over))
             conn.execute(delete(session_states).where(
-                session_states.c.session.not_in(select(project_sessions.c.session)),
+                session_states.c.session.not_in(linked),
                 session_states.c.session.not_in(select(session_stations.c.session))))
+            conn.execute(delete(report_texts).where(report_texts.c.kind == "milestone",
+                                                    report_texts.c.key.in_(milestones)))
+
+    # ── texts Tares writes from its figures (TR-1645, report_words.py) ──
+    def get_report_text(self, kind: str, key: str) -> dict | None:
+        t = report_texts
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.text, t.c.source, t.c.figures, t.c.written_at).where(
+                t.c.kind == kind, t.c.key == key)).first()
+        return ({"kind": kind, "key": key, "text": r[0], "source": r[1],
+                 "figures": json.loads(r[2]) if r[2] else {}, "written_at": r[3]} if r else None)
+
+    def put_report_text(self, kind: str, key: str, text: str, source: str, figures: dict,
+                        written_at, replace: bool = False) -> None:
+        """Keep a text. The first one written for a kind and key stays, unless `replace`."""
+        values = {"text": text, "source": source,
+                  "figures": json.dumps(figures, ensure_ascii=False), "written_at": written_at}
+        stmt = self.sessions_db.upsert(report_texts).values(kind=kind, key=key, **values)
+        on = [report_texts.c.kind, report_texts.c.key]
+        stmt = (stmt.on_conflict_do_update(index_elements=on, set_=values) if replace
+                else stmt.on_conflict_do_nothing(index_elements=on))
+        with self.sessions_db.begin() as conn:
+            conn.execute(stmt)
 
     def get_project_setup(self, uid: str) -> dict | None:
         """The guided setup of a project ({plan, step, practice_run, ...}), or None when it was
@@ -4618,11 +4848,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         lines are not among the newest it counts (the statement still applies `exclude` itself)."""
         if not exclude or not (exclude.get("ids") or exclude.get("names")):
             return session_events.newest(self, sources, limit)
-        ids = list(exclude.get("ids") or [])
-        hidden = set(self.sessions_of_projects(ids)) if ids else set()
+        sessions, digests, moved = self._looked(exclude)
         return session_events.newest(
-            self, sources, limit, hidden,
-            lambda source, labels, payload: _line_hidden(exclude, source)(labels, payload))
+            self, sources, limit, set(sessions),
+            lambda source, labels, payload, at: _line_hidden(exclude, source, digests, moved)(
+                labels, payload, at))
 
     def key_events(self, source: str, key: str, limit: int = 200,
                    offset: int = 0) -> list[dict]:
@@ -4718,10 +4948,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         if (edition.edition(self)[0] != "factory"
                 or source not in session_ingest.claude_code_sources(self)):
             return None
-        ids = list((exclude or {}).get("ids") or [])
-        hidden = set(self.sessions_of_projects(ids)) if ids else set()
-        got = session_read.newest_payloads(self, source, limit, hidden,
-                                           _line_hidden(exclude, source))
+        sessions, digests, moved = self._looked(exclude)
+        got = session_read.newest_payloads(self, source, limit, set(sessions),
+                                           _line_hidden(exclude, source, digests, moved))
         return got if got or session_move.complete(self) else None
 
     def recent_payloads(self, source: str, limit: int = 500,
@@ -4798,6 +5027,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # quadratic (this once wedged the daemon). Staging the new values and joining once is a
         # single rewrite.
         with self._lock:
+            self._saved_counts.drop(source)
             self.con.execute(
                 "CREATE OR REPLACE TEMP TABLE _backfill (rowid BIGINT, labels VARCHAR)")
             self.con.executemany("INSERT INTO _backfill VALUES (?, ?)", updates)
@@ -4815,57 +5045,91 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         of a full-table `GROUP BY json_extract_string(labels, …)`. If any relevant (source, label)
         was truncated for exceeding the cardinality cap, that label isn't materialized — fall back to
         a live scan so the answer stays correct (just slower, for a label that shouldn't be an axis).
-        The counter has no project, so `exclude` (see _exclude_sql) also takes the live scan: a label
-        value that only a hidden project's rows carry must not list."""
+        The counter has no project, so with `exclude` (see _exclude_sql) a label value that only a
+        hidden project's rows carry must not come from it: that read has saved counts of its own
+        (_list_entities_saved)."""
         if not _FIELD_RE.match(label):
             raise ValueError(f"bad label name {label!r}")
-        ids = list((exclude or {}).get("ids") or [])
-        hidden = self.sessions_of_projects(ids) if ids else []
-        xsql, xparams = _exclude_sql(exclude, sources, hidden)
+        hidden, digests, moved = self._looked(exclude)
+        xsql, xparams = _exclude_sql(exclude, sources, hidden, digests, moved)
         if xsql:
-            return self._list_entities_scan(label, sources, limit, xsql, xparams,
-                                            need_payload=exclude.get("shared") is None,
-                                            exclude=exclude, hidden=hidden)
-        ph = ", ".join(["?"] * len(sources)) if sources else ""
-        tq = "SELECT 1 FROM entity_label_state WHERE label = ? AND truncated = TRUE"
-        tp: list = [label]
-        if sources:
-            tq += f" AND source IN ({ph})"
-            tp += sources
+            return self._list_entities_saved(
+                label, sources, int(limit), xsql, xparams,
+                need_payload=exclude.get("shared") is None, exclude=exclude, hidden=hidden,
+                digests=digests, moved=moved)
         with self._lock:
-            truncated = self.con.execute(tq + " LIMIT 1", tp).fetchone() is not None
-        if truncated:
-            return self._list_entities_scan(label, sources, limit)
-        with self._lock:
-            q = "SELECT value, SUM(events), MAX(last_ingest) FROM entity_counts WHERE label = ?"
-            params: list = [label]
-            if sources:
-                q += f" AND source IN ({ph})"
-                params += sources
-            q += " GROUP BY value ORDER BY SUM(events) DESC LIMIT ?"
-            rows = self.con.execute(q, [*params, int(limit)]).fetchall()
-        return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
+            if not self._truncated(label, sources):
+                q = "SELECT value, SUM(events), MAX(last_ingest) FROM entity_counts WHERE label = ?"
+                params: list = [label]
+                if sources:
+                    q += f" AND source IN ({', '.join(['?'] * len(sources))})"
+                    params += sources
+                q += " GROUP BY value ORDER BY SUM(events) DESC LIMIT ?"
+                rows = self.con.execute(q, [*params, int(limit)]).fetchall()
+                return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
+        return self._list_entities_scan(label, sources, limit)
 
     def is_label_truncated(self, label: str, sources: list[str] | None = None) -> bool:
         """Whether `label` exceeded the cardinality cap (for any relevant source) and is served by a
         live scan rather than the counter. Lets the UI flag it as a high-cardinality axis."""
         if not _FIELD_RE.match(label):
             return False
+        with self._lock:
+            return self._truncated(label, sources)
+
+    def _truncated(self, label: str, sources: list[str] | None) -> bool:
+        """is_label_truncated for a caller that holds the lock."""
         q = "SELECT 1 FROM entity_label_state WHERE label = ? AND truncated = TRUE"
         p: list = [label]
         if sources:
             q += f" AND source IN ({', '.join(['?'] * len(sources))})"
             p += sources
-        with self._lock:
-            return self.con.execute(q + " LIMIT 1", p).fetchone() is not None
+        return self.con.execute(q + " LIMIT 1", p).fetchone() is not None
+
+    def _list_entities_saved(self, label: str, sources: list[str] | None, limit: int,
+                             xsql: str, xparams: list, **scan) -> list[dict]:
+        """list_entities with a filter: from the saved counts (SavedCounts) when this one is there,
+        else a live scan (`scan` is what it takes besides the filter) whose whole answer is saved.
+        A truncated label, or one with more values than the cardinality cap under this filter, is
+        scanned on every read."""
+        filt = (xsql, tuple(xparams))
+        spot = (frozenset(sources) if sources else None, label)
+        with self._counts_lock:    # no append lands between a count and its saving
+            counts = self._saved_counts.get(filt, spot) if limit >= 0 else None
+            if counts is UNSAVED:
+                if self.is_label_truncated(label, sources):
+                    self._saved_counts.put(filt, spot, None)
+                    counts = None
+                else:
+                    rows = self._list_entities_scan(
+                        label, sources, max(limit, _ENTITY_CARDINALITY_CAP + 1), xsql, xparams,
+                        **scan)
+                    self._saved_counts.put(
+                        filt, spot, None if len(rows) > _ENTITY_CARDINALITY_CAP else
+                        {r["value"]: [r["events"], r["last_ingest"]] for r in rows})
+                    return rows[:limit]
+            if counts is not None:
+                top = sorted(counts.items(), key=lambda item: -item[1][0])[:limit]
+                return [{"value": v, "events": n, "last_ingest": last} for v, (n, last) in top]
+        return self._list_entities_scan(label, sources, limit, xsql, xparams, **scan)
+
+    def _keep_saved_counts(self, rows: list[tuple]) -> None:
+        """Add an appended batch to the saved counts. Caller holds _counts_lock and the lock; the
+        rows are in."""
+        try:
+            self._saved_counts.appended(self.con, rows, _label_expr, _ENTITY_CARDINALITY_CAP)
+        except Exception as ex:      # never fail the ingest for this: the next read counts again
+            self._saved_counts.clear()
+            print(f"taresd: adding {len(rows)} event(s) to the saved entity counts failed ({ex}); "
+                  "they are counted again at the next read", flush=True)
 
     def _list_entities_scan(self, label: str, sources: list[str] | None, limit: int,
                             xsql: str = "", xparams: list | None = None,
                             need_payload: bool = False, exclude: dict | None = None,
-                            hidden=()) -> list[dict]:
-        """The pre-counter implementation: scan events and GROUP BY the label. Used only as the
-        fallback for a truncated (high-cardinality) label, and for a caller who cannot see some
-        projects. Takes the lock itself."""
+                            hidden=(), digests=(), moved=()) -> list[dict]:
+        """The pre-counter implementation: scan events and GROUP BY the label. Used for a truncated
+        (high-cardinality) label, and to count a filtered read (`exclude` with what _looked_up
+        knows of its projects). Takes the lock itself."""
         expr = _label_expr(label)
         where = "WHERE " + expr + " IS NOT NULL"
         params: list = []
@@ -4873,11 +5137,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             where += f" AND source IN ({', '.join(['?'] * len(sources))})"
             params += sources
         rows = None
-        if not need_payload:        # a test that looks into a payload takes the lines themselves
+        # a test that looks into a payload, or at a line's time (a deleted project's name that a
+        # project took again), takes the lines themselves; the digest holds neither
+        if not need_payload and all(until is None for _, until in digests):
             rows = self._from_digest(
                 session_digest.entities, label, expr, sources, int(limit), xsql, list(xparams or []),
-                _exclude_sql(exclude, sources), set(hidden),
-                set((exclude or {}).get("shared") or []))
+                _exclude_sql(exclude, sources, None, digests), set(hidden),
+                set((exclude or {}).get("shared") or []) | {source for source, _ in moved})
         if rows is not None:
             return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
         where += xsql
@@ -4915,11 +5181,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def purge_events(self, source: str) -> int:
         # _sess_lock first, as append and the reconcile take it, so no line is counted into the
         # sessions table between the purge and the delete of its rows.
-        with self._sess_lock:
+        with self._sess_lock, self._counts_lock:
             held = session_events.held_count(self, source)    # lines the events table never got
             with self._lock:
                 n = held + self.con.execute(
                     "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
+                self._saved_counts.drop(source)
                 self.con.execute("BEGIN TRANSACTION")
                 try:
                     self.con.execute("DELETE FROM events WHERE source = ?", [source])

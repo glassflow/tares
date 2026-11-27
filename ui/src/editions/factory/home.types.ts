@@ -74,6 +74,9 @@ export interface HomeItem {
   tickets?: string[];
   /** Short lines shown one under the other below the detail (the calls in a "crew answers to confirm" item). */
   lines?: string[];
+  /** The desk items (D numbers) a grouped item took in: the pull requests to review, the answers to
+   *  confirm. A desk item's own row names its number in `id`. */
+  desk_labels?: string[];
   /** The decision in one line, verb first ("Merge PR 336"); a question's is the question (TR-1447).
    *  Absent on a cell from before it. */
   ask?: string | null;

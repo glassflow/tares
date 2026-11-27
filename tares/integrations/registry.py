@@ -50,6 +50,7 @@ BUILTINS: list[str] = [
     "tares.integrations.builtin.monitoring_tares:MonitoringRius",
     "tares.integrations.builtin.monitoring_tares:MonitoringOtlp",
     "tares.integrations.builtin.runtime_claude_code:RuntimeClaudeCode",
+    "tares.integrations.builtin.runtime_codex:RuntimeCodex",
 ]
 
 _loaded: dict[tuple[str, str], type[Integration]] | None = None

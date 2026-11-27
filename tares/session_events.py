@@ -391,7 +391,7 @@ def newest(store, sources, limit: int, hidden_sessions=frozenset(), hidden_line=
     """`events` for a statement that takes the newest `limit` rows of `sources` (None: every
     source) with no window. Only the stored lines that can be among them are loaded: the sessions
     are walked newest first by their last line, until none left can hold a newer one. The caller's
-    hidden sessions and lines (`hidden_line(source, labels, payload)`) are not counted."""
+    hidden sessions and lines (`hidden_line(source, labels, payload, at)`) are not counted."""
     if (sources is not None and not sources) or not session_read._factory(store):
         return PLAIN
     db = store.sessions_db
@@ -411,7 +411,8 @@ def newest(store, sources, limit: int, hidden_sessions=frozenset(), hidden_line=
             continue
 
         def shown(r):
-            return hidden_line is None or not hidden_line(b.source, r["labels"], r["payload"])
+            return hidden_line is None or not hidden_line(b.source, r["labels"], r["payload"],
+                                                          r["at"])
 
         mine: list = []
         start = 0

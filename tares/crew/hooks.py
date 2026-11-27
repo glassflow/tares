@@ -5,7 +5,9 @@ A hook command in `claude-plugin/hooks/hooks.json` is `tares hook <name>`, never
 helper. The name maps to a file under the plugin root.
 A Python script runs in this process with `runpy`, with stdin and stdout passed through and its
 exit code kept. A bash script (none is left; the kind stays for a later hook) runs
-through the `bash` found on PATH, which on Windows is Git Bash.
+through the `bash` found on PATH, which on Windows is Git Bash. `codex-guard` is the guard as a Codex
+station runs it (`tares.crew.codex_guard`, TR-1594): the same guard.py of the plugin, asked from inside the
+package.
 
 Standard library only, and nothing from the rest of the package: a hook starts at every tool call,
 so this must stay light (tests/test_hook_start.py holds the limit).
@@ -23,12 +25,13 @@ import sys
 from pathlib import Path
 
 # name -> (kind, path under the plugin root). kind: py runs in process, sh runs through bash,
-# compat is the version check, which needs no file.
+# compat is the version check, which needs no file, codex is the guard's rules asked by the Codex adapter.
 HOOKS = {
     "ship": ("py", "scripts/ship.py"),
     "challenger": ("py", "scripts/challenger.py"),
     "statusline": ("py", "scripts/statusline.py"),
     "guard": ("py", "hooks/guard.py"),
+    "codex-guard": ("codex", "hooks/guard.py"),
     "session-start": ("py", "hooks/session_start.py"),
     "mcp-headers": ("py", "scripts/mcp_headers.py"),
     "otel-headers": ("py", "scripts/otel_headers.py"),
@@ -95,7 +98,10 @@ def run(argv: list[str]) -> int:
         return 0 if script.is_file() else 1
     if not script.is_file():
         print(f"tares hook: {name} has no script at {script.as_posix()}", file=sys.stderr)
-        return 1
+        return 2 if kind == "codex" else 1   # on Codex 1 lets the call through and 2 blocks it
+    if kind == "codex":
+        from . import codex_guard
+        return codex_guard.main(script)
     if kind == "sh":
         return subprocess.call([find_bash(), script.as_posix(), *rest])
     return _run_py(script, rest)

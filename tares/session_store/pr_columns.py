@@ -3,7 +3,7 @@
 
 `pr` (JSON text) stays the record; the two columns are what a lookup by pull request reads. This
 module is the one place that says what they hold for a `pr`, so the writes, the copy from DuckDB,
-the repair at start and the lookup cannot disagree. Revision 0015 does not call it: it has its own
+the repair at start and the lookup cannot disagree. Revision 0018 does not call it: it has its own
 copy, as it was then (migrations/frozen/pr_columns.py).
 
 `pr_repo` is the repo name in lower case, `pr_number` the number. Each is NULL when `pr` has no

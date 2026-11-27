@@ -232,13 +232,20 @@ def plan(store) -> dict | None:
                     report_person=saved.get("person_id") if saved else None)
 
 
-def by_project(store, since=None) -> list[dict]:
+def by_project(store, since=None, hidden=frozenset()) -> list[dict]:
+    """`hidden` is the ids of the projects the caller cannot see: no row, and no part of a share."""
     names = {p["id"]: p["name"] for p in store.list_projects()}
     out = []
     for r in store.usage_by_project(since):
         name = (names.get(r["project"], "a deleted project") if r["kind"] == "project"
                 else "The crew (shared)" if r["kind"] == "crew" else "Other sessions")
         out.append({**r, "name": name})
+    return _shares(out, hidden)
+
+
+def _shares(rows: list[dict], hidden) -> list[dict]:
+    """Copies of `rows` without the hidden projects, each with its share of what is left."""
+    out = [dict(r) for r in rows if r["project"] not in hidden]
     total = sum(r["cost_usd"] for r in out) or 0
     for r in out:
         r["share"] = (r["cost_usd"] / total) if total else None
@@ -250,23 +257,24 @@ _week: dict = {}        # id(store) -> (monotonic time, weakref to the store, ro
 _week_lock = threading.Lock()
 
 
-def week_by_project(store, now) -> list[dict]:
+def week_by_project(store, now, hidden=frozenset()) -> list[dict]:
     """`by_project` over the 7 days up to `now`, kept in this process for 60 seconds per store
     (TR-1627). Home, Crew and Setup each show it; the query behind it costs about 150 ms on a
-    factory-sized cell, and a share of the week does not change in a minute. The rows do not depend
-    on who asks: the caller keeps the projects it may show. Losing the entry changes no answer,
-    only the time the next read takes. A read within the minute shows the week as of the first one."""
+    factory-sized cell, and a share of the week does not change in a minute. The kept rows do not
+    depend on who asks: `hidden` (as in `by_project`) is taken off them on every read. Losing the
+    entry changes no answer, only the time the next read takes. A read within the minute shows the
+    week as of the first one."""
     key, at = id(store), time.monotonic()
     with _week_lock:
         hit = _week.get(key)
         if hit and hit[1]() is store and at - hit[0] < WEEK_KEEP_SECONDS:
-            return [dict(r) for r in hit[2]]
+            return _shares(hit[2], hidden)
     rows = by_project(store, now - timedelta(days=7))
     with _week_lock:
         for k in [k for k, v in _week.items() if v[1]() is None]:
             del _week[k]            # a store that is gone leaves nothing behind
         _week[key] = (at, weakref.ref(store), rows)
-    return [dict(r) for r in rows]
+    return _shares(rows, hidden)
 
 
 def clear_week_by_project() -> None:
@@ -275,22 +283,23 @@ def clear_week_by_project() -> None:
         _week.clear()
 
 
-def usage(store, days: int = 7) -> dict:
+def usage(store, days: int = 7, hidden=frozenset()) -> dict:
     now = now_utc()
     p = plan(store)
     sess = next((x for x in (p or {}).get("limits", []) if x["kind"] == "session"), None)
     end = _when(sess.get("resets_at")) if sess and not sess.get("reset") else None
     start = (end - SESSION_WINDOW) if end else now - SESSION_WINDOW
     return {"plan": p,
-            "window": {"since": start, "until": end, "projects": by_project(store, start)},
-            "days": days, "projects": by_project(store, now - timedelta(days=days)),
+            "window": {"since": start, "until": end, "projects": by_project(store, start, hidden)},
+            "days": days, "projects": by_project(store, now - timedelta(days=days), hidden),
             "now": now}
 
 
-def register(app, store) -> None:
+def register(app, store, hidden_ids) -> None:
     @app.get("/api/claude-code/usage")
     def get_claude_code_usage(days: int = 7):
         """What the Claude Code sessions reporting here spend: the plan's limits (as the crew's
         machine last read them), the current 5-hour window by project, and tokens and estimated
-        cost by project over the last `days` (1 to 90). Cost is at API list prices."""
-        return usage(store, min(max(days, 1), 90))
+        cost by project over the last `days` (1 to 90). Cost is at API list prices. A private
+        project you are not on is left out, and the shares are over what is left."""
+        return usage(store, min(max(days, 1), 90), hidden_ids())

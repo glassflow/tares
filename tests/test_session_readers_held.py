@@ -340,6 +340,44 @@ def parity():
     base.close()
 
 
+def deleted_private():
+    """The tests of a deleted private project hold for a stored line as for a DuckDB row: the name
+    it is tagged with is matched until a project takes the name again."""
+    print("== a deleted private project's tagged lines stay out of what the stored lines answer ==")
+    # a deleted project is hidden by its id alone: nothing lists its name any more
+    exclude = {"ids": ["uc_gone"], "names": [], "shared": []}
+
+    def tagged(sid, ago_s):
+        e = line(sid, "user", f"{sid} at {ago_s}", ago_s)
+        e.labels["tares_project"] = "Gone"
+        return e
+
+    def seen(s):
+        return ([obj(p)["sessionId"] for p in s.recent_payloads(SRC, 10, exclude=exclude)],
+                [r["key"] for r in s.recent_events(SRC, 2, exclude=exclude)])
+
+    for name, edition in (("platform", "platform"), ("factory", "factory")):
+        s = open_store(edition)
+        s.create_project("uc_gone", "custom", "Gone", {})
+        s.set_project_scope("uc_gone", "private")
+        s.append([line("V", "user", "V first", 300), line("V", "user", "V second", 200)])
+        s.append([tagged("G", 100), tagged("G", 50)])
+        s.delete_project("uc_gone")
+        if edition == "platform":
+            level(s)
+        got = seen(s)
+        ck(f"{name}: the newest lines are the other session's, as many as asked for",
+           got == (["V", "V"], ["V", "V"]), got)
+        s.create_project("uc_again", "custom", "Gone", {})
+        s.append([tagged("W", -3600)])                      # later than the project that has the name
+        if edition == "platform":
+            level(s)
+        got = seen(s)
+        ck(f"{name}: a line from after the name was taken again is read, the older ones are not",
+           got == (["W", "V", "V"], ["W", "V"]), got)
+        s.close()
+
+
 def edges():
     print("== nothing stored, and a platform cell ==")
     s = open_store("factory")
@@ -470,6 +508,7 @@ async def app_checks():
 
 async def main():
     parity()
+    deleted_private()
     edges()
     counted()
     no_write_lock()

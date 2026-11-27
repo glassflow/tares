@@ -179,12 +179,15 @@ class ClaudeCodeConnector(Connector):
         # secrets are looked for, so one with a NUL inside it is found once it is whole again
         items = self._scrub_secrets([_without_nul(o) for o in items])
         out = []
-        projects: dict[str, str | None] = {}
+        projects: dict[tuple, str | None] = {}   # (stamp, session) -> the project it stands for
         for o in items:
             if isinstance(o, dict) and str(o.get("type") or "").startswith(self.REQUEST_PREFIX):
                 continue   # Claude Code's record of an API request, a copy of lines already sent
             if isinstance(o, dict) and o.get("type") in self.METER_TYPES:
                 self._record_meter(o)   # a meter reading, not something the session said
+                continue
+            if isinstance(o, dict) and o.get("type") == self.USAGE_TYPE:
+                self._record_reported(o, projects)   # counted, and not a line of the timeline
                 continue
             if isinstance(o, dict):
                 self._record_usage(o, projects)
@@ -218,7 +221,7 @@ class ClaudeCodeConnector(Connector):
         except DocError:
             return
         ref = str(o.get("tares_project") or "").strip()
-        p = (self.store.get_project(ref) or self.store.get_project_by_name(ref)) if ref else None
+        project = self.store.usage_project(ref, sid) if ref else None
         at = self._ts(o)
         # the crew (TR-628): this recording's person, the crew's name and the machine; a line
         # with no person (the system credential) joins the crew of `local`
@@ -227,24 +230,27 @@ class ClaudeCodeConnector(Connector):
             str(o.get("factory_crew") or o.get("crew") or ""), self.person_id,
             str(o.get("factory_machine") or o.get("machine") or ""))
         crew_id = self.store.resolve_crew(crew_name, self.person_id, machine, at)
-        self.store.set_session_station(sid, name, role, parent, p["id"] if p else None, at,
-                                       crew_id)
+        self.store.set_session_station(sid, name, role, parent, project, at, crew_id)
 
     def _link_project(self, o: dict) -> bool:
         """A `session_project` line (TR-405): the plugin saw the session work in a Tares project
         (it created it, or a Tares tool named it). Tie the session to the project, and put this
         source in the project so the session's lines read as the project's, the ones from before
         the project existed included (they share the session key). An unknown project is
-        ignored: the line still lands on the session's timeline."""
+        ignored: the line still lands on the session's timeline. A deleted private one gets the
+        tie too, so that the session's lines stay unread, and the answer is False as for an
+        unknown one."""
         ref, sid = str(o.get("tares_project") or "").strip(), str(o.get("sessionId") or "")
         if not ref or not sid or self.store is None:
             return False
-        p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
-        if p is None:
+        uid = self.store.usage_project(ref, sid)
+        if uid is None:
             return False
         cwd = o.get("cwd")
-        self.store.link_session(p["id"], sid, Path(str(cwd)).name if cwd else None)
-        self.store.upsert_project_object(p["id"], "source", f"+source:{self.cfg.name}",
+        self.store.link_session(uid, sid, Path(str(cwd)).name if cwd else None)
+        if self.store.get_project(uid) is None:
+            return False
+        self.store.upsert_project_object(uid, "source", f"+source:{self.cfg.name}",
                                          self.cfg.name)
         return True
 
@@ -283,13 +289,29 @@ class ClaudeCodeConnector(Connector):
         if msg.get("model") == SYNTHETIC:   # Claude Code's own notice, not a model reply
             return
         ref = str(o.get("tares_project") or "").strip()
-        if ref and ref not in projects:
-            p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
-            projects[ref] = p["id"] if p else None
+        key = (ref, str(sid))
+        if ref and key not in projects:
+            projects[key] = self.store.usage_project(*key)
         self.store.record_reply_usage(
-            str(sid), str(mid), self._ts(o), msg.get("model"), projects.get(ref) if ref else None,
+            str(sid), str(mid), self._ts(o), msg.get("model"), projects.get(key) if ref else None,
             str(o.get("subagent") or o.get("agentId") or "") or None
             if o.get("isSidechain") or o.get("subagent") else None, usage)
+
+    # A reply's tokens as a line of their own (TR-1595): a runtime whose lines carry no usage (a Codex
+    # station, whose recorder reads them from Codex's own count) sends one per reply. Claude Code's
+    # replies carry theirs in the reply's line (`_record_usage`) and send none of these.
+    USAGE_TYPE = "session_usage"
+
+    def _record_reported(self, o: dict, projects: dict) -> None:
+        sid, mid, usage = o.get("sessionId"), o.get("message_id"), o.get("usage")
+        if not isinstance(usage, dict) or not mid or not sid or self.store is None:
+            return
+        ref = str(o.get("tares_project") or "").strip()
+        key = (ref, str(sid))
+        if ref and key not in projects:
+            projects[key] = self.store.usage_project(*key)
+        self.store.record_reported_usage(str(sid), str(mid), self._ts(o), o.get("model"),
+                                         projects.get(key) if ref else None, usage)
 
     STATES = ("working", "idle", "waiting", "ended")
 

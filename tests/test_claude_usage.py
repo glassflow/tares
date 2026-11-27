@@ -5,12 +5,13 @@ repeat it, each reply counted for the project it was stamped with (else its stat
 session's project; the crew's unstamped replies are the crew's), the status line's report on a
 station (its context window, the plan's 5-hour and weekly limits), /usage's limits merged with the
 newer status line reading, a /context reading and the ask for one, meter lines kept off the
-timeline, the fill from replies stored before (and a gap a version that did not count left), and
-a project delete.
+timeline, the fill from replies stored before (and a gap a version that did not count left), a
+project delete, and a private project the caller of the read is not on (neither named nor counted).
 
 Run: .venv/bin/python tests/test_claude_usage.py
 """
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -28,7 +29,7 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
 
-from session_helpers import count, delete_rows, rows as session_rows, set_cols
+from session_helpers import count, delete_rows, rows as session_rows, seed_usage, set_cols
 from tares import claude_usage as cu
 from tares.pricing import cost_usd
 from tares.session_store.tables import session_usage as su
@@ -311,6 +312,55 @@ async def main():
         names = {x["name"] for x in u["projects"]}
         ck("its replies stay, counted for no project", "Other" not in names and "a deleted project" not in names
            and sum(x["replies"] for x in u["projects"]) == 6, u["projects"])
+
+        print("== a private project the caller is not on ==")
+        async with mk() as cx:
+            secret = (await cx.post("/api/projects", json={"template": "custom", "name": "Secret"})).json()["id"]
+        store.set_project_scope(secret, "private")
+        mia = store.create_person("Mia", "mia@example.com")["id"]
+        bo = store.create_person("Bo", "bo@example.com")["id"]
+        store.add_project_member(secret, mia)
+        # one reply inside the 5-hour window, one only inside the last days
+        seed_usage(store, "s1", "s-now", project=secret, replied_at=now_utc() - timedelta(minutes=10), cost_usd=3.25)
+        seed_usage(store, "s1", "s-old", project=secret, replied_at=now_utc() - timedelta(days=3), cost_usd=5.0)
+
+        def key(kid, person=None, scopes=("read",), project=None):
+            token = f"nvf_{kid}_{kid}-secret-for-the-test"
+            store.insert_api_key(kid, kid, f"nvf_{kid}", hashlib.sha256(token.encode()).hexdigest(),
+                                 list(scopes), project=project, person_id=person)
+            return {"Authorization": f"Bearer {token}"}
+
+        async def read(headers=None):
+            async with mk() as cx:
+                return await cx.get("/api/claude-code/usage", headers=headers or {})
+
+        def lists(r):
+            return r.json()["window"]["projects"], r.json()["projects"]
+
+        def spent(rows):
+            return {x["name"]: round(x["cost_usd"], 6) for x in rows}
+
+        full = [spent(x) for x in lists(await read())]
+        ck("the cell's token reads its name and cost, beside every other row, in both lists",
+           [x.get("Secret") for x in full] == [3.25, 8.25]
+           and all(set(x) == {"Secret", "Shop", "The crew (shared)", "Other sessions"} for x in full), full)
+        r = await read(key("kmia", mia))
+        ck("a person on every project reads every row", r.status_code == 200
+           and [spent(x) for x in lists(r)] == full, r.text)
+        rest = [{n: c for n, c in x.items() if n != "Secret"} for x in full]
+        for who, headers in (("a person not on it", key("kbo", bo)),
+                             ("their admin key", key("kboa", bo, ("read", "admin"))),
+                             ("a key with no person", key("knobody")),
+                             ("the cell's token narrowed to the team", {"x-tares-viewer": "public"})):
+            r = await read(headers)
+            ck(f"{who}: neither its name nor its id", r.status_code == 200
+               and "Secret" not in r.text and secret not in r.text, r.text)
+            ck(f"{who}: nor its cost, and the other rows as they were",
+               [spent(x) for x in lists(r)] == rest, r.text)
+            ck(f"{who}: the shares are over what is left",
+               all(abs(sum(x["share"] for x in rows) - 1) < 1e-9 for rows in lists(r)), r.text)
+        r = await read(key("kproj", project=shop))
+        ck("a project's key does not read the cell's usage", r.status_code == 403, r.text)
 
 
 units()

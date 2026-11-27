@@ -1,0 +1,82 @@
+# The orchestrator's manual as a Codex station reads it: edits of ../../../skills/station-orchestrator/SKILL.md (TR-1599).
+#
+# A Codex orchestrator has no session the person attaches to: the person answers on the desk, in the console, which
+# records the answer; the factory wakes the orchestrator for it. It holds no schedule, sends stations their messages
+# with send_to_station (the factory protocol), and starts builders with `tares factory spawn` as before.
+
+[[edit]]
+find = '''and ask the person what does, here in your own session. **You never write code, review code, deploy, or message people outside this session.**'''
+with = '''and ask the person what does, on the desk. **You never write code, review code, deploy, or message people.**'''
+
+[[edit]]
+find = '''**Situations with their own page.** The files below sit next to this one, in this skill's base directory. When the trigger happens, Read the file before you act, and follow it as part of this manual:'''
+with = '''**Situations with their own page.** The pages below follow this manual. When the trigger happens, follow the page before you act, as part of this manual:'''
+
+[[edit]]
+find = '''1. Load `factory-protocol` if you haven't.'''
+with = '''1. The factory protocol is above; nothing has to be loaded.'''
+
+[[edit]]
+find = '''5. **Re-ask the desk.** If `my_work.desk` has open items, ask the one your report says you were asking (else the top one) now, as in "The desk". The person may be attached right after a revive.'''
+with = '''5. **The desk.** If `my_work.desk` has open items, they are on the desk for the person already; note the top one under `## Desk` in your report.'''
+
+[[edit]]
+find = '''6. Arm your schedule with `CronCreate`: every 20 minutes, prompt `Orchestrator tick: follow the Tick section of the station-orchestrator skill.` Check `CronList` first so you never hold two. Unless `get_crew_settings` shows `idle_wake` false, arm none: the factory wakes you.'''
+with = '''6. You hold no schedule: the factory wakes you when there is work (a ready ticket, a stall, a new project, a takeover, an answer on the desk) and after quiet.'''
+
+[[edit]]
+find = '''The person answers only here, in your session (`tares factory crew attach orchestrator`). The console shows the desk; the only thing the person can do there is allow a permission request.'''
+with = '''Your person does not talk to a Codex station: they answer on the desk, in the Tares console, where each item you record shows with its options, and the console records their answer. The factory wakes you when an item is answered.'''
+
+[[edit]]
+find = '''- **Ask one at a time, blockers first** (`desk_list` order). Keep asking an item until it is answered or the person says skip; a blocker that arrives meanwhile is next, and you say so in one line. Always in this shape, every time you mention it:
+
+  ```
+  **D<n>: <the question, in one line>** (blocks <what>, or: not blocking)
+  - **A)** <what it means, in a few words>
+  - **B)** <what it means, in a few words>. Recommended: <why, in a few words>.
+  Reply with a letter, or in your own words.
+  ```
+
+  Mark the recommended option. Yes-or-no (a merge at L3): options **yes** and **no**, ending "Reply yes or no". Never mention an open item by its number alone; the options have scrolled away.'''
+with = '''- **Write each item to be read alone.** The console shows it without you: the question in one line, the options each with what it means in a few words, your recommendation and why, what it blocks. Yes-or-no (a merge at L3): options **yes** and **no**. Blockers are marked `blocking`, and the desk shows them first.'''
+
+[[edit]]
+find = '''- **Keep it in view.** While an item is open, end every reply in your session with its block. Never add it to messages for stations or other sessions (`TASK`, `ANSWER`, `RELAY`, the reply to a `SHIP`): the person answers only here. A turn with nothing for the person (tick, `DONE`, `VERDICT`, `READY`) prints nothing, except: if you last showed the open item's block over an hour ago, show it again. Keep the item and time shown under `## Desk`.'''
+with = '''- **Nothing to show.** Nobody reads your turns: never ask a question in them, and print nothing for the person. Keep the items you wait on under `## Desk`.'''
+
+[[edit]]
+find = '''- **No question box.** Never ask with `AskUserQuestion`: while it is open you read no messages or ticks, and Tares counts only typed words.'''
+with = '''- **One item per question.** Record it once; it stays open on the desk until the person answers.'''
+
+[[edit]]
+find = '''- **Record the answer** with `desk_answer(item, words, choice, standing, scope, kept, overturned)`. `words`: a whole message, line or sentence the addressee typed after you asked, in any of their sessions, copied exactly. Only the addressee's words answer it (`to`, else the ticket's assignee, else the lead, else you). A letter alone ("B"): pass `words="B"`. With options, pass `choice` as the chosen option's full text, or their own answer in a short sentence when they chose none; Tares maps "D85 A", "B - next week" or the option's words if you omit it, and refuses free words naming no option: ask which they meant. If it says the answer was not found yet (or `recorded: false`), the item stays open: retry after the next sync with their exact reply, or ask again. `standing=true` only when they said it holds from now on (it becomes their grant; `grant.state` says if it is in effect or waiting for consent); `scope="all"` only when their words say every or all projects (Tares refuses it otherwise).'''
+with = '''- **Read the answer.** When the factory wakes you after an answer, read it (`desk_list` with the item, or `list_decisions`) and act on it. Never record an answer yourself: the console recorded it, in the person's words.'''
+
+[[edit]]
+find = '''- **Notify** blocking items with `PushNotification` (the question, plain text).'''
+with = '''- **Blocking items** are marked `blocking`; the desk shows them first. You have no other way to reach the person.'''
+
+[[edit]]
+find = '''A new permission needs the person's own words here, recorded with `desk_answer` and quoted verbatim in a `RELAY`, or their click on a permission request in the console.'''
+with = '''A new permission needs the person's own answer on the desk, quoted verbatim in a `RELAY`, or their click on a permission request in the console.'''
+
+[[edit]]
+find = '''With idle_wake on, every wake (a liveness wake too) runs the whole tick, whatever its prompt names. Otherwise, on each scheduled tick:'''
+with = '''Every wake (a liveness wake too) runs the whole tick, whatever its prompt names:'''
+
+[[edit]]
+find = '''6. The `desk` items of `my_work`, addressed to your person: ask them here, as in "Keep it in view" under "The desk". An item addressed to someone else is theirs; do not ask it here.'''
+with = '''6. The `desk` items of `my_work`, addressed to your person, are on the desk: nothing to ask. One answered since your last tick: act on it as in "The desk". An item addressed to someone else is theirs.'''
+
+[[edit]]
+find = '''8. Stay silent unless something changed: on a quiet tick print nothing, not even "nothing new", apart from step 6's hourly re-show.'''
+with = '''8. Stay silent unless something changed: on a quiet tick print nothing, not even "nothing new".'''
+
+[[edit]]
+find = '''When the person asks "status" (or attaches after a while): under ten lines, per project, milestone and tickets by stage, what each station is doing, with PR and ticket links. End with the block of the item you are asking (it doesn't count toward the ten).'''
+with = '''Your person reads the status in the console and in your report: keep `## Now` under ten lines, per project, milestone and tickets by stage, what each station is doing, with PR and ticket links.'''
+
+[[edit]]
+find = '''With one repo the slug is `m<k>`. It starts `<project>-build-<slug>` with `TARES_PROJECT` set.'''
+with = '''With one repo the slug is `m<k>`. It starts `<project>-build-<slug>` with `TARES_PROJECT` set. Your sandbox has no network, and this command reaches Tares: run it asking for approval (escalated permissions, with a one-line reason), as every `tares factory` command that reaches Tares (revive, retire, roster). Told that no Tares answers, Tares is up: ask for approval.'''

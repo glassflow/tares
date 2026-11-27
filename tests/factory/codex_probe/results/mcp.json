@@ -1,0 +1,47 @@
+{
+ "tools_offered_with_the_right_token": [
+  "whoami"
+ ],
+ "mcp_calls": [
+  {
+   "tool": "js",
+   "status": "completed"
+  },
+  {
+   "tool": "whoami",
+   "status": "completed"
+  }
+ ],
+ "commands": [
+  {
+   "command": "/bin/zsh -lc 'printenv PROBE_MCP_TOKEN | wc -c'",
+   "exit": 0,
+   "output": "25"
+  },
+  {
+   "command": "/bin/zsh -lc 'printenv FACTORY_STATION'",
+   "exit": 0,
+   "output": "crew-builder"
+  }
+ ],
+ "requests_with_the_right_token": 13,
+ "identity_headers_sent": {
+  "path": "/mcp",
+  "authorized": true,
+  "x-tares-station": "crew-builder",
+  "x-tares-role": "builder",
+  "x-tares-crew": "crew"
+ },
+ "wrong_token": {
+  "thread_started": true,
+  "tools_offered": []
+ },
+ "requests_refused_with_the_wrong_token": 2,
+ "token_visible_to_the_model_shell": true,
+ "checks": {
+  "the tool call went through": true,
+  "the station's identity was on the request": true,
+  "a wrong token was refused and offered no tools": true
+ },
+ "pass": true
+}

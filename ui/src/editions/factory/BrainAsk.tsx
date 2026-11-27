@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
 import { Banner, Button, Collapse, EmptyState, Panel, Skeleton } from "../../components/edition";
-import { Input as TextInput } from "../../components/ui/input";
+import { Input as TextInput } from "@paper-kit/ui/input";
 import { cn } from "../../lib/utils";
 import { useBrainRead } from "../brainRead";
 import { askBrain, type AskBrainData, type AskRepoRow, type BrainAnswer } from "./BrainAsk.api";

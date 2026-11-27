@@ -7,6 +7,7 @@ people, and the one shape of a "waiting for you" item. The helpers the screens i
 Run: .venv/bin/python tests/test_factory_home.py
 """
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -30,6 +31,7 @@ from fastapi import FastAPI
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
+from session_helpers import seed_usage
 from tares import claude_usage, factory_api
 from tares import factory_home as fh
 from tares import words
@@ -115,7 +117,8 @@ def units():
                      project={"id": "uc_1", "name": "project-x"}, repo="example-org/docs-site")
     ck("the shape: every field", set(a) == {"id", "kind", "label", "title", "detail", "meta", "project",
                                            "repo", "from", "since", "waited", "actions", "tickets", "blocking", "older",
-                                           "question", "lines", "ask", "holds_up", "checks", "for_people", "for_admin", "no_lead"}, sorted(a))
+                                           "question", "lines", "ask", "holds_up", "checks", "for_people", "for_admin", "no_lead",
+                                           "desk_labels"}, sorted(a))
     ck("waited in words, since an ISO time", a["waited"] == "3 hours"
        and a["since"] == (now - timedelta(hours=3)).isoformat(), (a["waited"], a["since"]))
     ck("the id is kind, project and a key", a["id"].startswith("question:uc_1:") and a["from"] is None, a["id"])
@@ -491,8 +494,82 @@ async def main():
             ck("p95 under 300 ms", p95 < 300, f"{p95:.0f} ms")
 
 
+async def private_shares():
+    """A cell of its own: a private project's cost is in nobody's shares but its members', and a
+    kept home never carries one view's figures to another."""
+    import tares.daemon as daemon_mod
+    own = os.path.join(_TMP, "private")
+    os.makedirs(own, exist_ok=True)
+    daemon_mod.DB_PATH = os.path.join(own, "private.duckdb")
+    from tares.daemon import make_app
+    app = make_app()
+    mk = lambda timeout=10: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                              headers={"Authorization": f"Bearer {TOKEN}"})
+    print("== a private project the viewer is not on ==")
+    async with app.router.lifespan_context(app):
+        store = app.state.store
+        an_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        # 1000 spent this week: 800 on the private project, 200 on what everybody sees
+        spent = {"secret": 800, "a": 60, "b": 34, "c": 26, "d": 22, "e": 18, "f": 14, "g": 12, "h": 8}
+        for n, cost in spent.items():
+            store.create_project(f"uc_{n}", "custom", f"project-{n}", {}, goal="A project with a cost")
+            store.set_project_kind(f"uc_{n}", "software_factory")
+            seed_usage(store, f"s-{n}", f"m-{n}", project=f"uc_{n}", replied_at=an_hour_ago, cost_usd=cost)
+        seed_usage(store, "s-own", "m-own", replied_at=an_hour_ago, cost_usd=6)   # "Other sessions"
+        store.set_project_scope("uc_secret", "private")
+        mia = store.create_person("Mia", "mia@example.com")["id"]
+        bo = store.create_person("Bo", "bo@example.com")["id"]
+        store.add_project_member("uc_secret", mia)
+
+        def key(kid, person=None):
+            token = f"nvf_{kid}_{kid}-secret-for-the-test"
+            store.insert_api_key(kid, kid, f"nvf_{kid}", hashlib.sha256(token.encode()).hexdigest(),
+                                 ["read"], person_id=person)
+            return {"Authorization": f"Bearer {token}"}
+
+        everything = "This week: project-secret 80%, project-a 6%"
+        # over 200: g (6%) passes the 5% line, h (4%) does not
+        without = ("This week: project-a 30%, project-b 17%, project-c 13%, project-d 11%, "
+                   "project-e 9%, project-f 7%, project-g 6%")
+        narrowed = {"x-tares-viewer": "public"}
+        async with mk() as cx:
+            async def read(headers):
+                r = await cx.get("/api/home", headers=headers)
+                assert r.status_code == 200, r.text
+                return r
+
+            for who, headers in (("the cell's token", {}), ("a person on every project", key("kmia", mia))):
+                got = (await read(headers)).json()["plan"]["share_text"]
+                ck(f"{who}: the shares are over all the cost", got == everything, got)
+            for who, headers in (("a person not on it", key("kbo", bo)),
+                                 ("a key with no person", key("knobody")),
+                                 ("the cell's token narrowed to the team", narrowed)):
+                fh._cache.clear()
+                r = await read(headers)
+                got = r.json()["plan"]["share_text"]
+                ck(f"{who}: the shares are over the cost in view, from 5% up", got == without, got)
+                ck(f"{who}: neither the private name nor its id",
+                   "project-secret" not in r.text and "uc_secret" not in r.text, r.text)
+
+            # one credential, two views, inside the five seconds a home is kept
+            fh._cache.clear()
+            first = (await read({})).json()
+            then = (await read(narrowed)).json()
+            ck("a narrowed read right after a full one is not handed the full home",
+               then["plan"]["share_text"] == without and "project-secret" not in json.dumps(then),
+               then["plan"]["share_text"])
+            again, kept = (await read({})).json(), (await read(narrowed)).json()
+            ck("each view still has its own kept home",
+               again["now"] == first["now"] and kept["now"] == then["now"], (again["now"], kept["now"]))
+            fh._cache.clear()
+            await read(narrowed)
+            got = (await read({})).json()["plan"]["share_text"]
+            ck("nor a full read the narrowed one", got == everything, got)
+
+
 units()
 members()
 asyncio.run(main())
+asyncio.run(private_shares())
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

@@ -225,7 +225,8 @@ def revision():
         ck("session_messages columns", sorted(c["name"] for c in insp.get_columns("session_messages")) == sorted(
             ["tool_use_id", "source", "session", "at", "to_station", "type", "text"]))
         ck("session_commands columns", sorted(c["name"] for c in insp.get_columns("session_commands")) == sorted(
-            ["tool_use_id", "source", "session", "at", "command", "exit_code", "output_tail", "result_at"]))
+            ["tool_use_id", "source", "session", "at", "command", "exit_code", "output_tail", "result_at",
+             "cwd", "outcome"]))
         ck("each is keyed by its tool_use id",
            insp.get_pk_constraint("session_messages")["constrained_columns"] == ["tool_use_id"]
            and insp.get_pk_constraint("session_commands")["constrained_columns"] == ["tool_use_id"])
@@ -259,7 +260,7 @@ def revision():
             kept = c.execute(select(session_commands.c.command).where(
                 session_commands.c.tool_use_id == "kept")).scalar()
         ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0019_brain_tables"] and kept == "x", (v, kept))
+           v == ["0022_brain_tables"] and kept == "x", (v, kept))
         sdb.close()
     finally:
         if PG:
@@ -268,8 +269,74 @@ def revision():
                 c.execute(f"DROP SCHEMA {schema} CASCADE")
 
 
+def codex():
+    """A Codex station's lines (TR-1595): what `tares.connectors.codex` makes of the recorder's facts, stored
+    like any session line. A command's row is made at its start and takes its end from the item."""
+    from types import SimpleNamespace
+
+    from tares.connectors import codex as cell
+    from tares.connectors.claude_code import ClaudeCodeConnector
+    print("== a Codex station's commands (TR-1595) ==")
+    s = open_store(tempfile.mkdtemp())
+    conn = ClaudeCodeConnector(SimpleNamespace(name=SRC, type="agent_session", config={}), s)
+    ms = int(at(10).timestamp() * 1000)
+
+    def fact(kind, **more):
+        return {"type": "codex", "kind": kind, "sessionId": "cx1", "timestamp": at(5).isoformat(), "cwd": "/w", **more}
+
+    def start(call, command):
+        return fact("start", call=call, turn="t1", tool="Bash", command=command, command_cwd="/w")
+
+    def item(call, command, code, output, status="completed"):
+        return fact("item", turn="t1", item={
+            "type": "commandExecution", "id": call, "command": f"/bin/zsh -lc 'exec </dev/null\n{command}'",
+            "cwd": "/w/app", "exitCode": code, "aggregatedOutput": output, "status": status,
+            "startedAtMs": ms, "completedAtMs": ms + 2000})
+    starts = [start("c1", "pytest -q"), start("c2", "sh -c 'exit 7'"), start("c3", "make e2e"), start("c4", "sleep 99")]
+    ends = [item("c1", "pytest -q", 0, "3 passed"), item("c2", "sh -c 'exit 7'", 7, "boom")]
+    s.append(conn.map_payload(cell.session_lines(starts)))
+    live = {c["command"]: c for c in s.recorded_commands(SRC, ["cx1"])}
+    ck("at its start a command is a row with its folder, the outcome started, and no result",
+       sorted(live) == ["make e2e", "pytest -q", "sh -c 'exit 7'", "sleep 99"]
+       and all(c["outcome"] == "started" and c["output"] == "" and c["exit_code"] is None and c["cwd"] == "/w"
+               for c in live.values()), live)
+    s.append(conn.map_payload(cell.session_lines(
+        ends + [fact("unknown", call="c3", turn="t1", why="its turn ended (interrupted)")])))
+    got = {c["command"]: c for c in s.recorded_commands(SRC, ["cx1"])}
+    ck("its end sets the real exit code, the output and the folder it ran in, on the same row",
+       (got["pytest -q"]["exit_code"], got["pytest -q"]["outcome"], got["pytest -q"]["output"], got["pytest -q"]["cwd"])
+       == (0, "ended", "3 passed", "/w/app") and len(got) == 4, got)
+    ck("exit 7 is kept as 7, and is a failure", got["sh -c 'exit 7'"]["exit_code"] == 7 and got["sh -c 'exit 7'"]["is_error"] is True)
+    ck("a command whose end will never be known says so, with no exit code and no failure invented",
+       got["make e2e"]["outcome"] == "unknown" and got["make e2e"]["exit_code"] is None
+       and got["make e2e"]["output"].startswith("outcome unknown: "), got["make e2e"])
+    ck("a command that started and has not ended stays a row of its own", got["sleep 99"]["outcome"] == "started")
+    ck("the commands are stored as the station asked for them, without the guard's line or the login shell",
+       not [c for c in got if "exec </dev/null" in c or "zsh" in c])
+    before = dump(s)
+    s.append(conn.map_payload(cell.session_lines(starts + ends)))     # the recorder's post, sent again
+    ck("the same items again add nothing and change nothing", dump(s) == before)
+    with s.sessions_db.begin() as c:
+        c.execute(delete(session_commands))
+    session_ingest.fill_facts(s)
+    ck("a fill from the stored lines brings back the same rows", dump(s) == before, (dump(s)[1], before[1]))
+    claude = [c for c in s.recorded_commands(SRC, ["cx1"]) if "outcome" not in c]
+    ck("every Codex row says how it ended", claude == [])
+    s.append([bash("sA", 1, "k1", "ls"), result("sA", 2, "k1", "a b")])
+    plain = s.recorded_commands(SRC, ["sA"])
+    ck("a Claude Code row is read as before: no outcome, no exit code, no folder",
+       plain == [{"at": at(1), "session": "sA", "command": "ls", "output": "a b", "is_error": False}], plain)
+    s.append([bash("sA", 3, "k2", "pytest -q && git diff")])   # a call whose result has not arrived
+    ends = s.recorded_commands(SRC, ["sA"], ends=True)
+    ck("asked for its end (the claim matcher, TR-1598), a row says whether its result arrived and its exit code",
+       [(c["command"], c["ended"], c["exit_code"]) for c in ends] == [("ls", True, 0), ("pytest -q && git diff", False, None)]
+       and all(k not in c for c in ends for k in ("outcome", "cwd")), ends)
+    s.con.close()
+
+
 def main():
     revision()
+    codex()
     print("== the readers return what the old readers did ==")
     d = tempfile.mkdtemp()
     s = open_store(d)

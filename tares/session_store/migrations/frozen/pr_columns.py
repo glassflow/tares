@@ -1,4 +1,4 @@
-"""The fill of revision 0015: a frozen copy of session_store/pr_columns.py.
+"""The fill of revision 0018: a frozen copy of session_store/pr_columns.py.
 
 `pr_repo` is the repo name of a ticket's `pr` in lower case, `pr_number` its number. Each is NULL
 when `pr` has no value for it that a lookup could ask for, or none the column and its index can

@@ -3,8 +3,8 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
 import { Banner, Button, Dialog, EmptyState, LoadingBlocks, ProgressBar, STATUS_TONES, StatusLabel } from "../../components/edition";
-import { Input } from "../../components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { Input } from "@paper-kit/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@paper-kit/ui/tabs";
 import { Slot, useEeLoaded, useEePending, useEeSamples } from "../../eeSlots";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
