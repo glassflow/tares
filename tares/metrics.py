@@ -269,7 +269,7 @@ def step(name: str):
 # Path prefixes the API answers under; a request outside them that matched no route is the console
 # (its files and client-side routes), labelled `static` rather than one series per path.
 _CONSOLE_CATCH_ALL = "/{path:path}"   # the daemon's last route, serving the console's index
-_API_PREFIXES = ("/api", "/ingest", "/v1", "/mcp", "/health", "/read", "/subscribe", "/unsubscribe")
+_API_PREFIXES = ("/api", "/ingest", "/v1", "/mcp", "/health", "/read")
 
 
 class RequestTiming:

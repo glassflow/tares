@@ -64,7 +64,7 @@ silently doesn't:
 - **Labels** — the *declared axes* you promote from fields (or a const, or a regex over a field).
   Labels are what you filter, group, key, and correlate by. One label is the **primary key**.
 
-### Rule 1 — Labels must come from real fields (never invent one)
+### Rule 1: labels must come from real fields (never invent one)
 
 Before choosing a source's labels, call **`source_fields`** (existing source) or use
 **`discover_source`**'s `proposed_config` (new source) to see the fields that actually exist. A
@@ -80,7 +80,7 @@ label reads from one of three things, all grounded in real data:
 Never name a `field` that isn't in the profile — it extracts nothing. Set labels by creating the
 source (`create_source`) or updating its config with the full `labels` list.
 
-### Rule 2 — To match a label across sources, add a NEW label — don't rename
+### Rule 2: to match a label across sources, add a NEW label, don't rename
 
 To join source B to source A on a shared axis (say `service`), source B needs a label **named
 `service`** too. Declare a **new** label on B (reading B's matching field) — do **not** try to

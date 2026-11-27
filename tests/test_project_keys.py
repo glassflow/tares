@@ -86,13 +86,13 @@ async def main():
         print("== creating project keys ==")
         r = await cx.post(f"/api/projects/{a}/keys", json={"name": "claude-code"})
         ck("POST /api/projects/{uid}/keys makes a project key",
-           r.status_code == 201 and r.json()["scopes"] == ["findings", "read"]
+           r.status_code == 201 and r.json()["scopes"] == ["read"]
            and r.json()["project"] == a and r.json()["secret"].startswith("nvf_"), r.text)
         key_a, kid_a = r.json()["secret"], r.json()["id"]
         r = await cx.post("/api/keys", json={"name": "cursor", "project": "Alpha"})
         ck("POST /api/keys with project (a name) makes one too",
            r.status_code == 201 and r.json()["project"] == a
-           and r.json()["scopes"] == ["findings", "read"], r.text)
+           and r.json()["scopes"] == ["read"], r.text)
         kid_a2 = r.json()["id"]
         r = await cx.post("/api/keys", json={"name": "b-agent", "project": b, "scopes": ["read"]})
         ck("a read-only project key", r.status_code == 201 and r.json()["scopes"] == ["read"], r.text)
@@ -100,8 +100,8 @@ async def main():
         ck("a project key with the admin scope is refused",
            (await cx.post("/api/keys", json={"name": "x", "project": a,
                                               "scopes": ["admin"]})).status_code == 400)
-        ck("the findings scope without a project is refused",
-           (await cx.post("/api/keys", json={"name": "x", "scopes": ["findings"]})).status_code == 400)
+        ck("the findings scope is gone (TR-1810): a project key asking for it is refused",
+           (await cx.post("/api/keys", json={"name": "x", "project": a, "scopes": ["findings"]})).status_code == 400)
         ck("an unknown project is refused",
            (await cx.post("/api/keys", json={"name": "x", "project": "nope"})).status_code == 400)
         r = await cx.post("/api/keys", json={"name": "reader", "scopes": ["read"]})
@@ -199,7 +199,7 @@ async def main():
         ck("it is still there", (await cx.get(f"/api/projects/{a}")).status_code == 200)
         r = await cx.post(f"/api/projects/{b}/stats", json={"by": "service"}, headers=H(key_a))
         ck("the 403 says what the key may do",
-           r.status_code == 403 and "only reads project Alpha and records findings" in r.text, r.text)
+           r.status_code == 403 and "only reads project Alpha" in r.text, r.text)
 
         print("== another project's resources, by id and by name ==")
         for label, method, path, body in (

@@ -325,7 +325,7 @@ def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
         # a client checking the status reads that as success and fails to parse (TR-226). The
         # console never requests these prefixes, so nothing legitimate is lost.
         if path == "api" or path.startswith(("api/", "ingest/")):
-            _err(KeyError(f"unknown API path /{path}"), 404)
+            raise HTTPException(status_code=404, detail=f"unknown API path /{path}")
         return _serve_ui(path)
 
     return app
@@ -825,8 +825,7 @@ def make_app() -> FastAPI:
 
     def _project_key_denied(project: str) -> str:
         p = store.get_project(project)
-        return (f"this key only reads project {p['name'] if p else project} and records "
-                "findings in it")
+        return f"this key only reads project {p['name'] if p else project}"
 
     def _pk(request: Request) -> str | None:
         """The project of the request's project key, or None for any other credential (and on an
@@ -1541,8 +1540,9 @@ def make_app() -> FastAPI:
                 "enforced": bool(AUTH_TOKEN),   # without a root auth token the instance is open
                 "scopes": sorted(_SCOPES)}
 
-    # A project key (TR-335) reads one project and records findings in it; nothing else.
-    _PROJECT_SCOPES = {"read", "findings"}
+    # A project key (TR-335) reads one project; nothing else (the findings scope went with Tares
+    # agents, TR-1810).
+    _PROJECT_SCOPES = {"read"}
 
     def _make_key(name: str, scopes: list[str], project: str | None,
                   person_id: str | None = None) -> dict:
@@ -1599,8 +1599,7 @@ def make_app() -> FastAPI:
     @app.post("/api/keys", status_code=201)
     def create_key(request: Request, body: dict = Body(...)):
         """{name, scopes, project?, person_id? | person?: {email, name}}. With `project` (an id
-        or a name) it is a project key: scopes `read` and `findings` (the default), over that
-        project only. `person_id` or `person` binds the key to a person (made by email when new)."""
+        or a name) it is a project key: scope `read` (the default), over that project only. `person_id` or `person` binds the key to a person (made by email when new)."""
         name = str(body.get("name") or "").strip()
         scopes = sorted(set(body.get("scopes") or []))
         if not name:
@@ -1612,8 +1611,6 @@ def make_app() -> FastAPI:
             if not set(scopes) <= _PROJECT_SCOPES:
                 _err(ValueError(f"a project key's scopes are a subset of {sorted(_PROJECT_SCOPES)}"))
             return _make_key(name, scopes, uid, _body_person(request, body))
-        if "findings" in scopes:
-            _err(ValueError("the findings scope is for a project key; name the project"))
         if not scopes or not set(scopes) <= _SCOPES:
             _err(ValueError(f"scopes must be a non-empty subset of {sorted(_SCOPES)}"))
         return _make_key(name, scopes, None, _body_person(request, body))
@@ -5110,7 +5107,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/keys", status_code=201)
     def create_project_key(uid: str, body: dict = Body(...)):
-        """{name}: a key that reads this project only and records findings in it. The secret is
+        """{name}: a key that reads this project only. The secret is
         in this response only."""
         _project_or_404(uid)
         name = str(body.get("name") or "").strip()
