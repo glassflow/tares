@@ -124,6 +124,8 @@ ck("the guard is registered for every tool call and for the start of every turn,
    and thread["config"]["bypass_hook_trust"] is True
    and thread["config"]["sandbox_workspace_write"] == {"writable_roots": ["{CREW_HOME}/reports"]}
    and GUARD_HOOK == "tares hook codex-guard --plugin-root {PLUGIN_DIR_SHELL}", thread["config"])
+ck("commands run in a plain shell, so a station keeps the PATH it was started with (a login shell resets it on "
+   "Debian and Ubuntu, TR-1600)", thread["config"]["allow_login_shell"] is False, thread["config"])
 ck("the MCP server is named, with its address and the identity headers read from the station's variables, and no token",
    spec.settings["mcp_servers"]["tares"]["url"] == "http://cell.test/mcp"
    and spec.settings["mcp_servers"]["tares"]["env_http_headers"] == MCP_IDENTITY

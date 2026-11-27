@@ -33,8 +33,10 @@ test_clean_env
 test_cli
 test_cloud_connect
 test_codex_guard
+test_codex_real_runner
 test_codex_record
 test_codex_reviews
+test_codex_round_marks
 test_codex_usage
 test_core_single_person
 test_crew_adopt
@@ -54,6 +56,7 @@ test_crew_conversation
 test_crew_dispatch
 test_crew_docker_cleanup
 test_crew_doctor
+test_crew_doctor_github
 test_crew_doctor_lsp
 test_crew_exe_launcher
 test_crew_fake_claude

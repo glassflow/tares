@@ -19,6 +19,10 @@ example-org/web and their reviews hold seven findings, one of them fixed. "Missi
 handling" are each on all three tickets, security on one. A rule is accepted for missing test; the
 one for error handling is left open. In 8 weeks 2 of 3 tickets passed their first review, with 1.3
 review rounds per ticket.
+For the Cost section (TR-1671): in the last two weeks $23.00 was spent and one reply has no price,
+$17.00 of it 1 week ago. Three merged tickets have a cost ($10.00, $7.00 and $3.00 beside the reply
+with no price), the first two of them in the milestone accepted 1 week ago; $3.00 is tied to no
+ticket, $2.25 of it of no project.
 Starts a daemon on the scratch data dir with TARES_EDITION=factory (so the cell settles to the
 factory edition), stops it, then writes the people, projects, tickets, reviews and milestones
 straight into the database, starts the daemon once more to read the ids of the rule offers, and
@@ -58,6 +62,8 @@ def with_daemon(work=lambda: None):
 with_daemon()
 
 sys.path.insert(0, os.getcwd())
+sys.path.insert(0, os.path.join(os.getcwd(), "tests"))
+from session_helpers import seed_station, seed_usage  # noqa: E402
 from tares import factory, report  # noqa: E402
 from tares.store import Store  # noqa: E402
 
@@ -114,6 +120,7 @@ def pull_request(uid, tid, number):
 def accepted(uid, back):
     mid = store.create_milestone(uid, f"Step {back}")
     store.accept_milestone(uid, mid, "Ada", None, wednesday(back))
+    return mid
 
 
 a = project("project-a", "Ada")
@@ -134,8 +141,9 @@ reviewed(b, third, 2, "pass", findings=(("P2", False, "No tests here"),
                                         ("P3", False, "Uncaught exception"),
                                         ("P1", False, "A secret in the log")))
 reviewed(b, store.create_ticket(b, "tares", "Not merged"), 30, "changes")
-for uid, back in ((a, 1), (a, 5), (b, 5)):
-    accepted(uid, back)
+step, _, _ = (accepted(uid, back) for uid, back in ((a, 1), (a, 5), (b, 5)))
+for tid in (first, second):
+    store.update_ticket(tid, milestone=step)
 store.create_ticket(c, "tares", "Write the plan")
 
 # ---- the Time section
@@ -188,6 +196,28 @@ for hours, uid, stage, title in (
     moved(uid, tid, stage, now - timedelta(hours=hours))
     store.update_ticket(tid, stage=stage)
     ids["tickets"][hours] = factory.label(store.get_ticket(uid, tid))
+
+# ---- the Cost section: model replies, and which builder held which ticket
+ids["step"] = step
+ids["costed"] = [factory.label(store.get_ticket(uid, tid)) for uid, tid in ((a, second), (a, first), (b, third))]
+for station, role, parent, uid in (
+        ("build-a", "builder", None, a), ("help-a", "helper", "build-a", a), ("build-b", "builder", None, b),
+        ("crew-reviewer", "reviewer", None, None), ("crew-orchestrator", "orchestrator", None, None),
+        ("crew-releaser", "releaser", None, None)):
+    seed_station(store, station, station, role, parent=parent, project=uid)
+for uid, tid, station, since in ((a, first, "build-a", wednesday(1, 7)), (a, second, "build-a", wednesday(1, 7)),
+                                 (b, third, "build-b", wednesday(2) - timedelta(hours=30))):
+    store.add_ticket_history(tid, uid, "holder", station, None, None, None, since)
+# (session, weeks back, minutes before that Wednesday's noon, cost, project the reply is stamped with)
+for n, (session, back, minutes, cost, uid) in enumerate((
+        ("build-a", 1, 150, 9.0, None), ("build-a", 1, 105, 6.0, None), ("help-a", 1, 80, 2.0, None),
+        ("build-b", 2, 300, 3.0, None), ("build-b", 2, 240, None, None), ("crew-reviewer", 2, 180, 1.5, None),
+        ("crew-orchestrator", 2, 120, 0.5, None), ("crew-releaser", 2, 120, 0.25, None),
+        ("a-person", 2, 60, 0.75, b))):
+    # the reply with no price needs a model with none: a daemon that starts prices the others
+    seed_usage(store, session, f"reply-{n}", replied_at=wednesday(back) - timedelta(minutes=minutes),
+               project=uid, cost_usd=cost,
+               model="claude-opus-5-5" if cost is not None else "unlisted-model")
 
 # ---- the Review section: two offered rules, one of them accepted
 for kind, text in (("missing test", "Add a test with the change."), ("error handling", "Handle the error.")):

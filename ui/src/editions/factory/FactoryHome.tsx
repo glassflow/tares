@@ -32,6 +32,7 @@ import { Detail, DetailLines } from "./HomeDetail";
 import { AnswerPanel, type AnswerGiven } from "./WaitingActions";
 import { ItemIcon } from "./ProjectIcon";
 import { actionName, GroupHead, groupWaiting, OlderFold, QuestionChoices, topItem } from "./waitingGroups";
+import YourTeam from "./YourTeam";
 
 // The factory home: what waits for the person, the crew, the Claude plan and the connected tools.
 // The projects are one click away, on Projects; Home keeps to what needs the person (TR-1275). FactoryHomeView is pure: it draws the HomeData it is given. The default export
@@ -384,6 +385,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, focus, f
       {closed && <FocusNote answer={focusAnswer ?? null} more={data.waiting_for_you.length > 0} />}
       <div className={COLS}>
         <div className={LEFT}>
+          {data.joiner?.joining && <YourTeam team={data.joiner.team} now={Date.parse(data.now)} />}
           <WaitingBlock data={data} onAction={onAction} rows={rows} panels={panels} focus={focus} />
           <AnsweredToday answers={answered} />
           {isTeam(data) && <Slot name="home.waitingOn" entries={data.you_are_waiting_on ?? []} />}
@@ -793,9 +795,13 @@ function LiveHome({ focus }: { focus?: string }) {
     const home = await getHome(asked);
     const want: ProjectsView | undefined = joinerShows(home) ? "team" : undefined;
     if (want === asked) return home;
-    const again = await getHome(want);
-    view.current = want;
-    return again;
+    try {
+      const again = await getHome(want);
+      view.current = want;
+      return again;
+    } catch {
+      return home;   // the first read worked, so show it; the next poll asks for the other list again
+    }
   }, POLL_MS);
   // What the record says of the item a link named, read once it is known not to wait: with the first home
   // read, and again when the row leaves the list (it was just answered). Nothing shows before the read lands.

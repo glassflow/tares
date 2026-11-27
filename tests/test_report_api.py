@@ -44,7 +44,7 @@ import httpx
 
 from tares import daemon, merge_queue, report
 from tares import factory as factory_mod
-from session_helpers import seed_usage
+from session_helpers import seed_station, seed_usage
 from sqlalchemy import update
 from tares.session_store.tables import people
 
@@ -201,8 +201,17 @@ async def scopes():
            len(lines) == 3 and lines[0] == SEEN and "merge queue" in lines[1]
            and "API-equivalent" in lines[2], lines)
         built = body.get("sections") or {}
-        ck("Delivered, Time and Review are built",
-           sorted(built) == ["delivered", "review", "time"], sorted(built))
+        ck("Delivered, Time, Review and Cost are built",
+           sorted(built) == ["cost", "delivered", "review", "time"], sorted(built))
+        none = {"cost_usd": 0.0, "unpriced": 0}
+        ck("with no reply: nothing spent, a row for each role, no project, no ticket costs yet",
+           built.get("cost") == {
+               "total": none,
+               "roles": [{"role": role, **none} for role in ("builder", "reviewer", "orchestrator",
+                                                             "releaser", "person", "other")],
+               "projects": [], "by_ticket": None,
+               "weeks": [{"week": week(n).isoformat(), **none, "projects": {}}
+                         for n in range(7, -1, -1)]}, built.get("cost"))
         ck("with nothing reviewed, no finding, nothing worked out yet as recurring",
            built.get("review") == {
                "first_pass": {"passed": 0, "reviewed": 0}, "rounds_per_ticket": None,
@@ -434,7 +443,7 @@ async def scopes():
             print("== no raw records on page load ==")
             raw = ["all_stage_changes", "all_reviews", "all_review_findings", "usage_by_week",
                    "list_desk", "milestones_by_project", "milestone_acceptances", "tickets_by_project",
-                   "repo_findings"]
+                   "repo_findings", "all_holder_changes", "ticket_replies"]
             touched = []
 
             def trap(name):
@@ -1140,6 +1149,159 @@ async def recurring_rows():
                           (many, "null or empty", 4)], brief(got))
 
 
+def held(s, uid, station, doing, merged=None, review=None, canceled=None, milestone=None) -> str:
+    """A ticket `station` held from `doing`, with the other stages at the times given."""
+    tid = s.create_ticket(uid, "tares", "t")
+    for field, value, at in (("stage", "doing", doing), ("holder", station, doing),
+                             ("stage", "review", review), ("stage", "canceled", canceled),
+                             ("stage", "merged", merged)):
+        if at:
+            s.add_ticket_history(tid, uid, field, value, None, None, None, at)
+    if milestone:
+        s.update_ticket(tid, milestone=milestone)
+    return tid
+
+
+def money(cost, unpriced=0) -> dict:
+    return {"cost_usd": float(cost), "unpriced": unpriced}
+
+
+async def cost_section():
+    import json
+    async with cell() as (s, root, bare):
+        print("== the Cost section ==")
+        ada, bo, pat = (s.create_person(n, f"{n.lower()}@example.com")["id"] for n in ("Ada", "Bo", "Pat"))
+        project(s, "uc_open", "Open", lead=ada)
+        project(s, "uc_other", "Other work", lead=bo)
+        project(s, "uc_limited", "Limited", lead=pat, private=True)
+        k_ada = key(s, "kcost0", ["read"], person=ada)
+        m, m2 = noon(week(1)), noon(week(2))
+        h = timedelta(hours=1)
+
+        async def read(who=None, **params):
+            r = await get(root, who, **params)
+            return (r.json()["sections"].get("cost") or {}) if r.status_code == 200 else {"error": r.text}
+
+        ms, ml, waiting = (s.create_milestone(uid, name) for uid, name in (
+            ("uc_open", "First step"), ("uc_limited", "Limited step"), ("uc_open", "Next step")))
+        one = held(s, "uc_open", "build-open", m - 3 * h, review=m - h, merged=m, milestone=ms)
+        held(s, "uc_open", "build-open", m2 - 5 * h, canceled=m2 - 3 * h, milestone=ms)
+        held(s, "uc_open", "build-three", m - 30 * h, milestone=waiting)
+        lim = held(s, "uc_limited", "build-lim", m - 3 * h, review=m - h, merged=m + 2 * h, milestone=ml)
+        small = [held(s, "uc_other", f"build-o{i}", noon(week(20)) if i == 1 else m2 - 3 * h, merged=m2)
+                 for i in range(1, 6)]
+        s.add_review("uc_open", one, "7", "abc1234", "pass", "read the diff", "", "crew-reviewer", [], {},
+                     factory_mod.finding_kind, m - h * 3 / 4)
+        s.accept_milestone("uc_open", ms, "Ada", None, m + h)
+        s.accept_milestone("uc_limited", ml, "Pat", None, m + 3 * h)
+
+        for session, station, role, home in (
+                ("bo", "build-open", "builder", "uc_open"), ("bt", "build-three", "builder", "uc_open"),
+                ("bl", "build-lim", "builder", "uc_limited"), ("rev", "crew-reviewer", "reviewer", None),
+                ("orch", "crew-orchestrator", "orchestrator", None), ("rel", "crew-releaser", "releaser", None),
+                *((f"o{i}", f"build-o{i}", "builder", "uc_other") for i in range(1, 6))):
+            seed_station(s, session, station, role, project=home)
+        for n, (session, at, cost, uid) in enumerate((
+                ("bo", m - 2 * h, 4.0, None), ("bo", m - h * 5 / 2, None, None), ("rev", m - h / 2, 3.0, None),
+                ("bo", m2 - 4 * h, 2.0, None), ("bt", m - 29 * h, 6.0, None), ("bl", m - 2 * h, 5.0, None),
+                ("pat-own", m - 2 * h, 8.0, "uc_limited"), ("orch", m, 0.5, "uc_other"), ("rel", m, 0.25, None),
+                *((f"o{i}", m2 - 2 * h, i / 10, None) for i in range(1, 6)),
+                ("o1", noon(week(20)) + h, 0.05, None))):
+            seed_usage(s, session, f"cost-{n}", replied_at=at, project=uid, cost_usd=cost)
+
+        got = await read()
+        ck("before the first pass ticket costs are not worked out", got.get("by_ticket", 0) is None, got)
+        report.rebuild_all(s)
+        got = await read()
+        ck("the section's parts", set(got) == {"total", "roles", "projects", "weeks", "by_ticket"}, sorted(got))
+        ck("the total, with the reply with no price counted beside it",
+           close(got["total"], money(30.25, 1)), got["total"])
+        roles = {r["role"]: (r["cost_usd"], r["unpriced"]) for r in got["roles"]}
+        ck("the split by role", [r["role"] for r in got["roles"]]
+           == ["builder", "reviewer", "orchestrator", "releaser", "person", "other"]
+           and close({k: list(v) for k, v in roles.items()},
+                     {"builder": [18.5, 1], "reviewer": [3.0, 0], "orchestrator": [0.5, 0],
+                      "releaser": [0.25, 0], "person": [8.0, 0], "other": [0.0, 0]}), got["roles"])
+        ck("the roles add up to the total",
+           abs(sum(r["cost_usd"] for r in got["roles"]) - got["total"]["cost_usd"]) < 1e-6, got["roles"])
+        ck("by project, highest first, with what has no project",
+           close([[p["project"], p["name"], p["cost_usd"]] for p in got["projects"]],
+                 [["uc_limited", "Limited", 13.0], ["uc_open", "Open", 12.0], ["", "No project", 3.25],
+                  ["uc_other", "Other work", 2.0]]), got["projects"])
+        weekly = {w["week"]: w["cost_usd"] for w in got["weeks"]}
+        ck("by week", len(weekly) == 8 and close([weekly[week(b).isoformat()] for b in (1, 2, 3)], [20.75, 9.5, 0.0]),
+           weekly)
+
+        def tops(by, kind="top_tickets"):
+            return [[r["project"], r["cost_usd"], r["unpriced"], r["rounds"], r["hours"]] for r in by[kind]]
+
+        def per_week(by):
+            rows = {w["week"]: [w["merged"], w["mean_cost_usd"], w["unpriced_tickets"]] for w in by["weeks"]}
+            return [rows[week(b).isoformat()] for b in (1, 2, 3)]
+
+        by = got["by_ticket"]
+        ck("a ticket costs its builder's replies and its share of review, over its whole life",
+           by["top_tickets"][0]["label"] == factory_mod.label(s.get_ticket("uc_open", one))
+           and close(tops(by)[:2], [["uc_open", 7.0, 1, 1, 3.0], ["uc_limited", 6.5, 0, 0, 5.0]]), tops(by))
+        ck("the five most expensive merged tickets, no more",
+           close([r[:2] for r in tops(by)], [["uc_open", 7.0], ["uc_limited", 6.5], ["uc_other", 0.5],
+                                             ["uc_other", 0.4], ["uc_other", 0.3]]), tops(by))
+        ck("the mean per ticket first merged in each week, no value with none",
+           close(per_week(by), [[2, 6.75, 1], [5, 0.31, 0], [0, None, 0]]), per_week(by))
+        ck("a milestone sums its tickets, the canceled one included",
+           [(r["name"], r["tickets"]) for r in by["top_milestones"]] == [("First step", 2), ("Limited step", 1)]
+           and close(tops(by, "top_milestones"), [["uc_open", 9.0, 1, 1, 174.0], ["uc_limited", 6.5, 0, 0, 6.0]]),
+           by["top_milestones"])
+        ck("the mean per accepted milestone, one not accepted left out",
+           close(by["milestones"], {"accepted": 2, "mean_cost_usd": 7.75, "unpriced_milestones": 1}), by["milestones"])
+        ck("what is tied to no ticket, with the part of no project",
+           close(by["untied"], {**money(8.75), "no_project": money(0.25)}), by["untied"])
+
+        got = await read(k_ada)
+        by = got["by_ticket"]
+        ck("without access to a project: its spend is in no total, role or week",
+           close(got["total"], money(17.25, 1)) and [p["project"] for p in got["projects"]] == ["uc_open", "", "uc_other"]
+           and close([r["cost_usd"] for r in got["roles"]], [13.5, 3.0, 0.5, 0.25, 0.0, 0.0])
+           and close(sum(w["cost_usd"] for w in got["weeks"]), 17.25), got)
+        ck("and none of its tickets, milestones or unattributed amount is there",
+           "uc_limited" not in json.dumps(got) and "Limited" not in json.dumps(got)
+           and close(per_week(by)[0], [1, 7.0, 1]) and by["milestones"]["accepted"] == 1
+           and close(by["untied"], {**money(0.75), "no_project": money(0.25)}), by)
+        ck("an open project's ticket costs the same for this reader", close(tops(by)[0][:2], ["uc_open", 7.0]), tops(by))
+
+        for scope, label in ((f"team:{ada}", "a team"), ("mine", "mine"), ("project:uc_open", "one project")):
+            got = await read(k_ada, scope=scope)
+            by = got["by_ticket"]
+            ck(f"{label}: its projects' spend only, nothing of no project",
+               close(got["total"], money(12.0, 1)) and [p["project"] for p in got["projects"]] == ["uc_open"]
+               and close(by["untied"], {**money(0.0), "no_project": None})
+               and close([r[:2] for r in tops(by)], [["uc_open", 7.0]])
+               and close(tops(by, "top_milestones")[0][:2], ["uc_open", 9.0]), (got["total"], by))
+        got = await read(scope="project:uc_other")
+        by = got["by_ticket"]
+        ck("a project with no milestone: no milestone figure, its own unattributed amount",
+           close(by["milestones"], {"accepted": 0, "mean_cost_usd": None, "unpriced_milestones": 0})
+           and by["top_milestones"] == [] and close(by["untied"], {**money(0.5), "no_project": None})
+           and close([r["cost_usd"] for r in by["top_tickets"]], [0.5, 0.4, 0.3, 0.2, 0.15])
+           and close(got["total"], money(2.0)), (got["total"], by))
+
+        got = await read(from_=week(40).isoformat(), to=week(38).isoformat())
+        by = got["by_ticket"]
+        ck("a range with nothing: zero spend, no project, no mean and empty lists",
+           got["total"] == money(0) and got["projects"] == []
+           and all(w["cost_usd"] == 0 and w["projects"] == {} for w in got["weeks"])
+           and [(w["merged"], w["mean_cost_usd"]) for w in by["weeks"]] == [(0, None)] * 3
+           and by["milestones"] == {"accepted": 0, "mean_cost_usd": None, "unpriced_milestones": 0}
+           and by["top_tickets"] == [] and by["top_milestones"] == []
+           and by["untied"] == {**money(0), "no_project": money(0)}, got)
+
+        s.delete_ticket(small[4])
+        report.rebuild_all(s)
+        by = (await read(scope="project:uc_other"))["by_ticket"]
+        ck("a deleted ticket is in no per-ticket figure",
+           close([r["cost_usd"] for r in by["top_tickets"]], [0.4, 0.3, 0.2, 0.15]), by["top_tickets"])
+
+
 async def large():
     print("== a large cell: 20 projects, 12 weeks, 600 merged tickets ==")
     async with cell() as (s, root, bare):
@@ -1147,9 +1309,18 @@ async def large():
         uids = [f"uc_large{i:02d}" for i in range(20)]
         for i, uid in enumerate(uids):
             project(s, uid, f"Project {i:02d}", lead=people[i % 6])
+        for i, uid in enumerate(uids):
+            seed_station(s, f"build-large{i}", f"build-large{i}", "builder", project=uid)
+        seed_station(s, "review-large", "crew-reviewer", "reviewer")
         for i in range(600):
-            uid, back = uids[i % 20], i % 12
-            merge(s, uid, noon(week(back)), assignee=people[i % 8] if i % 3 == 0 else None)
+            uid, back, builder = uids[i % 20], i % 12, f"build-large{i % 20}"
+            when = noon(week(back))
+            tid = merge(s, uid, when, assignee=people[i % 8] if i % 3 == 0 else None)
+            s.add_ticket_history(tid, uid, "holder", builder, None, None, None, when - timedelta(hours=2))
+            s.add_ticket_history(tid, uid, "stage", "review", None, None, None, when - timedelta(hours=1))
+            for n in range(5):
+                seed_usage(s, builder, f"b-{i}-{n}", replied_at=when - timedelta(minutes=90 + n), cost_usd=0.1)
+            seed_usage(s, "review-large", f"r-{i}", replied_at=when - timedelta(minutes=30), cost_usd=0.1)
         for i in range(200):
             tid = pulled(s, uids[i % 20], f"example-org/repo-{i % 3}")
             s.add_ticket_history(tid, uids[i % 20], "stage", "doing", None, None, None, noon(week(1)))
@@ -1176,6 +1347,12 @@ async def large():
                 ck("with its reviews and recurring findings",
                    review["first_pass"]["reviewed"] == 200
                    and len(review["recurring"]["rows"]) == 5, str(review)[:600])
+                by = r.json()["sections"]["cost"]["by_ticket"]
+                ck("and the cost of every merged ticket",
+                   sum(w["merged"] for w in by["weeks"]) == 600
+                   and all(w["mean_cost_usd"] > 0 for w in by["weeks"])
+                   and len(by["top_tickets"]) == 5 and all(t["cost_usd"] > 0 for t in by["top_tickets"]),
+                   str(by)[:600])
             ck(f"{label}: answered under 300 ms, the slowest of 5 ({max(took) * 1000:.0f} ms)",
                r.status_code == 200 and r.json()["scope"]["count"] > 0 and max(took) < 0.3,
                (r.status_code, [round(t * 1000) for t in took]))
@@ -1190,6 +1367,7 @@ def main():
     asyncio.run(stuck_rows())
     asyncio.run(review_section())
     asyncio.run(recurring_rows())
+    asyncio.run(cost_section())
     asyncio.run(large())
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
