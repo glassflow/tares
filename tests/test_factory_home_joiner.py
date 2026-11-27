@@ -130,8 +130,8 @@ def team_rows_no_recording_makes():
        got["people"][0]["last_heard"] == seen.isoformat(), got)
     got = team([who("p_a", None, "a@example.test"), who("p_b", "", None), who("p_c", "Cee", "c@example.test")])
     names = {i: r["name"] for i, r in people_of(got).items()}
-    ck("a person is named by name, else email, else Someone",
-       names == {"p_a": "a@example.test", "p_b": "Someone", "p_c": "Cee"}, names)
+    ck("a person is named by name, else Someone, never by email",
+       names == {"p_a": "Someone", "p_b": "Someone", "p_c": "Cee"}, names)
     local = who("local", "You", None, admin=True)
     got = team([local], [at_station({"id": "local"}, last_at=None)])
     ck("the unclaimed local is not listed while no station of theirs has reported", got["people"] == [], got)
@@ -420,6 +420,20 @@ async def main():
                 "members": [{"id": dee, "name": "Dee Quiet"}]}, t)
             ck("and their own row is the one that says you",
                [i for i, r in people_of(t).items() if r["you"]] == [dee], t)
+
+            eve = store.create_person("Eve Elsewhere", "eve@example.test")["id"]
+            store.add_project_member("uc_secret", eve)
+            eve_crew = [{**line, "tares_project": "uc_secret"}
+                        for line in station("eve", "builder", "m-eve")]
+            await push(key("keve", eve), eve_crew)
+            seen_by_dee = people_of((await joiner(dee_key)).get("team") or {}).get(eve) or {}
+            ck("(someone on the private project reads a crew that works in it as running)",
+               seen_by_dee.get("crew_running") is True
+               and when(seen_by_dee.get("last_heard")) == when(eve_crew[1]["timestamp"]), seen_by_dee)
+            seen_by_ana = people_of((await joiner(ana_key)).get("team") or {}).get(eve) or {}
+            ck("a crew only on a project the joiner cannot see counts as no crew",
+               (seen_by_ana.get("crew_running"), seen_by_ana.get("last_heard", "missing")) == (False, None),
+               seen_by_ana)
 
             ck("(the owner claims the cell)",
                store.claim_local("olive@example.test", "Olive Owner") is not None)

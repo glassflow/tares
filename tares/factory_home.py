@@ -589,7 +589,7 @@ def joiner_team(store, stations: list[dict], open_ps: list[dict], me: str) -> di
         heard = max(filter(None, (_dt(s.get("last_at")) for s in own)), default=None)
         if not claimed and heard is None:
             continue
-        name = (p.get("name") or p.get("email") or "Someone") if claimed else "Local"
+        name = (p.get("name") or "Someone") if claimed else "Local"
         if claimed:
             named[pid] = {"id": pid, "name": name}
         people.append({"id": pid, "name": name, "is_admin": bool(p.get("is_admin")), "you": pid == me,
