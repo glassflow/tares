@@ -232,6 +232,30 @@ export interface HomeOnboarding {
   };
 }
 
+/** The people and open projects a person joining sees (factory_home.joiner_team). Both lists arrive
+ *  ordered, and a private project the person is not on is not in them. */
+export interface HomeTeam {
+  people: HomeTeamPerson[];
+  projects: HomeTeamProject[];
+}
+
+export interface HomeTeamPerson {
+  id: string;
+  name: string;
+  is_admin: boolean;
+  you: boolean;
+  crew_running: boolean;
+  /** When a crew of theirs was last heard from; null when none ever was. */
+  last_heard: string | null;
+}
+
+export interface HomeTeamProject {
+  id: string;
+  name: string;
+  lead: { id: string; name: string } | null;
+  members: { id: string; name: string }[];
+}
+
 /** Whether the person is joining a factory someone else set up (factory_home.joiner_block). */
 export interface HomeJoiner {
   /** True for a person other than the owner once the team's choices are saved and another person's crew
@@ -245,6 +269,8 @@ export interface HomeJoiner {
   } | null;
   team_crews: number;
   own_crew_up: boolean;
+  /** Sent only while `joining`. */
+  team?: HomeTeam;
 }
 
 /** The Start steps; a person joining also gets what the team already set, in words. Either line may be
