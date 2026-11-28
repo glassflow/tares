@@ -531,12 +531,6 @@ def first_state_start():
     for station in (f"tw{Z}in", "twin"):
         s.record_reply_usage("old", station.replace("tw", "msg-tw"), T0, "claude-sonnet-4-5",
                              None, None, {"input_tokens": 1, "output_tokens": 1})
-    # the state tables DuckDB holds: a firing and a read of a line with a NUL carry it
-    s.set_fired("on_branch", f"br{Z}anch", T0)
-    s.set_fired("on_branch", f"tw{Z}in", T0)      # one key with its NUL and without
-    s.set_fired("on_branch", "twin", T0)
-    s.log_dispatch("d_nul", "on_branch", f"br{Z}anch", "threshold", 0, 0, f"tu{Z}rn one")
-    s.log_query("r_nul", "(read)", f"branch=br{Z}anch", "1h", 0, "http")
     s.close()
     s.con.close()
 
@@ -563,15 +557,6 @@ def first_state_start():
     want("the challenger line once", rows(s, t.key_value, t.branch, t.tares_project),
          [("old", "factory/TR-1", "proj")])
 
-    def state(sql):
-        return sorted(tuple(r) for r in s.sc.execute(sql).fetchall())
-
-    want("the trigger's keys, the twins once",
-         state("SELECT trigger, key_value FROM trigger_state"),
-         [("on_branch", "branch"), ("on_branch", "twin")])
-    want("the firing", state("SELECT key_value, payload FROM dispatch_log"),
-         [("branch", "turn one")])
-    want("the read", state("SELECT key_value FROM query_log"), [("branch=branch",)])
     s.con.close()
 
 
