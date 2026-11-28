@@ -427,12 +427,6 @@ export const api = {
     request<{ ok: boolean; object_tools: boolean }>("/api/settings/mcp",
       { method: "PUT", body: JSON.stringify({ object_tools }) }),
 
-  // Runs per agent per day (TR-325): the console value, else the environment, else the default.
-  agentLimits: () => request<AgentLimits>("/api/settings/agents"),
-  setAgentLimits: (body: { daily_cap: number | string | null }) =>
-    request<AgentLimits & { ok: boolean }>("/api/settings/agents",
-      { method: "PUT", body: JSON.stringify(body) }),
-
   slackTokenStatus: () =>
     request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean;
               team?: { id: string; name: string } | null }>(   // the Slack team, set by Tares Cloud
@@ -875,12 +869,5 @@ export type AgentBody = {
   max_rounds?: number | null; budget_usd?: number | null; budget_period?: "lifetime" | "month";
   webhook_key_label?: string;
   handoffs?: Handoff[];
-};
-
-export type AgentLimits = {
-  daily_cap: number;
-  daily_cap_source: "console" | "env" | "default";
-  default: number;
-  env: string;
 };
 

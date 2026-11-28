@@ -215,7 +215,7 @@ def _ship_body(cfg: dict, body: bytes) -> bool:
     _size_failure = ""
     base, headers = cfg["base"], cfg["headers"]
     try:
-        # the cell provisions its claude_code intake on first ingest: nothing to create first
+        # a 2.0 cell's /ingest/claude_code needs no source made first (a 1.x cell without one answers 404)
         _post(base + "/ingest/claude_code", body, headers)
         return True
     except urllib.error.HTTPError as e:
