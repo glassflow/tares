@@ -59,7 +59,7 @@ def own_db(name: str) -> str:
 
 def start(db, auth):
     port = free_port()
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_LICENSE": licensed.test_licence()}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
@@ -90,7 +90,7 @@ async def migration():
     own = s.create_doc("p1", "grants", "Grants: Legacy",
                        "# Grants\n\n- \"touch the staging cluster\" (2026-10-03)\n", by="x")
     s.use_doc("p1", gid)
-    s.con.close()
+    s.close()
 
     proc, B = start(db, False)
     try:

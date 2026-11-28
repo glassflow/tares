@@ -32,7 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-write-failure-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-write-failure"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -183,7 +183,7 @@ def clear_facts(s, sid):
 def open_store(moved=True):
     """A new store. `moved`: the one-time move is complete (planned with nothing to move)."""
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
-    s = Store(os.path.join(tempfile.mkdtemp(dir=_TMP), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(dir=_TMP), "t"))
     if moved:
         session_move.plan(s)
     return s

@@ -38,7 +38,7 @@ async def _wait(url):
 
 def start(db, port):
     remove_db(db)
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_AUTH_TOKEN": AUTH}
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -64,7 +64,7 @@ async def who(cx, B, tok):
 async def owner_alone():
     """A one-person cell: the owner's new key takes over `local`."""
     port = "8871"
-    proc = start("/tmp/owner_alone.duckdb", port)
+    proc = start("/tmp/owner_alone", port)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):

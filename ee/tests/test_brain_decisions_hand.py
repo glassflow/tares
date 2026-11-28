@@ -26,7 +26,7 @@ licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-brain-decisions-hand-")
 ROOT = "root-token-" + "decisions-hand"
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 AUTH_OFF = "--auth-off" in sys.argv   # the second run, started by the first: auth is read at import
@@ -616,7 +616,7 @@ async def main():
 
 async def auth_off():
     """No TARES_AUTH_TOKEN: the one person is the adder and the admin."""
-    os.environ["TARES_DB"] = os.path.join(TMP, "off.duckdb")
+    os.environ["TARES_HOME"] = os.path.join(TMP, "off")
     os.environ["TARES_LICENSE"] = licensed.test_licence()
     from tares.daemon import make_app
     lore = fake_lore.FakeLore()

@@ -31,7 +31,7 @@ def ck(l, c, d=""):
 
 AUTH = "root-token"
 TMP = tempfile.mkdtemp(prefix="private-reads-")
-DB = os.path.join(TMP, "cell.duckdb")
+DB = os.path.join(TMP, "cell")
 
 
 def free_port() -> str:
@@ -76,7 +76,7 @@ async def _until(fn, tries=60):
 
 
 def spawn(port, extra=None):
-    env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_HOME": DB, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence(), **(extra or {})}
     return subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -144,7 +144,7 @@ def seed(ids):
 
     store.link_session(p1, "sess-secret")
     seed_objects(store, ids, now)
-    store.con.close()
+    store.close()
 
 
 def seed_objects(store, ids, now):

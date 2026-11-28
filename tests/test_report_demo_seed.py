@@ -83,12 +83,12 @@ def seed_here(mod, data_dir):
 
 @contextlib.contextmanager
 def opened(data_dir):
-    store = Store(os.path.join(data_dir, "tares.duckdb"))
+    store = Store(os.path.join(data_dir, "tares"))
     try:
         yield store
     finally:
         store.close()
-        store.con.close()
+        store.close()
 
 
 def every_row(s):
@@ -451,7 +451,7 @@ def daemon(data_dir):
     """A daemon on the data dir, started as the seed's start hint says, and stopped afterwards.
     Yields its URL, or None when it did not come up."""
     port = free_port()
-    env = clean_env(TARES_DB=os.path.join(data_dir, "tares.duckdb"), TARES_PORT=port,
+    env = clean_env(TARES_HOME=os.path.join(data_dir, "tares"), TARES_PORT=port,
                     TARES_PR_SYNC_SECONDS="off", TARES_OTLP_GRPC_PORT="off",
                     ANTHROPIC_API_KEY=None, ANTHROPIC_AUTH_TOKEN=None, OPENAI_API_KEY=None,
                     TARES_STATE_DSN=None, TARES_EDITION=None)

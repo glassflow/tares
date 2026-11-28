@@ -12,7 +12,7 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-DB, DPORT, MPORT, TOKEN = "/tmp/mcp_auth.duckdb", "8805", "8806", "tok-xyz"
+DB, DPORT, MPORT, TOKEN = "/tmp/mcp_auth", "8805", "8806", "tok-xyz"
 
 
 async def _wait(url, ok=lambda r: r.status_code == 200):
@@ -32,7 +32,7 @@ async def main():
     base = {**clean_env(), "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": TOKEN}
     daemon = subprocess.Popen(
         [sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
-        env={**base, "TARES_DB": DB, "TARES_CATALOG": "/tmp/none_ma.yaml", "TARES_PORT": DPORT},
+        env={**base, "TARES_HOME": DB, "TARES_CATALOG": "/tmp/none_ma.yaml", "TARES_PORT": DPORT},
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     mcpsrv = subprocess.Popen(
         [sys.executable, "-c", "from tares.cli import run_mcp; run_mcp()"],

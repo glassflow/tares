@@ -40,7 +40,7 @@ _crew_guard.install()
 
 TMP = Path(tempfile.mkdtemp(prefix="tares-setup-apply-"))
 ROOT_KEY = "root-token-setup-apply"
-os.environ.update(TARES_DB=str(TMP / "cell.duckdb"), TARES_CATALOG=str(TMP / "none.yaml"),
+os.environ.update(TARES_HOME=str(TMP / "cell"), TARES_CATALOG=str(TMP / "none.yaml"),
                   TARES_AUTH_TOKEN=ROOT_KEY, TARES_OTLP_GRPC_PORT="off")
 
 import httpx  # noqa: E402
@@ -112,7 +112,7 @@ def crew_env(url, key=ROOT_KEY, **more):
                         "FACTORY_CREW_HOME": str(crew), "TARES_HOME": str(home / "tares"), "TARESD_URL": url,
                         "TARES_FACTORY_URL": url, "TARES_AUTH_TOKEN": key, "TARES_URL_LOG": str(home / "urls.log"),
                         "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8", "PYTHONSTARTUP": None,
-                        "TARES_DB": None, "TARES_CATALOG": None, "TARES_OTLP_GRPC_PORT": None, **more})
+                        "TARES_CATALOG": None, "TARES_OTLP_GRPC_PORT": None, **more})
 
 
 def asked(env):

@@ -36,7 +36,7 @@ with open(SEED, "w") as fh:
         "    config:\n      labels:\n        - name: service\n          field: service\n"
         "          primary: true\n")
 
-DB, PORT, STUB_PORT = "/tmp/slack.duckdb", "8810", "8811"
+DB, PORT, STUB_PORT = "/tmp/slack", "8810", "8811"
 CHANNEL = "C0123456789"
 TOKEN = "xoxb-stored-test-token"
 ENV_TOKEN = "xoxb-env-test-token"
@@ -156,7 +156,7 @@ async def main():
     stub = HTTPServer(("127.0.0.1", int(STUB_PORT)), Stub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
 
-    base_env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
+    base_env = {**clean_env(), "TARES_HOME": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
                 "TARES_OTLP_GRPC_PORT": "off",
                 "TARES_SLACK_API_BASE": f"http://127.0.0.1:{STUB_PORT}",
                 "TARES_PUBLIC_URL": PUBLIC_URL}

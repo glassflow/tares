@@ -46,7 +46,7 @@ from _env import scrub_os_environ
 scrub_os_environ()
 
 _TMP = tempfile.mkdtemp(prefix="tares-integration-connections-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-connections"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -162,7 +162,7 @@ def default_of(s, slot):
 
 # ── the store ──────────────────────────────────────────────────────────────────
 print("== several connections and the default ==")
-s = Store(os.path.join(_TMP, "store.duckdb"))
+s = Store(os.path.join(_TMP, "store"))
 ck("nothing connected: no connections", s.list_connections("tickets") == [])
 v = s.set_choice("tickets", "tixa", {"url": "https://a.example/api", "token": SECRETS[0], "project": "A"}, "ann")
 ck("the first connection made is the default", v["default"] is True and v["name"] == "tixa", v)
@@ -306,7 +306,7 @@ s.delete_guardrail_pair(pair["id"])
 
 # ── the migration ──────────────────────────────────────────────────────────────
 print("== the migration of a cell from before ==")
-m = Store(os.path.join(tempfile.mkdtemp(), "old.duckdb"))   # its own folder: its own new store
+m = Store(os.path.join(tempfile.mkdtemp(), "old"))   # its own folder: its own new store
 at = datetime(2026, 1, 1)
 
 

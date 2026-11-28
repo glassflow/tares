@@ -56,7 +56,7 @@ def start_cell(folder: str):
     """A cell of this checkout on a free port, with a database and a key of its own. (process, address)."""
     port = free_port()
     env = {k: v for k, v in os.environ.items() if not k.startswith(("TARES", "FACTORY", "ANTHROPIC"))}
-    env.update(TARES_DB=os.path.join(folder, "cell.duckdb"), TARES_CATALOG=os.path.join(folder, "none.yaml"),
+    env.update(TARES_CATALOG=os.path.join(folder, "none.yaml"),
                TARES_HOME=os.path.join(folder, "tares-home"), TARES_AUTH_TOKEN=TOKEN, TARES_OTLP_GRPC_PORT="off",
                PYTHONPATH=ROOT)
     log = open(os.path.join(folder, "cell.log"), "ab")

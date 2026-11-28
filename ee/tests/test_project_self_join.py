@@ -32,7 +32,7 @@ import licensed   # scrubs the machine's TARES_* settings and puts the repo and 
 licensed.install_test_root()
 
 _TMP = tempfile.mkdtemp(prefix="tares-project-self-join-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-project-self-join"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -69,7 +69,7 @@ def own_folder(name):
     """A database path in a folder of its own: the session store is a file beside it, so two cells in
     one folder would share their people, keys and members."""
     os.makedirs(os.path.join(_TMP, name))
-    return os.path.join(_TMP, name, "api.duckdb")
+    return os.path.join(_TMP, name, "api")
 
 
 async def licensed_cell():
@@ -458,7 +458,7 @@ async def open_cell():
     project page of a private project someone is not on can be read."""
     from tares import daemon
     daemon.AUTH_TOKEN = ""
-    daemon.DB_PATH = own_folder("open")
+    daemon.DATA_DIR = own_folder("open")
     app = daemon.make_app()
 
     async def call(method, path, body=None):
@@ -510,7 +510,7 @@ async def single_cell():
     project's secrets however they came to be on it, so the page doesn't mark them as waiting."""
     from tares import daemon
     daemon.AUTH_TOKEN = TOKEN
-    daemon.DB_PATH = own_folder("single")
+    daemon.DATA_DIR = own_folder("single")
     app = daemon.make_app()
     root = {"Authorization": f"Bearer {TOKEN}"}
 

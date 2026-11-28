@@ -25,7 +25,7 @@ licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-brain-index-")
 ROOT = "root-token-" + "brain-index"
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
@@ -76,7 +76,7 @@ def day(month, of=1):
 def unit():
     print("== the pieces ==")
     from tares.store import Store
-    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit.duckdb"))   # its own folder: the session store is one file per data folder
+    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit"))   # its own folder: the session store is one file per data folder
     s.add_brain_repo("acme/web", "src-1", None, day(1))
     ck("update_brain_repo changes the fields it is given", s.update_brain_repo("acme/web", {"state": "indexing", "files_done": 3,
        "files_total": 9, "place": 2}) and (s.get_brain_repo("acme/web")["state"], s.get_brain_repo("acme/web")["files_done"],

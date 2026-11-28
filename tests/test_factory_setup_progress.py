@@ -29,7 +29,7 @@ os.environ["TZ"] = "UTC"      # DuckDB answers times in the machine's zone
 time.tzset() if hasattr(time, "tzset") else None
 
 _TMP = tempfile.mkdtemp(prefix="tares-setup-progress-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 TOKEN = "root-token-setup-progress"
 if AUTH_OFF:
@@ -414,7 +414,7 @@ def finish():
 def run_again(*args) -> None:
     """One part in a process of its own: its own database, and the auth setting it needs."""
     global P, F
-    env = {k: v for k, v in os.environ.items() if k not in ("TARES_DB", "TARES_AUTH_TOKEN")}
+    env = {k: v for k, v in os.environ.items() if k not in ("TARES_AUTH_TOKEN")}
     r = subprocess.run([sys.executable, os.path.abspath(__file__), *args], env=env,
                        capture_output=True, text=True, timeout=600)
     print(r.stdout, end="")

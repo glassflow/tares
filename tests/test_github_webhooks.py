@@ -27,7 +27,7 @@ scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-gh-hooks-")
 AUTH = "root-token-gh-hooks"
-os.environ.update({"TARES_DB": os.path.join(TMP, "gh.duckdb"), "TARES_AUTH_TOKEN": AUTH,
+os.environ.update({"TARES_HOME": os.path.join(TMP, "gh"), "TARES_AUTH_TOKEN": AUTH,
                    "TARES_EDITION": "factory"})
 
 import httpx

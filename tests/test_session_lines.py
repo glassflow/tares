@@ -62,7 +62,7 @@ def line(session, etype="assistant", payload=None, labels=None, source=SRC, sec=
 def open_store():
     """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: this suite
     compares the table with DuckDB's rows (tests/_old_cell.py)."""
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     s.append = lambda envs: append_duckdb_first(s, envs)
     return s
 
@@ -806,7 +806,7 @@ def origin():
 
     print("== a table session set false by hand is repaired on the next start ==")
     d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
+    path = os.path.join(d, "t")
     s = Store(path)
     s.append([line("r", "user", {"uuid": "r1"}), line("r", "assistant", {"uuid": "r2"})])
     s.append([line("short", "user", {"uuid": "s1"}), line("short", "assistant", {"uuid": "s2"})])

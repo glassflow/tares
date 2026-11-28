@@ -56,7 +56,7 @@ def _db(name):
 
 def start(name, auth):
     db, port = _db(name), free_port()
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_LICENSE": licensed.test_licence()}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
@@ -329,7 +329,7 @@ def unit():
     ck("... list_projects too", [(p["scope"], p["lead_person_id"]) for p in s.list_projects()]
        == [("team", None)])
     s.set_project_scope("uc_old", "private")
-    s.con.close()
+    s.close()
     s = Store(path)
     ck("reopening keeps what was set", s.get_project("uc_old")["scope"] == "private")
 
@@ -352,7 +352,7 @@ def unit():
     s.delete_project("uc_old")
     ck("delete_project deletes its members", s.list_project_members("uc_old") == []
        and s.get_project("uc_old") is None)
-    s.con.close()
+    s.close()
 
 
 async def main():

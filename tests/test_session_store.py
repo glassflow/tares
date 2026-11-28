@@ -82,7 +82,7 @@ def upgrade_lines(records):
 def fresh_start():
     print("== a fresh start ==")
     d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
+    path = os.path.join(d, "t")
     with capture_logs("alembic.runtime.migration") as recs:
         s = Store(path)
     ck("a first start runs every revision", len(upgrade_lines(recs)) == REVISIONS, [r.getMessage() for r in recs])
@@ -229,7 +229,7 @@ def upgrade_failure():
 
     store_mod.SessionStore.upgrade = boom
     try:
-        Store(os.path.join(d, "t.duckdb"), state_dsn="" if PG else None)
+        Store(os.path.join(d, "t"), state_dsn="" if PG else None)
         ck("Store raises", False, "no error")
     except StoreUnavailable as e:
         ck("Store raises StoreUnavailable", "session store down" in str(e), str(e))
@@ -404,7 +404,7 @@ def _seeded_store(full=True):
     """A DuckDB-only Store (its session store is SQLite) whose DuckDB holds rows in the session
     tables and whose session store holds none, so the copy has something to do."""
     d = tempfile.mkdtemp()
-    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if PG else None)
+    s = Store(os.path.join(d, "t"), state_dsn="" if PG else None)
     _seed_duckdb(s, full)
     _forget_copy(s)
     return s
@@ -413,14 +413,14 @@ def _seeded_store(full=True):
 def copy_at_start():
     print("== the copy at start, on SQLite ==")
     d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
+    path = os.path.join(d, "t")
     s = Store(path, state_dsn="" if PG else None)
     ck("a new cell copies nothing, and the ledger names every moved table",
        _count(s.sessions_db, "session_store_copies") == len(declared_tables.MOVED_TABLES))
     _seed_duckdb(s)
     before = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
     s.con.execute("CHECKPOINT")
-    s.con.close()
+    s.close()
     s.close()
     for f in os.listdir(d):                  # a cell from before the session store: no tares.sqlite
         if f.startswith("tares.sqlite"):
@@ -550,12 +550,12 @@ def copy_on_postgres():
         return
     import psycopg
     d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
+    path = os.path.join(d, "t")
     s = Store(path, state_dsn="")                          # an older cell: its state, and these tables, in DuckDB
     _seed_duckdb(s)
     before = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
     s.con.execute("CHECKPOINT")
-    s.con.close()
+    s.close()
     s.close()
     _drop_local_file(d)        # an older cell has no tares.sqlite: its rows are only in DuckDB
     sch = "ss_" + uuid.uuid4().hex[:12]
@@ -603,7 +603,7 @@ def local_then_postgres():
         return
     import psycopg
     d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
+    path = os.path.join(d, "t")
     s = Store(path, state_dsn="")
     _seed_duckdb(s)                                        # what a version before the session store left in DuckDB
     _forget_copy(s)
@@ -617,7 +617,7 @@ def local_then_postgres():
     local = {t: [tuple(_norm(v) for v in r) for r in _session_rows(s, t)] for t in SESSION_TABLES}
     duck = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
     s.con.execute("CHECKPOINT")
-    s.con.close()
+    s.close()
     s.close()
     sch = "ss_" + uuid.uuid4().hex[:12]
     with psycopg.connect(PG, autocommit=True) as c:

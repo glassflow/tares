@@ -24,7 +24,7 @@ from _env import scrub_os_environ
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-access-single-")
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 # auth is off: the one person using the cell is the owner, `local`, and an admin

@@ -57,7 +57,7 @@ os.environ["TZ"] = "UTC"      # DuckDB answers times in the machine's zone; the 
 time.tzset()
 
 _TMP = tempfile.mkdtemp(prefix="tares-query-budget-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_LICENSE"] = _licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-query-budget"

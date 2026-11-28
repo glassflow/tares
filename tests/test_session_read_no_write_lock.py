@@ -61,7 +61,7 @@ def reply(s, session, message, tokens=10):
 
 
 def open_store(path=None):
-    s = Store(path or os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(path or os.path.join(tempfile.mkdtemp(), "t"))
     return s
 
 

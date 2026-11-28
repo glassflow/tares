@@ -28,7 +28,7 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-DB, PORT = "/tmp/usage.duckdb", "8809"
+DB, PORT = "/tmp/usage", "8809"
 AUTH = "root-token"
 BLOCK = 1 << 18   # DuckDB writes in 256KiB blocks; sizes are compared to that tolerance
 
@@ -52,7 +52,7 @@ def H(tok):
 def _boot(**extra):
     env = {k: v for k, v in clean_env().items()
            if k not in ("TARES_AUTH_TOKEN", "TARES_MAX_DB_SIZE")}
-    env |= {"TARES_DB": DB, "TARES_PORT": PORT, **extra}
+    env |= {"TARES_HOME": DB, "TARES_PORT": PORT, **extra}
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

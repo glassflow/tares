@@ -17,7 +17,7 @@ licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-brain-folders-")
 ROOT = "root-token-" + "brain-folders"
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
@@ -121,7 +121,7 @@ def unit():
 
     print("== the store: the same on DuckDB and Postgres ==")
     from tares.store import Store
-    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit.duckdb"))   # its own folder: the daemon's session store is one file per data folder
+    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit"))   # its own folder: the daemon's session store is one file per data folder
     who = s.create_person("Kiran", "kiran@x.dev")
     s.add_brain_repo("acme/web", "src-1", None, day(1, 1))
     s.add_brain_repo("acme/api", "src-2", None, day(1, 1))

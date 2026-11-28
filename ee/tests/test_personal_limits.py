@@ -47,7 +47,7 @@ def H(tok):
 
 def start(db):
     port = free_port()
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
     proc = subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -55,7 +55,7 @@ def start(db):
 
 
 async def main():
-    proc, B = start(os.path.join(TMP, "limits.duckdb"))
+    proc, B = start(os.path.join(TMP, "limits"))
     ROOT = H(AUTH)
     try:
         if not await _wait(f"{B}/health"):

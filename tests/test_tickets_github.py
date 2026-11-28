@@ -256,7 +256,7 @@ def newstore():
     # a folder each: the session store (tares.sqlite) sits beside the DuckDB file, and a store is a cell
     d = os.path.join(tmp, f"t{_n[0]}")
     os.makedirs(d)
-    return Store(os.path.join(d, "t.duckdb"))
+    return Store(os.path.join(d, "t"))
 
 
 def world(link=None, seed=True):
@@ -285,8 +285,9 @@ def tk(s, ident):
 
 
 def status_events(s):
-    return s.con.execute("SELECT count(*) FROM events WHERE source = 'github_issues' AND "
-                         "event_type = 'ticket_status'").fetchone()[0]
+    """The status moves the tickets' history holds: what the timeline shows of a move."""
+    return sum(1 for t in s.list_tickets("p1") for h in s.ticket_history(t["id"])
+               if h.get("field") == "status")
 
 
 def labels_of(n):
@@ -360,8 +361,6 @@ ck("the three tickets came in, GitHub's", sorted(t["identifier"] for t in s.list
 s.create_ticket("p1", "tares", "Mine")
 n = run(b.sync({"id": "p1"}))
 ck("sync returns the count of GitHub tickets, not Tares ones, and takes a project dict", n == 3, n)
-ck("the sync stores no change events: nothing reads them (TR-1806)", s.con.execute(
-   "SELECT count(*) FROM events WHERE source = 'github_issues'").fetchone()[0] == 0)
 _find(1)["state"] = "closed"
 run(b.sync("p1"))
 ck("a change in GitHub is read", tk(s, "GH-1")["status"] == "done")

@@ -32,7 +32,7 @@ licensed.install_test_root()
 from _env import clean_env
 
 _TMP = tempfile.mkdtemp(prefix="tares-assignee-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_LICENSE"] = licensed.test_licence(seats=50)
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-assignee"
@@ -482,7 +482,7 @@ async def main():
     print("== auth off: the routes work as they did, the person is `local` ==")
     home = tempfile.mkdtemp(prefix="assignee-off-")
     port = free_port()
-    env = {**clean_env(), "TARES_DB": os.path.join(home, "off.duckdb"), "TARES_PORT": port,
+    env = {**clean_env(), "TARES_HOME": os.path.join(home, "off"), "TARES_PORT": port,
            "TARES_OTLP_GRPC_PORT": "off", "TARES_LICENSE": licensed.test_licence(seats=50)}
     proc = subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

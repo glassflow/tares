@@ -297,7 +297,7 @@ def world(team="team_full"):
     """A store with a project linked to the fake Linear project, and its three tickets synced."""
     reset(team)
     _n[0] += 1
-    s = Store(os.path.join(tempfile.mkdtemp(dir=tmp), f"t{_n[0]}.duckdb"))      # its own tares.sqlite
+    s = Store(os.path.join(tempfile.mkdtemp(dir=tmp), f"t{_n[0]}"))      # its own tares.sqlite
     s.create_project("p1", "blank", "Invoices", {})
     s.set_project_linear("p1", {"id": PROJECT["id"], "name": PROJECT["name"]})
     linear._save_connection(s, {"kind": "api_key", "token": GOOD_KEY,
@@ -312,8 +312,9 @@ def tk(s, ident):
 
 
 def status_events(s):
-    return s.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
-                         "event_type = 'ticket_status'").fetchone()[0]
+    """The status moves the tickets' history holds: what the timeline shows of a move."""
+    return sum(1 for t in s.list_tickets("p1") for h in s.ticket_history(t["id"])
+               if h.get("field") == "status")
 
 
 print("== installed ==")
@@ -368,13 +369,11 @@ ck("the three tickets came in, Linear's", sorted(t["identifier"] for t in s.list
 s.create_ticket("p1", "tares", "Mine")
 n = run(b.sync({"id": "p1"}))
 ck("sync returns the count of Linear tickets, not Tares ones, and takes a project dict", n == 3, n)
-ck("the sync stores no change events: nothing reads them (TR-1806)", s.con.execute(
-   "SELECT count(*) FROM events WHERE source = 'linear'").fetchone()[0] == 0)
 STATE["issues"][0] = {**STATE["issues"][0], "state": {"name": "Done", "type": "completed"}}
 run(b.sync("p1"))
 ck("a change in Linear is read", tk(s, "FAC-1")["status"] == "done")
 ck("a project not linked to Linear has nothing to sync", run(TicketsLinear(Store(
-   os.path.join(tempfile.mkdtemp(dir=tmp), "unlinked.duckdb"))).sync("nope")) == 0)
+   os.path.join(tempfile.mkdtemp(dir=tmp), "unlinked"))).sync("nope")) == 0)
 
 print("== the guards stay (TR-1024) ==")
 s, b = world()

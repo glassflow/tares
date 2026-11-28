@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-factory-crew-cache-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-crew-cache"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -288,7 +288,7 @@ async def main():
     daemon_mod.AUTH_TOKEN = ""
     open_dir = os.path.join(_TMP, "open")
     os.makedirs(open_dir, exist_ok=True)
-    daemon_mod.DB_PATH = os.path.join(open_dir, "open.duckdb")
+    daemon_mod.DATA_DIR = os.path.join(open_dir, "open")
     app = daemon_mod.make_app()
     async with app.router.lifespan_context(app):
         fh.clear_cache()

@@ -61,7 +61,7 @@ def fresh_store():
     """A cell that writes its lines to DuckDB first, then counts them, as a platform cell did before
     Tares 2.0 (tests/_old_cell.py): what this suite was written against."""
     d = tempfile.mkdtemp()
-    s = Store(os.path.join(d, "t.duckdb"))
+    s = Store(os.path.join(d, "t"))
     s.append = lambda envs: append_duckdb_first(s, envs)
     return s
 
@@ -283,7 +283,7 @@ def start_output():
             "print('CALLS', len(calls), flush=True)\n"
             "os._exit(0)\n")
     env = {"PATH": os.environ.get("PATH", ""), "HOME": d, "PYTHONPATH": root,
-           "TARES_DB": os.path.join(d, "t.duckdb"), "TARES_CATALOG": os.path.join(d, "none.yaml"),
+           "TARES_HOME": os.path.join(d, "t"), "TARES_CATALOG": os.path.join(d, "none.yaml"),
            "TARES_OTLP_GRPC_PORT": "off"}
     out = subprocess.run([sys.executable, "-c", code], env=env, cwd=d, capture_output=True, text=True,
                          timeout=120)

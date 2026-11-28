@@ -61,7 +61,7 @@ def attempt(name, fn):
 
 def open_store():
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
-    return Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    return Store(os.path.join(tempfile.mkdtemp(), "t"))
 
 
 def when(sec):
@@ -120,7 +120,7 @@ def posted():
         ck(f"{name} holds {ids}", got == ids, got)
     got = duck(s, "SELECT DISTINCT key_value FROM events WHERE key_value LIKE '%' || chr(0) || '%'")
     ck("no id in DuckDB has a NUL", got == [], got)
-    s.con.close()
+    s.close()
 
 
 def hold_in_duckdb(s):
@@ -173,7 +173,7 @@ def held_by_duckdb():
     attempt("the challenger fill of a start completes", s._challenges_fill)
     got = column(s, challenges.c.key_value)
     ck("with the other sessions' challenger lines", got == want, got)
-    s.con.close()
+    s.close()
 
 
 def moved():
@@ -201,7 +201,7 @@ def moved():
        [tuple(r) for r in got] == [(sid, session_move.VERIFIED) for sid in want], got)
     kept = duck(s, "SELECT count(*) FROM events WHERE key_value LIKE '%' || chr(0) || '%'")
     ck("DuckDB keeps the lines under the id with a NUL", kept == [4], kept)
-    s.con.close()
+    s.close()
 
 
 def ticket_view():
@@ -231,7 +231,7 @@ def ticket_view():
        got is not None and check[0].get("recorded") is None, check)
     got = attempt("the ids are looked up", lambda: factory_api.unread_sessions(h, [ODD, "closed"]))
     ck("only the session of the hidden project is unread", got == {"closed"}, got)
-    s.con.close()
+    s.close()
 
 
 def main():

@@ -56,7 +56,7 @@ def start(licence):
     base = clean_env(TARES_OTLP_GRPC_PORT="off", TARES_AUTH_TOKEN=TOKEN, TARES_EDITION="factory",
                      TARES_LICENSE=licensed.test_licence() if licence else None)
     d = subprocess.Popen(licensed.daemon_argv(),
-                         env={**base, "TARES_DB": os.path.join(tmp, "t.duckdb"), "TARES_CATALOG": "/tmp/none_me.yaml",
+                         env={**base, "TARES_HOME": os.path.join(tmp, "t"), "TARES_CATALOG": "/tmp/none_me.yaml",
                               "TARES_PORT": dport},
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     m = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_mcp; run_mcp()"],

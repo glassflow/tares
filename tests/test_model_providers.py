@@ -5,16 +5,15 @@ Run: .venv/bin/python tests/test_model_providers.py   (in-process daemon, no ext
 """
 import asyncio
 import os
+import shutil
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-DB = os.path.join(tempfile.mkdtemp(), "model_providers.duckdb")   # its own folder: settings live beside the file
-for pth in (DB, DB + ".wal"):
-    if os.path.exists(pth):
-        os.remove(pth)
-os.environ["TARES_DB"] = DB
+DB = os.path.join(tempfile.mkdtemp(), "model_providers")   # its own folder: settings live beside the file
+shutil.rmtree(DB, ignore_errors=True)
+os.environ["TARES_HOME"] = DB
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "TARES_ANTHROPIC_BASE",
             "OPENAI_API_KEY", "OPENAI_BASE_URL", "TARES_MODEL_PROVIDER", "TARES_CATALOG",

@@ -20,7 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-factory-crew-page-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-crew-page"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -380,7 +380,7 @@ async def holes():
     # shared one would carry the first cell's sessions and their times over (TR-1499)
     holes_dir = os.path.join(_TMP, "holes")
     os.makedirs(holes_dir, exist_ok=True)
-    daemon_mod.DB_PATH = os.path.join(holes_dir, "holes.duckdb")
+    daemon_mod.DATA_DIR = os.path.join(holes_dir, "holes")
     from tares.daemon import make_app
     from tares.factory_home import crew_member
     app = make_app()
@@ -430,7 +430,7 @@ async def private_shares():
     import tares.daemon as daemon_mod
     own = os.path.join(_TMP, "private")
     os.makedirs(own, exist_ok=True)
-    daemon_mod.DB_PATH = os.path.join(own, "private.duckdb")
+    daemon_mod.DATA_DIR = os.path.join(own, "private")
     from tares.daemon import make_app
     app = make_app()
     mk = lambda timeout=10: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
@@ -516,7 +516,7 @@ async def questions_alone(name: str, auth: bool):
     import tares.daemon as daemon_mod
     own = os.path.join(_TMP, name)
     os.makedirs(own, exist_ok=True)
-    daemon_mod.DB_PATH = os.path.join(own, f"{name}.duckdb")
+    daemon_mod.DATA_DIR = os.path.join(own, f"{name}")
     was = daemon_mod.AUTH_TOKEN
     if not auth:
         daemon_mod.AUTH_TOKEN = ""
@@ -554,7 +554,7 @@ async def questions_in_a_team():
     from tares import report
     own = os.path.join(_TMP, "questions")
     os.makedirs(own, exist_ok=True)
-    daemon_mod.DB_PATH = os.path.join(own, "questions.duckdb")
+    daemon_mod.DATA_DIR = os.path.join(own, "questions")
     app = daemon_mod.make_app()
     print("== questions about no project: several people ==")
     async with app.router.lifespan_context(app):
@@ -652,7 +652,7 @@ async def codex_members():
     import tares.daemon as daemon_mod
     d = os.path.join(_TMP, "codex")
     os.makedirs(d, exist_ok=True)
-    daemon_mod.DB_PATH = os.path.join(d, "codex.duckdb")
+    daemon_mod.DATA_DIR = os.path.join(d, "codex")
     from tares.daemon import make_app
     app = make_app()
     stamps = {"cwd": "/w/crew", "factory_crew": "crew"}

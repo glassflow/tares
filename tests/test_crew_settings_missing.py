@@ -40,7 +40,7 @@ _crew_guard.install()
 
 TMP = Path(tempfile.mkdtemp(prefix="tares-settings-missing-")).resolve()
 ROOT_KEY = "root-token-settings-missing"
-os.environ.update(TARES_DB=str(TMP / "cell.duckdb"), TARES_CATALOG=str(TMP / "none.yaml"),
+os.environ.update(TARES_HOME=str(TMP / "cell"), TARES_CATALOG=str(TMP / "none.yaml"),
                   TARES_AUTH_TOKEN=ROOT_KEY, TARES_OTLP_GRPC_PORT="off", TARES_EDITION="factory")
 
 import hashlib  # noqa: E402

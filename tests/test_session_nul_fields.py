@@ -68,7 +68,7 @@ def attempt(name, fn):
 
 def new_store(**kw):
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"), **kw)
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"), **kw)
     s.create_project(PROJECT, "custom", "proj", {})
     return s
 
@@ -295,7 +295,7 @@ def posted():
     attempt("the sessions reconcile completes", lambda: session_ingest.reconcile_sessions(s))
     attempt("the usage fill completes", s._claude_usage_fill)
     attempt("the challenger fill completes", s._challenges_fill)
-    s.con.close()
+    s.close()
 
 
 # ── lines DuckDB holds from before ───────────────────────────────────────────
@@ -390,7 +390,7 @@ def held_by_duckdb():
          [("old", "factory/TR-1", "proj")])
     n = rows(s, metadata.tables["sessions"].c.session, metadata.tables["sessions"].c.line_count)
     ck("every session is counted", n == [("good", 2), ("old", 7)], n)
-    s.con.close()
+    s.close()
 
 
 def counted_before():
@@ -398,7 +398,7 @@ def counted_before():
     they were. The fills, which read them again at a start, do not add them twice."""
     s = new_store()
     if s.sessions_db.dialect != "sqlite":
-        s.con.close()
+        s.close()
         return
     print("== rows an older version stored on SQLite ==")
     envs = hold_in_duckdb(s)
@@ -419,7 +419,7 @@ def counted_before():
     line = ("claude_code", "old", T0, "challenge_commit", f"factory/TR-{Z}1", None, "{}")
     got = begins(s, lambda: s._challenges_without_nul([line]))
     want("the challenger line is looked up without a write lock", got, ["BEGIN"])
-    s.con.close()
+    s.close()
 
 
 def begins(s, call):
@@ -479,7 +479,7 @@ def _moved(target):
     check_old_facts(s, "")
     if target == session_move.TARGET:
         drained(s, len(envs))
-    s.con.close()
+    s.close()
 
 
 def drained(s, n):
@@ -522,7 +522,7 @@ def first_state_start():
         s.record_reply_usage("old", station.replace("tw", "msg-tw"), T0, "claude-sonnet-4-5",
                              None, None, {"input_tokens": 1, "output_tokens": 1})
     s.close()
-    s.con.close()
+    s.close()
 
     schema = "t_" + uuid.uuid4().hex[:16]
     with psycopg.connect(PG, autocommit=True) as c:
@@ -547,7 +547,7 @@ def first_state_start():
     want("the challenger line once", rows(s, t.key_value, t.branch, t.tares_project),
          [("old", "factory/TR-1", "proj")])
 
-    s.con.close()
+    s.close()
 
 
 def unit():

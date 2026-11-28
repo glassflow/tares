@@ -29,7 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-deps-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-deps"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -102,7 +102,7 @@ async def main():
     from tares.daemon import make_app
     # the two people the keys below act as are on the cell before it starts: adding a second
     # person over HTTP needs a licence and is tested under ee/tests
-    _people.seed(os.environ["TARES_DB"], [("Pat", "pat@example.com"), ("Ada", "ada@example.com")])
+    _people.seed(os.environ["TARES_HOME"], [("Pat", "pat@example.com"), ("Ada", "ada@example.com")])
     app = make_app()
     store = app.state.store
     h = getattr(app.state, "deps", None)

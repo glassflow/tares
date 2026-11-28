@@ -24,7 +24,7 @@ from _routes import flat_routes
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-boot-guard-")
-os.environ["TARES_DB"] = os.path.join(TMP, "boot.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "boot")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = AUTH = "root-token-boot"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -211,7 +211,7 @@ def main():
         case(sys.argv[1])
     global P, F
     for name in CASES:
-        env = dict(os.environ, TARES_DB=os.path.join(tempfile.mkdtemp(prefix="tares-boot-guard-"), "boot.duckdb"))
+        env = dict(os.environ, TARES_HOME=os.path.join(tempfile.mkdtemp(prefix="tares-boot-guard-"), "boot"))
         r = subprocess.run([sys.executable, os.path.abspath(__file__), name], env=env,
                            capture_output=True, text=True)
         out = r.stdout.strip().split("\n")

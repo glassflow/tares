@@ -20,7 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-factory-home-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-home"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -497,7 +497,7 @@ async def private_shares():
     import tares.daemon as daemon_mod
     own = os.path.join(_TMP, "private")
     os.makedirs(own, exist_ok=True)
-    daemon_mod.DB_PATH = os.path.join(own, "private.duckdb")
+    daemon_mod.DATA_DIR = os.path.join(own, "private")
     from tares.daemon import make_app
     app = make_app()
     mk = lambda timeout=10: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",

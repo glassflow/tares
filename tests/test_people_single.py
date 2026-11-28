@@ -28,7 +28,7 @@ sys.path.insert(0, ROOT_DIR)
 
 TMP = tempfile.mkdtemp(prefix="tares-people-single-")
 ROOT = "root-token-people-single"
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -60,7 +60,7 @@ def H(tok):
 async def main():
     from tares import daemon
     # one existing person before the cell starts: the cell has a person other than `local`
-    _people.seed(os.environ["TARES_DB"], [("Pat", "pat@example.com")])
+    _people.seed(os.environ["TARES_HOME"], [("Pat", "pat@example.com")])
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
@@ -188,7 +188,7 @@ async def one_person_cell():
     from tares import daemon
     # read once at import: point the new cell at its own file, in a folder of its own (the people live in
     # tares.sqlite beside the DuckDB file, and two cells in one folder would share them)
-    daemon.DB_PATH = os.path.join(tempfile.mkdtemp(dir=TMP), "one.duckdb")
+    daemon.DATA_DIR = os.path.join(tempfile.mkdtemp(dir=TMP), "one")
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",

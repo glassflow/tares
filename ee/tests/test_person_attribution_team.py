@@ -53,7 +53,7 @@ def H(tok, station=None, role=None, parent=None):
 
 def start(db, port):
     remove_db(db)
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
     return subprocess.Popen(licensed.daemon_argv(), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -82,7 +82,7 @@ async def make_project(cx, B, hd):
 
 async def auth_on():
     port = "8867"
-    proc = start("/tmp/person_attr_team_on.duckdb", port)
+    proc = start("/tmp/person_attr_team_on", port)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):

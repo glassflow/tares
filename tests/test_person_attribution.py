@@ -36,7 +36,7 @@ async def _wait(url):
 
 def start(db, port, auth):
     remove_db(db)
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
@@ -67,7 +67,7 @@ async def make_project(cx, B, hd):
 
 async def auth_off():
     port = "8868"
-    proc = start("/tmp/person_attr_off.duckdb", port, False)
+    proc = start("/tmp/person_attr_off", port, False)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):
@@ -113,7 +113,7 @@ def unit():
     print("== hand-over columns ==")
     from tares.store import Store
     tmp = tempfile.mkdtemp(prefix="person-attr-store-")
-    s = Store(os.path.join(tmp, "store.duckdb"))
+    s = Store(os.path.join(tmp, "store"))
     ann = s.create_person("Ann", "ann@glassflow.dev")["id"]
     ben = s.create_person("Ben", "ben@glassflow.dev")["id"]
     at = datetime.now(timezone.utc)
@@ -132,7 +132,7 @@ def unit():
     ck("store: handing over again clears the finished and taken persons",
        tuple(left) == (ben, None, None) and ho["finished"] is None and ho["takeover"] is None,
        f"{left} {ho}")
-    s.con.close()
+    s.close()
     shutil.rmtree(tmp, ignore_errors=True)
 
 

@@ -24,10 +24,10 @@ PY_LIST = os.path.join(HERE, "ci_list.txt")
 EE_DIR = os.path.join(os.path.dirname(HERE), "ee", "tests")
 EE_PY_LIST = os.path.join(EE_DIR, "ci_list.txt")
 
-SUITES = ["duckdb", "postgres", "mit", "ee", "ee-postgres"]
+SUITES = ["sqlite", "postgres", "mit", "ee", "ee-postgres"]
 
-# Not in the Postgres run: they are about the DuckDB file itself.
-DUCKDB_ONLY = {"test_duckdb_memory", "test_state_postgres"}
+# Not in the Postgres run: they are about the SQLite file itself (none today).
+SQLITE_ONLY: set = set()
 
 # Not in the mit run, where every ee directory is deleted before tares is installed: they look at ee/.
 NEEDS_EE = {"test_ee_packaging"}
@@ -38,8 +38,7 @@ WEIGHT = {
     "test_project_keys": 19, "test_plugin_challenger": 11,
     "test_login": 9, "test_usage": 9,
     "test_github_tickets": 8, "test_degraded": 8, "test_factory_seed": 45, "test_factory_page_times": 90,
-    "test_session_move_archive": 19, "test_merge_queue_ci_rerun": 12,
-    "test_session_digest": 40, "test_session_digest_times": 20,
+    "test_merge_queue_ci_rerun": 12,
 }
 
 
@@ -50,8 +49,8 @@ def names(path):
 
 def items(suite):
     if suite in ("ee", "ee-postgres"):
-        return [t for t in names(EE_PY_LIST) if suite == "ee" or t not in DUCKDB_ONLY]
-    py = [t for t in names(PY_LIST) if suite in ("duckdb", "mit") or t not in DUCKDB_ONLY]
+        return [t for t in names(EE_PY_LIST) if suite == "ee" or t not in SQLITE_ONLY]
+    py = [t for t in names(PY_LIST) if suite in ("sqlite", "mit") or t not in SQLITE_ONLY]
     if suite == "mit":
         py = [t for t in py if t not in NEEDS_EE]
     return py
@@ -69,8 +68,8 @@ def shard(all_items, n, of):
 
 
 def forget_settings_file():
-    """A cell's settings live in tares.sqlite beside its DuckDB file (TR-1480), and 31 tests keep that
-    file at a fixed place in the temp folder, so every one of them shares one tares.sqlite there. Each
+    """A cell keeps everything in tares.sqlite in its data directory, and a test that used the temp
+    folder itself as one would share it with the others. Each
     test starts without what the one before it saved (a seed marker, a provider, an edition).
     /tmp is cleared too: on macOS it is not the temp folder, and many tests keep their files there."""
     for folder in (tempfile.gettempdir(), "/tmp"):
@@ -81,7 +80,7 @@ def forget_settings_file():
                 pass
 
 
-def run(t, suite="duckdb"):
+def run(t, suite="sqlite"):
     forget_settings_file()
     base = EE_DIR if suite in ("ee", "ee-postgres") else HERE
     print(f"== {t} ==", flush=True)
@@ -90,7 +89,7 @@ def run(t, suite="duckdb"):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--suite", choices=SUITES, default="duckdb")
+    p.add_argument("--suite", choices=SUITES, default="sqlite")
     p.add_argument("--shard", type=int, default=1)
     p.add_argument("--of", type=int, default=1)
     p.add_argument("--list", action="store_true", help="print the shard's tests, run nothing")

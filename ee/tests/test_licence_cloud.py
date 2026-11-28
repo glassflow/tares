@@ -24,7 +24,7 @@ licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-licence-cloud-ee-")
 ROOT = "root-token-licence-cloud-ee"
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"

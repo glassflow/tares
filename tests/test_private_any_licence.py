@@ -48,7 +48,7 @@ def ck(l, c, d=""):
 AUTH = "root-token"
 _base = os.path.join(os.environ.get("CLAUDE_JOB_DIR", ""), "tmp")
 TMP = tempfile.mkdtemp(prefix="private-any-licence-", dir=_base if os.path.isdir(_base) else None)
-DB = os.path.join(TMP, "cell.duckdb")
+DB = os.path.join(TMP, "cell")
 
 
 def free_port() -> str:
@@ -100,7 +100,7 @@ def env_for(port: str, licence: str | None) -> dict:
         del env[k]
     env["TARES_HOME"] = os.path.join(TMP, "home")
     os.makedirs(env["TARES_HOME"], exist_ok=True)
-    env.update(TARES_DB=DB, TARES_PORT=port, TARES_OTLP_GRPC_PORT="off", TARES_AUTH_TOKEN=AUTH)
+    env.update(TARES_HOME=DB, TARES_PORT=port, TARES_OTLP_GRPC_PORT="off", TARES_AUTH_TOKEN=AUTH)
     if os.environ.get("TARES_UI_DIST"):
         env["TARES_UI_DIST"] = os.environ["TARES_UI_DIST"]
     if licence:
@@ -162,7 +162,7 @@ def write_team_cell() -> dict:
         store.set_setting("areas", json.dumps([{"repo": "acme/api", "person_id": ann["id"], "note": ""}]))
         return {"ids": ids, "keys": keys}
     finally:
-        store.con.close()
+        store.close()
 
 
 # ── phase 2: project P, made by the system credential, then made private under Ann ──
@@ -191,7 +191,7 @@ def make_project(cell: dict) -> bool:
         store.set_project_lead(cell["p"], cell["ids"]["ann"])
         store.set_project_scope(cell["p"], "private")
     finally:
-        store.con.close()
+        store.close()
     return True
 
 

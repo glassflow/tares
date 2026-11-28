@@ -32,7 +32,7 @@ def cell_db(name):
     return os.path.join(TMP, name, name + ".duckdb")
 
 
-os.environ["TARES_DB"] = cell_db("inproc")
+os.environ["TARES_HOME"] = cell_db("inproc")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
@@ -86,7 +86,7 @@ def H(tok):
 def start(name, **env):
     port = free_port()
     log = open(os.path.join(TMP, name + ".log"), "w")
-    e = {**clean_env(), "TARES_DB": cell_db(name), "TARES_PORT": port,
+    e = {**clean_env(), "TARES_HOME": cell_db(name), "TARES_PORT": port,
          "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": AUTH,
          "TARES_CATALOG": os.path.join(TMP, "none.yaml")}
     e.update(env)

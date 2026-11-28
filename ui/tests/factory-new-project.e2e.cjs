@@ -43,7 +43,7 @@ function startDaemon(port) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-new-project-e2e-"));
   const venvPy = path.join(REPO, ".venv/bin/python");
   const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
-  const env = { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "n.duckdb"),
+  const env = { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_HOME: path.join(tmp, "n"),
                 TARES_CATALOG: path.join(tmp, "none.yaml"), TARES_PORT: String(port), TARES_HOST: "127.0.0.1",
                 TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off",
                 TARES_PR_SYNC_SECONDS: "off", TARES_UI_DIST: path.join(UI_DIR, "dist") };

@@ -27,7 +27,7 @@ scrub_os_environ()
 
 ROOT = "root-token-deleted-private"
 HOME = tempfile.mkdtemp(prefix="tares-deleted-private-")
-os.environ.update({"TARES_DB": os.path.join(HOME, "import.duckdb"),
+os.environ.update({"TARES_HOME": os.path.join(HOME, "import"),
                    "TARES_CATALOG": os.path.join(HOME, "catalog.yaml"),
                    "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": ROOT,
                    "TARES_EDITION": "factory"})
@@ -87,7 +87,7 @@ def reported(sid, mid, ago, project):
 
 @contextlib.asynccontextmanager
 async def cell(db: str):
-    daemon.DB_PATH = db
+    daemon.DATA_DIR = db
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
@@ -153,7 +153,7 @@ def total(rows) -> float:
 
 
 async def main():
-    db = os.path.join(HOME, "cell.duckdb")
+    db = os.path.join(HOME, "cell")
     async with cell(db) as (store, cx):
         held, append = [], store._append_session_first
 

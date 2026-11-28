@@ -5,6 +5,7 @@ names; the real owner, arriving after them, still takes `local`. Runs on a licen
 one-person half is tests/test_owner_claims_local.py.
 """
 import asyncio, os, subprocess, sys, tempfile
+import shutil
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -43,10 +44,8 @@ def _db(name):
 
 
 def start(db, port):
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    shutil.rmtree(db, ignore_errors=True)
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
     return subprocess.Popen(licensed.daemon_argv(), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

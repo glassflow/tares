@@ -1827,13 +1827,13 @@ from tares.crew import codex_record, watch  # noqa: E402
 
 def rows_on_the_cell(tares, source="claude_code"):   # the session source /ingest/codex stores into
     """What the real cell makes of every post the fake cell took: the session store's command rows, by command."""
-    s = Store(str(SCRATCH / f"cell-{len(os.listdir(SCRATCH))}.duckdb"))
+    s = Store(str(SCRATCH / f"cell-{len(os.listdir(SCRATCH))}"))
     conn = ClaudeCodeLines(s, source=source, source_type="agent_session")
     for i in range(0, len(tares.world["ingested"]), 50):
         s.append(conn.map_payload(cell_codex.session_lines(tares.world["ingested"][i:i + 50])))
     sessions = sorted({f.get("sessionId") for f in tares.world["ingested"] if f.get("sessionId")})
     got = s.recorded_commands(source, sessions)
-    s.con.close()
+    s.close()
     return got
 
 

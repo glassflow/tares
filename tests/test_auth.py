@@ -12,7 +12,7 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-DB, PORT, TOKEN = "/tmp/auth.duckdb", "8804", "sekret-123"
+DB, PORT, TOKEN = "/tmp/auth", "8804", "sekret-123"
 LOGIN = "https://app.tares-glassflow.com/login"   # cloud login handoff (TARES_LOGIN_URL)
 
 
@@ -30,7 +30,7 @@ async def _wait(url):
 
 async def main():
     remove_db(DB)
-    env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": PORT,
+    env = {**clean_env(), "TARES_HOME": DB, "TARES_PORT": PORT,
            "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": TOKEN, "TARES_LOGIN_URL": LOGIN}
     proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

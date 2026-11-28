@@ -117,7 +117,7 @@ RESUMED = [bash("sB", 1, "b1", "pytest -q"), send("sB", 2, "m1", "orch", "[TF:RE
 def open_store(d):
     """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: the old
     readers this suite compares with read DuckDB (tests/_old_cell.py)."""
-    s = Store(os.path.join(d, "t.duckdb"))
+    s = Store(os.path.join(d, "t"))
     s.append = lambda envs: append_duckdb_first(s, envs)
     s.set_session_station("sA", "builder-1", "builder", "", "p1", at(0))
     s.set_session_station("sB", "builder-2", "builder", "", "p1", at(0))
@@ -335,7 +335,7 @@ def codex():
     ck("asked for its end (the claim matcher, TR-1598), a row says whether its result arrived and its exit code",
        [(c["command"], c["ended"], c["exit_code"]) for c in ends] == [("ls", True, 0), ("pytest -q && git diff", False, None)]
        and all(k not in c for c in ends for k in ("outcome", "cwd")), ends)
-    s.con.close()
+    s.close()
 
 
 def main():
@@ -481,7 +481,7 @@ def main():
     session_ingest.fill_facts(s)
     ck("the next fill writes it", [c["command"] for c in s.recorded_commands(SRC, ["sF"])] == ["echo f"])
 
-    s.con.close()
+    s.close()
 
     print("== a resumed session repeats lines ==")
     d2 = tempfile.mkdtemp()
@@ -505,7 +505,7 @@ def main():
     session_ingest.fill_facts(s2)
     ck("a fill over the repeated lines gives the same rows", strip_session(s2.protocol_messages(SRC)) == strip_session(ref_m)
        and len(dump(s2)[0]) == len(before2[0]) and len(dump(s2)[1]) == len(before2[1]))
-    s2.con.close()
+    s2.close()
 
     print("== nulls and empties ==")
     d3 = tempfile.mkdtemp()
@@ -531,7 +531,7 @@ def main():
     ck("a protocol message with no body after its tag and no recipient", len(m) == 1 and m[0]["to"] == ""
        and m[0]["first_line"] == "" and m[0]["type"] == "FYI", m)
     ck("no sessions asked for", s3.recorded_commands(SRC, []) == [])
-    s3.con.close()
+    s3.close()
 
     print()
     if FAILS:

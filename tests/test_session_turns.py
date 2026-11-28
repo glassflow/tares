@@ -274,7 +274,7 @@ def batches():
 def open_store(d, record=True):
     """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: the old
     reader this suite compares with reads DuckDB (tests/_old_cell.py)."""
-    s = Store(os.path.join(d, "t.duckdb"))
+    s = Store(os.path.join(d, "t"))
     s.append = lambda envs: append_duckdb_first(s, envs, record=record)
     return s
 
@@ -530,7 +530,7 @@ def main():
     session_ingest.fill_turns(s)
     ck("the next fill writes it", [r["text"] for r in s.person_turns(SRC, ["sX"], at(0))] == ["lost for now"])
 
-    s.con.close()
+    s.close()
 
     print("== the fill ==")
     d2 = tempfile.mkdtemp()
@@ -559,7 +559,7 @@ def main():
     for b in batches():
         s3.append(b)
     ck("the filled rows are the rows live ingest writes", dump(s3) == got)
-    s3.con.close()
+    s3.close()
 
     print("== a later fill reads only what is new ==")
     real_record = session_ingest.record
@@ -586,7 +586,7 @@ def main():
         c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name == session_ingest.TURNS_MARK))
     session_ingest.fill_turns(s2)
     ck("a fill after record changes nothing", dump(s2) == before)
-    s2.con.close()
+    s2.close()
 
     print("== the said rows are cut in the transaction that adds a newer one ==")
     s4 = open_store(tempfile.mkdtemp())
@@ -601,7 +601,7 @@ def main():
     s4.append([edit("sT", "/r/x.py", sec=200), edit("sT", "/r/x.py", sec=150)])
     ck("a file keeps its greatest time, whatever the order of arrival",
        s4.files_touched(SRC, "sT") == ["/r/x.py"] and dump(s4)[2][0][3] == at(200))
-    s4.con.close()
+    s4.close()
 
     print()
     if FAILS:

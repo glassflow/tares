@@ -449,7 +449,7 @@ print("f. through a store")
 
 from tares.store import Store  # noqa: E402
 
-store = Store(str(tmp / "t.duckdb"))
+store = Store(str(tmp / "t"))
 conn = ClaudeCodeLines(store, source="claude_code", source_type="agent_session")
 everything = facts1 + facts2 + usage
 envelopes = conn.map_payload(cell.session_lines(everything))
@@ -505,7 +505,7 @@ ck("an idle conversation's cut-off command reaches the cell as unknown, with no 
 from tares.factory import match_check  # noqa: E402
 ck("the settled cut-off command cannot back a passing claim",
    match_check({"command": "sleep 40", "result": "passed"}, crash_rows)[0] == "differs")
-store.con.close()
+store.close()
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

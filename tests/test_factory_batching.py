@@ -25,7 +25,7 @@ from _env import scrub_os_environ  # noqa: E402
 
 scrub_os_environ()
 _tmp = tempfile.mkdtemp(prefix="test-factory-batching-")
-os.environ["TARES_DB"] = os.path.join(_tmp, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_tmp, "t")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 for var in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
             "OPENAI_API_KEY"):
@@ -100,41 +100,11 @@ def hit(statement) -> None:
         c[0] += 1
 
 
-class CountingCon:
-    """Stands in for the DuckDB connection and counts execute and executemany (a DuckDB
-    connection's own execute cannot be patched)."""
-
-    def __init__(self, con):
-        self._con = con
-
-    def execute(self, *a, **kw):
-        hit(a[0] if a else "")
-        return self._con.execute(*a, **kw)
-
-    def executemany(self, *a, **kw):
-        hit(a[0] if a else "")
-        return self._con.executemany(*a, **kw)
-
-    def __getattr__(self, name):
-        return getattr(self._con, name)
-
-
-def install_counters(store) -> None:
-    """Hook the session store's engine and the old connections (DuckDB, or the state Postgres)."""
+def install_counters(store):
+    """Hook the session store's engine, where every read and write goes."""
     event.listen(store.sessions_db.engine, "before_cursor_execute",
                  lambda conn, cursor, statement, *a: hit(statement))
-    shared = store.sc is store.con
-    store.con = CountingCon(store.con)
-    if shared:
-        store.sc = store.con          # one connection, counted once per call
-        return
-    for name in ("execute", "executemany"):
-        real = getattr(store.sc, name)
 
-        def counted(*a, _real=real, **kw):
-            hit(a[0] if a else "")
-            return _real(*a, **kw)
-        setattr(store.sc, name, counted)
 
 
 def build(store, name: str, n: int) -> str:

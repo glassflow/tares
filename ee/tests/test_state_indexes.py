@@ -37,7 +37,7 @@ def indexes(store, sql: str) -> dict:
 WANT = {"tickets_project": "tickets", "ticket_history_ticket": "ticket_history"}
 tmp = tempfile.mkdtemp()
 
-duck = Store(os.path.join(tmp, "duck.duckdb"), state_dsn="")   # "" keeps the state in DuckDB, even under the harness
+duck = Store(os.path.join(tmp, "duck"), state_dsn="")   # "" keeps the state in DuckDB, even under the harness
 got = indexes(duck, "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'")
 ck("beside DuckDB the SQLite store has tickets_project and ticket_history_ticket",
    all(got.get(k) == v for k, v in WANT.items()), got)
@@ -51,7 +51,7 @@ else:
     schema = "t_" + uuid.uuid4().hex[:16]
     with psycopg.connect(PG, autocommit=True) as c:
         c.execute(f"CREATE SCHEMA {schema}")
-    path = os.path.join(tmp, "pg.duckdb")
+    path = os.path.join(tmp, "pg")
     dsn = f"{PG}?options=-csearch_path%3D{schema}"
     sql = "SELECT indexname, tablename FROM pg_indexes WHERE schemaname = current_schema()"
     s1 = Store(path, state_dsn=dsn)

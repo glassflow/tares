@@ -71,7 +71,7 @@ def reply(s, session, message, at, project=None, model="claude-opus-5-5", i=10, 
 def build():
     """A store with sessions of every kind: a builder with a project, a crew station, a session linked
     to a project, one with nothing, replies across hours, unpriced replies, a reply with no time."""
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     print("  on " + s.sessions_db.dialect)
     seed_station(s, "s1", "builder-1", role="builder", project="p1", crew_id="crew")
     seed_station(s, "s2", "builder-1", role="builder", project="p1", crew_id="crew")
@@ -401,7 +401,7 @@ def a_write_between_the_last_chunk_and_the_end():
 def the_cursor_is_read_in_the_databases_order():
     """Ids whose order differs between Python and a language collation. CI's Postgres sorts by
     bytes, so the three id columns get an ICU collation here, as a cell with en_US.UTF-8 has."""
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     sdb = s.sessions_db
     if sdb.dialect == "postgresql":
         with sdb.begin() as conn:
@@ -550,7 +550,7 @@ def a_large_write_holds_few_locks():
 
 
 def nothing_to_fill():
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     ck("the start-up fill of an empty store locks nothing", locked_by(s._claude_usage_fill) == [[]])
     s._usage_forget_project("nobody")
     reply(s, "s1", "first", T0)

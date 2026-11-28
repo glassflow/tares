@@ -68,7 +68,7 @@ def line(session, etype="assistant", payload=None, sec=None, days=0):
 def open_store():
     """A cell that writes its lines to DuckDB first, then counts them, as a platform cell did before
     Tares 2.0 (tests/_old_cell.py): what this suite was written against."""
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     s.append = lambda envs: append_duckdb_first(s, envs)
     return s
 

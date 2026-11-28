@@ -27,7 +27,7 @@ for key in [k for k in os.environ
 
 TMP = tempfile.mkdtemp()
 TOKEN = "root-token"
-os.environ["TARES_DB"] = os.path.join(TMP, "tares.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "tares")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "catalog.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"

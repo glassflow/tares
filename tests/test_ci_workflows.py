@@ -38,8 +38,8 @@ jobs = ci["jobs"]
 ck("ci.yml: no macOS job (parity-macos.yml has them)",
    not any("macos" in str(j).lower() for j in jobs.values()), ", ".join(n for n, j in jobs.items() if "macos" in str(j).lower()))
 suite = jobs["test"]["strategy"]["matrix"]["suite"]
-ck("ci.yml: the test matrix is duckdb alone on a draft and on main, all three suites otherwise",
-   isinstance(suite, str) and DRAFT in suite and ON_MAIN in suite and "fromJSON" in suite and '["duckdb"]' in suite
+ck("ci.yml: the test matrix is sqlite alone on a draft and on main, all three suites otherwise",
+   isinstance(suite, str) and DRAFT in suite and ON_MAIN in suite and "fromJSON" in suite and '["sqlite"]' in suite
    and '"postgres"' in suite and '"mit"' in suite, str(suite))
 for name in ("test-ee", "wheel-clean", "e2e"):
     cond = str(jobs[name].get("if", ""))

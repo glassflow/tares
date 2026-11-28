@@ -138,7 +138,7 @@ def tares_lists_each_call_once():
     from tares.session_map import ClaudeCodeLines
     from tares.store import Store
     d = tempfile.mkdtemp(prefix="ship-once-")
-    store = Store(os.path.join(d, "t.duckdb"))
+    store = Store(os.path.join(d, "t"))
     c = ClaudeCodeLines(store, source="claude_code", source_type="claude_code")
     v = call("s", 1, "[TF:VERDICT] ok")
     f = call("s", 2, "[TF:FYI] note", ts="2026-11-12T13:04:03.148Z")
@@ -160,7 +160,7 @@ def tares_lists_each_call_once():
     got = [(m["type"], m["first_line"]) for m in store.protocol_messages("claude_code")]
     check("a resumed session's copy of a call is listed once",
           got == [("VERDICT", "ok"), ("FYI", "note")], got)
-    store.con.close()
+    store.close()
     shutil.rmtree(d, ignore_errors=True)
 
 

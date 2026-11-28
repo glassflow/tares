@@ -31,7 +31,7 @@ from _env import scrub_os_environ
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-core-single-person-")
-os.environ["TARES_DB"] = os.path.join(TMP, "one.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "one")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = ROOT = "root-token-core-single-person"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -186,9 +186,9 @@ async def one_person_cell():
 
 
 async def two_person_cell():
-    path = os.path.join(TMP, "two.duckdb")
+    path = os.path.join(TMP, "two")
     _people.seed(path, [("Pat", "pat@example.com")])   # a second person, with no licence behind them
-    daemon.DB_PATH = path   # read once at import: point the new cell at its own file
+    daemon.DATA_DIR = path   # read once at import: point the new cell at its own file
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",

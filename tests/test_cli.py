@@ -17,12 +17,12 @@ def ck(l, c, d=""):
 def test_up_wires_data_home(tmp):
     started = {}
     cli.run_daemon = lambda: started.setdefault("ran", True)  # don't actually serve
-    for k in ("TARES_DB", "TARES_CATALOG"):
+    for k in ("TARES_CATALOG",):
         os.environ.pop(k, None)
     args = types.SimpleNamespace(host="127.0.0.1", port=9999, data_dir=str(tmp), open=False)
     cli._up(args)
     ck("creates the data home", Path(tmp).is_dir())
-    ck("points DB at the data home", os.environ["TARES_DB"] == str(Path(tmp) / "tares.duckdb"), os.environ.get("TARES_DB"))
+    ck("points DB at the data home", os.environ["TARES_HOME"] == str(Path(tmp) / "tares"), os.environ.get("TARES_HOME"))
     ck("no catalog file is pointed at (the source catalog went, TR-1811)", "TARES_CATALOG" not in os.environ)
     ck("sets host/port for the daemon", os.environ["TARES_PORT"] == "9999")
     ck("starts the daemon", started.get("ran") is True)
@@ -30,10 +30,10 @@ def test_up_wires_data_home(tmp):
 
 def test_up_respects_explicit_db():
     cli.run_daemon = lambda: None
-    os.environ["TARES_DB"] = "/custom/path.duckdb"   # user override must win (setdefault)
+    os.environ["TARES_HOME"] = "/custom/path"   # user override must win (setdefault)
     cli._up(types.SimpleNamespace(host="0.0.0.0", port=1, data_dir="/tmp/nf_x", open=False))
-    ck("explicit TARES_DB is not overridden", os.environ["TARES_DB"] == "/custom/path.duckdb")
-    os.environ.pop("TARES_DB", None)
+    ck("explicit TARES_HOME is not overridden", os.environ["TARES_HOME"] == "/custom/path")
+    os.environ.pop("TARES_HOME", None)
 
 
 def test_ui_dist_dev_fallback():
@@ -85,7 +85,7 @@ class _Tty(io.StringIO):
 
 def test_up_asks_nothing():
     d = tempfile.mkdtemp(prefix="nf_cli_up_")
-    for k in ("TARES_DB", "TARES_CATALOG", "TARES_EDITION", "TARES_STATE_DSN", "TARES_AUTH_TOKEN"):
+    for k in ("TARES_CATALOG", "TARES_EDITION", "TARES_STATE_DSN", "TARES_AUTH_TOKEN"):
         os.environ.pop(k, None)
     cli.run_daemon = lambda: None
     old_in, old_out = sys.stdin, sys.stdout
@@ -105,7 +105,7 @@ def test_up_asks_nothing():
     ck("TARES_EDITION is not set for the daemon", os.environ.get("TARES_EDITION") is None)
     ck("the start lines name no edition", "Software Factory" not in out.getvalue()
        and "AI SRE" not in out.getvalue() and "edition" not in out.getvalue(), out.getvalue())
-    for k in ("TARES_DB", "TARES_CATALOG"):
+    for k in ("TARES_CATALOG",):
         os.environ.pop(k, None)
 
     sys.argv = ["tares", "up", "--help"]

@@ -35,7 +35,7 @@ sys.path.insert(0, ROOT)
 os.environ["TZ"] = "UTC"      # the events scan answers times in the machine's zone, the table in UTC
 time.tzset()
 _TMP = tempfile.mkdtemp(prefix="tares-deleted-private-reads-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-deleted-private-reads"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"

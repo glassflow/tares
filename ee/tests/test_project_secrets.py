@@ -26,7 +26,7 @@ import licensed   # scrubs the machine's TARES_* settings and puts the repo and 
 licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-secrets-")
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_LICENSE"] = licensed.test_licence()

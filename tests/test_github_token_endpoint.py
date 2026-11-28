@@ -39,7 +39,7 @@ from _env import scrub_os_environ
 scrub_os_environ()
 
 _TMP = tempfile.mkdtemp(prefix="tares-github-token-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "on.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "on")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = ROOT_KEY = "root-secret"
 os.environ["TARES_PUBLIC_URL"] = "https://cell.example.com"
@@ -828,7 +828,7 @@ async def auth_off():
     daemon.AUTH_TOKEN = ""
     # a folder of its own: the session store is a file beside the database, so the first daemon's
     # projects would still be there
-    daemon.DB_PATH = os.path.join(tempfile.mkdtemp(prefix="off-", dir=_TMP), "off.duckdb")
+    daemon.DATA_DIR = os.path.join(tempfile.mkdtemp(prefix="off-", dir=_TMP), "off")
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         store = app.state.store

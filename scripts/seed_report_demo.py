@@ -668,7 +668,7 @@ def open_store(data_dir: str) -> Store | None:
     """The data dir's store, or None, with the reason printed, when it cannot be opened."""
     try:
         os.makedirs(data_dir, exist_ok=True)
-        return Store(os.path.join(data_dir, "tares.duckdb"))
+        return Store(os.path.join(data_dir, "tares"))
     except (OSError, StoreUnavailable) as e:
         lines = str(e).splitlines()
         print(f"Could not open the data dir {data_dir}. If a Tares daemon is running on it, stop "
