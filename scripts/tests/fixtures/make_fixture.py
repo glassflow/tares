@@ -44,6 +44,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -259,7 +260,7 @@ def build(data: str, dsn: str | None) -> dict:
             "credential": "fx-app", "now": NOW.isoformat(),
             "projects": {"factory": ["uc_lantern01", "uc_harbor002"], "default": "uc_default03",
                          "non_factory": ["uc_challeng4"]},
-            "ticket": tickets[1], "sessions": {"main": s_main, "two": s_two, "old_source": s_old,
+            "sessions": {"main": s_main, "two": s_two, "old_source": s_old,
                                                "archived": s_arch, "partial": s_part, "legacy": s_legacy},
             "pr_events_since": (NOW - timedelta(days=30)).isoformat()}
 
@@ -294,9 +295,13 @@ def main() -> int:
                 sep = "&" if "?" in args.dsn else "?"
                 meta = build(data, f"{args.dsn}{sep}options=-csearch_path%3D{SCHEMA}")
                 dump = subprocess.run(shlex.split(args.pg_dump) + [
-                    "--schema", SCHEMA, "--inserts", "--no-owner", "--no-privileges", "postgres"],
-                    check=True, capture_output=True).stdout
-                with gzip.open(os.path.join(HERE, "cell-1.61.0-postgres.sql.gz"), "wb", mtime=0) as f:
+                    "--schema", SCHEMA, "--inserts", "--no-owner", "--no-privileges",
+                    urllib.parse.urlparse(args.dsn).path.lstrip("/") or "postgres"],
+                    capture_output=True)
+                if dump.returncode:
+                    raise SystemExit(f"pg_dump failed: {dump.stderr.decode()[-2000:]}")
+                dump = dump.stdout
+                with gzip.GzipFile(os.path.join(HERE, "cell-1.61.0-postgres.sql.gz"), "wb", mtime=0) as f:
                     f.write(dump)
                 tar_dir(data, os.path.join(HERE, "cell-1.61.0-postgres.tar.gz"))
             finally:

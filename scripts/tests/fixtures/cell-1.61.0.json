@@ -25,7 +25,6 @@
     "partial": "11111111-0000-4000-a000-000000000005",
     "two": "11111111-0000-4000-a000-000000000002"
   },
-  "ticket": "tk_5c2cda7bbc",
   "version": "1.61.0",
   "webhook_secret": "fixture-webhook-secret"
 }
