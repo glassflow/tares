@@ -29,6 +29,15 @@ What the cell holds, through 1.61.0's own Store and claude_code connector where 
   on fewer rows, a challenger line and a model reply only in DuckDB, and GitHub pull_request events.
 
 The output is the same on every run but for the ids 1.61.0 makes itself (docs, reviews, keys).
+
+A full-size cell, for a run by hand (not in the repo, not in CI):
+
+    uv run scripts/tests/fixtures/make_fixture.py seeded DATA_DIR [--dsn DSN_WITH_SEARCH_PATH]
+
+fills DATA_DIR (and, with --dsn, that Postgres schema) with 1.61.0's own factory seed
+(ee/tests/factory_seed.py at the tag v1.61.0, read with `git show`, with the licence helpers it
+needs: about 1.4 million events, the row counts of a real factory cell), then runs 1.61.0's session
+move to the end, as a 1.61.0 cell does after its start.
 """
 from __future__ import annotations
 
@@ -265,6 +274,53 @@ def build(data: str, dsn: str | None) -> dict:
             "pr_events_since": (NOW - timedelta(days=30)).isoformat()}
 
 
+def seeded(data: str, dsn: str | None) -> None:
+    """The 1.61.0 factory seed in `data`, then the session move to the end."""
+    import asyncio
+    import time
+    kit = tempfile.mkdtemp(prefix="seed161-")
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
+    for path in ("ee/tests/factory_seed.py", "ee/tests/licensed.py", "tests/_env.py", "tests/licence_testkit.py"):
+        os.makedirs(os.path.join(kit, os.path.dirname(path)), exist_ok=True)
+        with open(os.path.join(kit, path), "wb") as f:
+            f.write(subprocess.run(["git", "show", f"v1.61.0:{path}"], cwd=repo, check=True,
+                                   capture_output=True).stdout)
+    sys.path.insert(0, os.path.join(kit, "ee", "tests"))
+    import licensed
+    licensed.install_test_root()
+    import factory_seed as fs
+    os.makedirs(data, exist_ok=True)
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+    os.environ.update({"TARES_DB": os.path.join(data, "tares.duckdb"), "TARES_CATALOG": os.path.join(data, "none.yaml"),
+                       "TARES_LICENSE": licensed.test_licence(), "TARES_AUTH_TOKEN": "root-token-seed",
+                       "TARES_OTLP_GRPC_PORT": "off", "TARES_EDITION": "factory"})
+    if dsn:
+        os.environ["TARES_STATE_DSN"] = dsn
+        os.environ["TARES_ARCHIVE_URL"] = "file://" + os.path.join(data, "archive")
+
+    async def fill():
+        from tares.daemon import make_app
+        fs.freeze_clock()
+        app = make_app()
+        async with app.router.lifespan_context(app):
+            fs.seed(app.state.store)
+    asyncio.run(fill())
+    from tares import session_move
+    from tares.store import Store
+    store = Store(os.environ["TARES_DB"], state_dsn=dsn)
+    session_move.plan(store)
+    while not session_move.complete(store):
+        if not session_move.move_recent(store, limit=50) + session_move.move_old(store, limit=50) \
+                and not session_move.retrying(store):
+            break
+    print("session move:", session_move.counts(store))
+    store.con.execute("CHECKPOINT")
+    store.close()
+    store.con.close()
+    shutil.rmtree(kit, ignore_errors=True)
+
+
 def tar_dir(data: str, path: str) -> None:
     with tarfile.open(path, "w:gz") as tf:
         for name in sorted(os.listdir(data)):
@@ -275,10 +331,16 @@ def tar_dir(data: str, path: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("kind", choices=("sqlite", "postgres"))
+    ap.add_argument("kind", choices=("sqlite", "postgres", "seeded"))
+    ap.add_argument("data", nargs="?", help="seeded: the data directory to fill")
     ap.add_argument("--dsn", help="a Postgres the postgres fixture is made in")
     ap.add_argument("--pg-dump", default="pg_dump", help="the pg_dump command, with its connection options")
     args = ap.parse_args()
+    if args.kind == "seeded":
+        if not args.data:
+            ap.error("seeded needs DATA_DIR")
+        seeded(os.path.abspath(args.data), args.dsn)
+        return 0
     data = tempfile.mkdtemp(prefix="tares161-")
     try:
         if args.kind == "sqlite":
