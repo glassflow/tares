@@ -120,6 +120,14 @@ jobs:
           bash tests/check_ci_list.sh tests/ci_list.txt
           if [ "${{ matrix.suite }}" = postgres ]; then export PYTHONPATH="$PWD/tests/pg_harness"; fi
           python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5
+      # The one-time 1.61.0 to 2.0 migration script (TR-1821) runs through uv in its own environment, as on a
+      # cell; its test moves the fixture cell on SQLite and on this job's Postgres, once (the postgres suite's
+      # first shard). --with-editable gives the test this checkout's tares, for the 2.0 daemon it starts.
+      - name: Migration to 2.0 (scripts/tests/test_migrate_to_2.py)
+        if: matrix.suite == 'postgres' && matrix.shard == 1
+        run: |
+          pip install uv
+          TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres uv run --with-editable . scripts/tests/test_migrate_to_2.py
 
   # The crew's parity scenarios (tests/factory/parity.py) on the Python engine alone, on Linux: each runs
   # in a throwaway crew and must print and write what the bash engine did when its result was recorded
