@@ -5,10 +5,10 @@
  *    quotes and dollar signs escaped.
  *  - Copy the command puts it on the clipboard and says so.
  *  - The old addresses (templates, custom, shared code context, one template) land on the factory page.
- *  - A platform cell still shows the generic setup and the gallery.
  *  - At phone width the page fits; the page's words keep the words list.
  *
- * Runs the real daemon (a factory cell and a platform cell) on scratch data, serving the built console.
+ * Runs the real daemon on scratch data, serving the built console. A cell has one kind since TR-1813, so
+ * there is no platform cell to show the generic setup any more.
  * Run:  npm run build && node tests/factory-new-project.e2e.cjs
  */
 const http = require("http");
@@ -39,13 +39,13 @@ function waitFor(url, tries = 150) {
   });
 }
 
-function startDaemon(port, edition) {
+function startDaemon(port) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-new-project-e2e-"));
   const venvPy = path.join(REPO, ".venv/bin/python");
   const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
   const env = { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "n.duckdb"),
                 TARES_CATALOG: path.join(tmp, "none.yaml"), TARES_PORT: String(port), TARES_HOST: "127.0.0.1",
-                TARES_EDITION: edition, TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off",
+                TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off",
                 TARES_PR_SYNC_SECONDS: "off", TARES_UI_DIST: path.join(UI_DIR, "dist") };
   delete env.TARES_AUTH_TOKEN;
   const d = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], { cwd: REPO, env, stdio: "ignore" });
@@ -54,10 +54,9 @@ function startDaemon(port, edition) {
 }
 
 (async () => {
-  const fac = startDaemon(PORT, "factory");
-  const plat = startDaemon(PORT + 1, "platform");
-  if (!(await waitFor(`${fac.base}/health`)) || !(await waitFor(`${plat.base}/health`))) {
-    console.log("FAIL daemons did not start"); process.exit(1);
+  const fac = startDaemon(PORT);
+  if (!(await waitFor(`${fac.base}/health`))) {
+    console.log("FAIL the daemon did not start"); process.exit(1);
   }
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
   const page_ = async (base, width = 1440) => {
@@ -104,21 +103,9 @@ function startDaemon(port, edition) {
     ck("390: no sideways scroll", over <= 0, String(over));
     if (SHOTS) await n.page.screenshot({ path: path.join(SHOTS, "factory-new-project-390.png"), fullPage: true });
     await n.ctx.close();
-
-    // ---- platform: unchanged
-    const p = await page_(plat.base);
-    await p.page.goto(`${plat.base}/projects/new/templates`);
-    await p.page.getByRole("heading", { name: "Templates" }).waitFor({ timeout: 15000 });
-    ck("platform: the template gallery is still there", (await p.page.getByTestId("factory-new-project").count()) === 0
-       && new URL(p.page.url()).pathname === "/projects/new/templates");
-    await p.page.goto(`${plat.base}/projects/new`);
-    await p.page.waitForLoadState("networkidle");
-    ck("platform: New project is still the generic setup", (await p.page.getByTestId("factory-new-project").count()) === 0
-       && new URL(p.page.url()).pathname === "/projects/new");
-    await p.ctx.close();
   } finally {
     await browser.close();
-    for (const s of [fac, plat]) { try { s.d.kill(); } catch { /* gone */ } fs.rmSync(s.tmp, { recursive: true, force: true }); }
+    for (const s of [fac]) { try { s.d.kill(); } catch { /* gone */ } fs.rmSync(s.tmp, { recursive: true, force: true }); }
   }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

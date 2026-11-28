@@ -132,9 +132,8 @@ ck("e2e: the list is sorted", not msg, msg)
 unlisted = sorted(f.name[:-len(".e2e.cjs")] for f in e2e_list.parent.glob("*.e2e.cjs") if f.name[:-len(".e2e.cjs")] not in e2e)
 ck("e2e: every ui/tests/*.e2e.cjs is in the list", not unlisted, "not listed: " + ", ".join(unlisted))
 pkg = json.loads((ROOT / "ui" / "package.json").read_text())["scripts"]
-platform = re.findall(r"tests/([\w-]+)\.e2e\.cjs", pkg["test:platform"])
-ck("e2e: every suite in `npm run test:platform` is in the list", platform and set(platform) <= set(e2e),
-   ", ".join(sorted(set(platform) - set(e2e))))
+ck("e2e: no `npm run test:platform` any more: its suites went with the platform console (TR-1813)",
+   "test:platform" not in pkg)
 e2e_job = js.get("e2e", "")
 ck("job e2e: runs tests/ci_e2e.py for each shard of its matrix",
    re.search(r"python tests/ci_e2e\.py --shard \$\{\{ matrix\.shard \}\} --of (\d+)", e2e_job) is not None

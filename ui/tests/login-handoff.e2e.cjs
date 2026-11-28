@@ -9,9 +9,8 @@
  * No cloud, no release. The stub mints a real scoped key on the daemon (as the control plane does),
  * so the exchanged token actually works — the console stays authed instead of bouncing to login.
  *
- * Run:  node tests/login-handoff.e2e.cjs     (after a console build; npm run test:platform does both)
- *       TARES_EDITION=factory node tests/login-handoff.e2e.cjs   (the same, on a factory cell)
- * TARES_EDITION picks the cell's edition (default platform); both must land signed in on "/".
+ * Run:  node tests/login-handoff.e2e.cjs     (after a console build; npm run test:e2e does both)
+ * The cell is new (no project, setup not done), so it lands signed in on Set up your factory.
  * Needs: the tares daemon importable (repo .venv or system python with tares installed).
  */
 const http = require("http");
@@ -28,7 +27,6 @@ const DAEMON_PORT = 8808;
 const CP_PORT = 8809;
 const ROOT_TOKEN = "root-secret";
 const LOGIN_URL = `http://localhost:${CP_PORT}/login`;
-const EDITION = process.env.TARES_EDITION || "platform";
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -107,13 +105,12 @@ function waitFor(url, tries = 100) {
   const env = { ...base0, TARES_DB: db, TARES_CATALOG: seed, TARES_PORT: String(DAEMON_PORT),
                 TARES_MCP_PORT: String(DAEMON_PORT + 2), TARES_OTLP_GRPC_PORT: "off",
                 TARES_AUTH_TOKEN: ROOT_TOKEN, TARES_LOGIN_URL: LOGIN_URL,
-                TARES_UI_DIST: path.join(UI_DIR, "dist"), TARES_EDITION: EDITION, PYTHONPATH: REPO };
+                TARES_UI_DIST: path.join(UI_DIR, "dist"), PYTHONPATH: REPO };
   const daemon = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], {
     cwd: REPO, env, stdio: "ignore",
   });
 
   const base = `http://localhost:${DAEMON_PORT}`;
-  console.log(`edition: ${EDITION}`);
   ck("daemon up + serving", await waitFor(`${base}/health`));
 
   const health = await new Promise((res) =>
@@ -153,10 +150,8 @@ function waitFor(url, tries = 100) {
       const still = await page.evaluate(() => localStorage.getItem("tares_token"));
       ck("token persists (console authenticates, no clear)", !!still, "token=" + still);
       ck("stays on the cell (no redirect once authed)", page.url().startsWith(base), "url=" + page.url());
-      // A factory cell lands on its home page. A platform cell keeps Home.tsx: with no project yet
-      // it moves on to /start.
-      const landing = EDITION === "factory" ? "/" : "/start";
-      ck(`lands on ${landing} signed in (${EDITION})`, new URL(page.url()).pathname === landing, "url=" + page.url());
+      // a new cell (no project, setup not done) opens Set up your factory once signed in
+      ck("lands on /setup signed in", new URL(page.url()).pathname === "/setup", "url=" + page.url());
       ck("the app shows, not the login page", !(await page.content()).includes("STUB LOGIN") && (await page.locator("#root *").count()) > 3);
       await ctx.close();
     }
