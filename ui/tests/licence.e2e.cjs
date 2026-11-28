@@ -9,7 +9,6 @@
  *     a valid key and sees the org and seats ("Saved here"), then Remove brings back None. The key text is never
  *     on the page. A person with a read key sees the facts and no textarea.
  *   - expired (factory): the banner is on / and on /settings/advanced; its link opens the licence tab.
- *   - expired (platform): the banner is on / and on /settings?tab=licence.
  *   - over seats (factory): the over-seats banner says how many people and how many seats.
  *   - key in the environment (valid, then not valid): the panel says where the key comes from, shows the reason
  *     for a key that does not check out, and says the environment wins.
@@ -281,32 +280,6 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
             ck(t(`@${w}: the panel has no sideways scroll`), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
             await shot(page, "licence-expired", w);
           }
-          await ctx.close();
-        }
-      }
-    }
-
-    // ── expired, platform edition ──
-    console.log("== expired, platform ==");
-    const plat = await start({ dataDir: tmp("platform"), edition: "platform", licence: "expired" });
-    {
-      const t = (s) => `platform: ${s}`;
-      for (const w of WIDTHS) {
-        for (const p of ["/", "/settings?tab=licence"]) {
-          const { ctx, page, errors } = await open(plat, p, w);
-          const words = await banner(page);
-          ck(t(`${p} @${w}: the banner is there, once`), (await page.getByTestId("licence-banner").count()) === 1 && /licence ended on/.test(words), words);
-          if (!words) { await ctx.close(); continue; }
-          ck(t(`${p} @${w}: its link goes to /settings?tab=licence`), (await page.getByTestId("licence-banner-link").getAttribute("href")) === "/settings?tab=licence");
-          if (p !== "/") {
-            await page.getByTestId("licence-panel").waitFor({ timeout: 15000 });
-            ck(t(`@${w}: the Enterprise licence tab shows the panel`), (await page.getByTestId("licence-org").count()) === 1);
-          } else {
-            await page.getByTestId("licence-banner-link").click();
-            await page.getByTestId("licence-panel").waitFor({ timeout: 15000 });
-            ck(t(`@${w}: the banner link opens the panel`), new URL(page.url()).pathname === "/settings" && new URL(page.url()).searchParams.get("tab") === "licence", page.url());
-          }
-          ck(t(`${p} @${w}: no page error, no crash screen, no sideways scroll`), errors.length === 0 && (await page.getByText("Unexpected Application Error").count()) === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
           await ctx.close();
         }
       }

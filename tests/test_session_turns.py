@@ -35,6 +35,8 @@ from tares.session_store.tables import (metadata, session_commands,  # noqa: E40
                                         session_files, session_ingest_marks, session_said,
                                         session_turns, sessions)
 from tares.store import Store  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
@@ -270,7 +272,10 @@ def batches():
 
 
 def open_store(d, record=True):
+    """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: the old
+    reader this suite compares with reads DuckDB (tests/_old_cell.py)."""
     s = Store(os.path.join(d, "t.duckdb"))
+    s.append = lambda envs: append_duckdb_first(s, envs, record=record)
     return s
 
 

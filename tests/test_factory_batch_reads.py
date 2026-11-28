@@ -224,15 +224,13 @@ def lost_deep_lines(store, t0):
         def emit(self, record):
             said.append(record.getMessage())
 
-    handler, real, raised = Said(level=logging.WARNING), store._factory_writes, None
+    handler, raised = Said(level=logging.WARNING), None
     logging.getLogger("tares.factory_store").addHandler(handler)
-    store._factory_writes = lambda: True
     try:
         store._challenges_not_kept(rows, RuntimeError("down"))
     except Exception as ex:
         raised = type(ex).__name__
     finally:
-        store._factory_writes = real
         logging.getLogger("tares.factory_store").removeHandler(handler)
     ck("saying they are lost does not raise", raised is None, raised)
     line = said[0] if said else ""

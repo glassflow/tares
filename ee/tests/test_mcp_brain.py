@@ -8,7 +8,7 @@ answer says so and lore is not called; daily caps (quick and deep) refuse with 4
 call is kept in brain_calls (tool, question, repos, time, tokens, station, via); an unlicensed cell
 404s every route and a cell without brain settings too.
 
-In process, no ports. The tools list under a licence is checked in test_mcp_editions_ee.
+In process, no ports. The tools list under a licence is checked in test_mcp_outcome_tools_ee.
 
 Run: .venv/bin/python ee/tests/test_mcp_brain.py
 """

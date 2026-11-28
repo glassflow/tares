@@ -22,7 +22,6 @@ licensed.install_test_root()
 TMP = tempfile.mkdtemp(prefix="tares-private-raw-routes-")
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-private-raw"
-os.environ["TARES_EDITION"] = "platform"
 os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_SCHEDULE_CLOCK_SECONDS"] = "3600"

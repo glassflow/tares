@@ -26,6 +26,8 @@ from tares.envelope import Envelope  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import metadata, session_ingest_marks, sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
@@ -51,9 +53,17 @@ def line(session, i, kind="assistant", tool=None, source="claude_code", at=None)
                     text=text_, event_time=at or T0 + timedelta(seconds=i), payload=payload)
 
 
+# a Postgres cell with no TARES_ARCHIVE_URL says once at start that its lines still go to DuckDB
+NO_ARCHIVE = "transcript lines are still written to DuckDB: no archive configured"
+
+
 def fresh_store():
+    """A cell that writes its lines to DuckDB first, then counts them, as a platform cell did before
+    Tares 2.0 (tests/_old_cell.py): what this suite was written against."""
     d = tempfile.mkdtemp()
-    return Store(os.path.join(d, "t.duckdb"))
+    s = Store(os.path.join(d, "t.duckdb"))
+    s.append = lambda envs: append_duckdb_first(s, envs)
+    return s
 
 
 def rows(store):
@@ -243,7 +253,8 @@ def start_output():
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         s.start_session_reconcile().join(30)
-    ck("a start with nothing to catch up on prints nothing", buf.getvalue() == "", buf.getvalue())
+    said = [x for x in buf.getvalue().splitlines() if NO_ARCHIVE not in x]
+    ck("a start with nothing to catch up on prints nothing", said == [], buf.getvalue())
     s._append(sample())
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

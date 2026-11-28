@@ -20,7 +20,7 @@ from fastapi import Request
 from .licence import LicenceRequired
 
 if TYPE_CHECKING:
-    from .projects import Engine as ProjectEngine
+    from .factory_projects import Projects
 
 # the helpers make_app() passes in; each is a method of Host with the same name
 HELPERS = (
@@ -115,8 +115,9 @@ class Host:
         return self._call("hidden_project", p)
 
     # ── projects, tickets and shared ids ──
-    def projects(self) -> ProjectEngine:
-        """The daemon's ProjectEngine, which starts and wires projects."""
+    def projects(self) -> Projects:
+        """The daemon's projects (tares/factory_projects.py): create, get, update, pause, resume,
+        delete and summary."""
         return self._call("projects")
 
     def project_or_404(self, uid: str) -> dict:

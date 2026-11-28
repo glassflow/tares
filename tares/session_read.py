@@ -8,14 +8,14 @@ away, from its parts, merged by `(at, seq)`. The answer is the one DuckDB gives;
 where it came from: `table`, `archive` (every line is in parts), `both`, or `events` (DuckDB, the
 fallback). Anything else reads DuckDB: a session the table does not hold in full, a part that
 cannot be fetched or does not check out (size, MD5, lines), a row that does not parse. A fallback
-logs one line, at most once a minute per session. Nothing is removed from DuckDB in M1. In the
-factory edition with an archive the lines of new sessions are not written there at all (TR-1647), so
+logs one line, at most once a minute per session. Nothing is removed from DuckDB in M1. With an
+archive the lines of new sessions are not written there at all (TR-1647), so
 for them the table and the parts are the only copy.
 
-In the factory edition a session born in the table (`lines_origin = 'table'`, which a verified move
+A session born in the table (`lines_origin = 'table'`, which a verified move
 sets too) is never read from DuckDB (TR-1613). It is answered with what the table and the readable
 parts hold: a row or a part that cannot be read is left out, and one line says so. A source other
-than the session's own answers with no lines. The platform editions fall back as above.
+than the session's own answers with no lines.
 
 The text of a line is not stored: it is rebuilt from the payload with the `render` flags the line
 was ingested with (`ClaudeCodeConnector.line_text`, the same function ingest uses). One difference
@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import exists, func, select
 
-from . import edition, session_archive
+from . import session_archive
 from .session_ingest import TABLE
 from .session_store.tables import session_archive_parts, session_lines, sessions
 
@@ -63,19 +63,11 @@ def _warn(session: str, why: str, fallback: bool = True) -> None:
               f"which may not be all of them ({why})", flush=True)
 
 
-def _factory(store) -> bool:
-    try:
-        return edition.edition(store)[0] == "factory"
-    except Exception:
-        return False
-
-
 def _answer(store, session: str, read):
     """`read(None, seen)` answers only when the table and archive hold the session in full. When
-    they do not, the caller reads DuckDB (None), except in the factory edition for a session born
-    in the table: `read(left_out, {})` then answers with what can be read and notes what it left
-    out, and an error of the session store goes to the caller. The edition is looked at only in
-    that case, so a session read in full costs no statement more."""
+    they do not, the caller reads DuckDB (None), except for a session born in the table:
+    `read(left_out, {})` then answers with what can be read and notes what it left out, and an
+    error of the session store goes to the caller."""
     seen: dict = {}
     why = None
     try:
@@ -84,7 +76,7 @@ def _answer(store, session: str, read):
             return got
     except Exception as e:
         why = f"{type(e).__name__}: {e}"
-    if seen.get("born") and _factory(store):
+    if seen.get("born"):
         left_out: list = []
         got = read(left_out, {})
         if left_out:

@@ -143,55 +143,17 @@ def _cx(timeout: float = 10):
 # stdio (default) is what a local agent spawns. For remote agents (the demo / a server), run with
 # TARES_MCP_TRANSPORT=streamable-http (or sse) and the server listens on MCP_HOST:MCP_PORT — at
 # /mcp (streamable-http) or /sse (sse), proxying tool calls to taresd as usual.
-# What each edition's agent sees (TR-757); the crew's tools stay on everywhere. The outcome tools, listed first on a factory cell (tares/mcp_outcomes.py registers them).
-# The two that read the home page need the factory home, so they stay off platform.
-FACTORY_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
+# The outcome tools (tares/mcp_outcomes.py registers them), listed first. Every other tool the
+# server defines is listed after them, unfiltered, except the ee ones below.
+OUTCOME_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
                            "hand_project_to_crew"})
-FACTORY_ONLY = frozenset({"what_needs_me", "how_is_project"})
 # The tools an ee team adds (Team.mcp_tools(), registered by _register_ee_tools). They show only
-# while the cell's licence allows ee, for every caller, crew stations included. They are in none of
-# the sets above, so the edition filter leaves them alone.
+# while the cell's licence allows ee, for every caller, crew stations included.
 EE_TOOLS: set[str] = set()
 _LICENCE_TEXT = ("licence_required: This needs an enterprise licence. "
                  "https://docs.glassflow.ai/tares/enterprise")
 # what a Tares Cloud cell says instead (tares.licence.CLOUD_WORDS): no licence words, no link
 _CLOUD_TEXT = "This is not available on this workspace right now."
-
-
-def _off_text(name: str, edition: str) -> str:
-    return f"This tool is not part of the {edition} edition of this Tares."
-
-
-# A tidy tool list, not a permission boundary: the daemon checks every call with the caller's own
-# key, and X-Tares-Role is a plain header any client can send. Hiding a tool only keeps the list
-# short for a person; it never decides what a caller may do.
-_SURFACES: dict[str, tuple[float, str]] = {}
-
-
-async def _surface() -> str:
-    """The edition as the daemon says for this caller's token, kept for TARES_MCP_SURFACE_TTL
-    seconds (30). Any error gives "": an unknown edition shows every tool."""
-    tok = _caller("token")
-    now = time.monotonic()
-    hit = _SURFACES.get(tok)
-    try:
-        ttl = float(os.getenv("TARES_MCP_SURFACE_TTL", "30"))
-    except ValueError:
-        ttl = 30.0
-    if hit and now - hit[0] < ttl:
-        return hit[1]
-    try:
-        async with _cx(5) as cx:
-            r = await cx.get(f"{TARESD}/api/whoami")
-        r.raise_for_status()
-        who = r.json()
-        out = str(who["edition"])
-    except Exception:
-        return ""
-    if len(_SURFACES) > 256:
-        _SURFACES.clear()
-    _SURFACES[tok] = (now, out)
-    return out
 
 
 _EE_ON: dict[str, tuple[float, bool]] = {}
@@ -237,40 +199,20 @@ async def _refusal_text() -> str:
     return _CLOUD_TEXT
 
 
-def _visible(name: str, edition: str, station: bool, ee_on: bool = True) -> bool:
-    """Whether a tool is listed (and runs) for this caller on this edition."""
-    if name in EE_TOOLS and not ee_on:
-        return False
-    if station or edition not in ("factory", "sre", "platform"):   # unknown edition: every tool
-        return True
-    if name in FACTORY_ONLY:
-        return edition == "factory"
-    if name in FACTORY_TOOLS:
-        return edition in ("factory", "platform")
-    return True
-
-
 class TaresMCP(FastMCP):
-    """FastMCP that lists, and runs, only the tools the cell's edition shows its caller."""
+    """FastMCP that lists every tool it defines, the outcome tools first, and the ee tools only
+    while the licence allows ee. A tidy list, not a permission boundary: the daemon checks every
+    call with the caller's own key."""
 
     async def list_tools(self):
         tools = await super().list_tools()
-        ee_on = await _ee_on() if EE_TOOLS else True
-        if _caller("role"):   # a crew station sees every tool but the ee ones without a licence
-            return [t for t in tools if t.name not in EE_TOOLS or ee_on]
-        edition = await _surface()
-        tools = [t for t in tools if _visible(t.name, edition, False, ee_on)]
-        first = FACTORY_TOOLS if edition == "factory" else frozenset()
-        return sorted(tools, key=lambda t: t.name not in first)   # stable: outcome tools first
+        if EE_TOOLS and not await _ee_on():
+            tools = [t for t in tools if t.name not in EE_TOOLS]
+        return sorted(tools, key=lambda t: t.name not in OUTCOME_TOOLS)   # stable: outcome tools first
 
     async def call_tool(self, name, arguments):
         if name in EE_TOOLS and not await _ee_on():
             return types.CallToolResult(content=[TextContent(type="text", text=await _refusal_text())])
-        if not _caller("role"):
-            edition = await _surface()
-            if not _visible(name, edition, False):
-                # A CallToolResult skips the output check the server runs on a listed tool.
-                return types.CallToolResult(content=[TextContent(type="text", text=_off_text(name, edition))])
         return await super().call_tool(name, arguments)
 
 
@@ -405,7 +347,7 @@ async def create_project(name: str, goal: str = "") -> str:
     what it is for. Then write its docs with write_doc and its tickets (write_ticket; when they
     live in Linear or GitHub, link_tickets first).
     Returns the project's id and name."""
-    body = {"template": "custom", "kind": "software_factory", "name": name.strip(), "objects": [],
+    body = {"kind": "software_factory", "name": name.strip(),
             **({"goal": goal.strip()} if goal.strip() else {})}
     async with _cx(15) as cx:
         r = await cx.post(f"{TARESD}/api/projects", json=body)
@@ -992,7 +934,7 @@ class _CallerHeaders:
 
 
 from . import mcp_factory  # noqa: E402,F401  (registers the factory's tools on `mcp`)
-from . import mcp_outcomes  # noqa: E402,F401  (the outcome tools of the factory edition)
+from . import mcp_outcomes  # noqa: E402,F401  (the outcome tools)
 
 
 def _register_ee_tools() -> None:

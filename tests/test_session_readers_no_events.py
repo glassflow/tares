@@ -1,13 +1,13 @@
-"""The factory edition reads no transcript line from DuckDB once the one-time move is complete (TR-1613).
+"""A cell reads no transcript line from DuckDB once the one-time move is complete (TR-1613).
 
 A factory cell is seeded the way one looks before the move (lines in DuckDB's events only), the move
 runs, the pages are read, the claude_code rows are deleted from DuckDB's events (in this test only:
 nothing in the product deletes them) and the pages are read again: Home, Crew, a station and one of
 its tool calls, the project, its sessions and tickets, a ticket brief, two conversations and a
 source's field profile answer the same. Then, store by store: a damaged session born in the table is
-not read from DuckDB on a factory cell and still is on a platform one; the passes that caught the
-tables up from DuckDB stop; the usage and challenger fills read the events once; and
-`recent_payloads` reads `session_lines`, leaving out what a hidden project owns.
+not read from DuckDB; the passes that caught the tables up from DuckDB stop; the usage and challenger
+fills read the events once; and `recent_payloads` reads `session_lines`, leaving out what a hidden
+project owns, and answers what DuckDB gives an older cell (tests/_old_cell.py).
 
 The lines are written to both stores here, as they were before the write gate opened (TR-1647);
 tests/test_session_readers_held.py covers lines that were never in DuckDB.
@@ -54,6 +54,8 @@ from tares.session_store.tables import challenges as challenges_table  # noqa: E
 from tares.session_store.tables import (session_archive_parts, session_ingest_marks,  # noqa: E402
                                         session_lines, session_moves, session_usage, sessions)
 from tares.store import Store  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first  # noqa: E402
 
 SRC = "claude_code"
 NOW = now_utc().replace(microsecond=0)
@@ -326,9 +328,11 @@ async def pages():
 
 
 # ── the stores below ─────────────────────────────────────────────────────────────────────────
-def open_store(edition="factory"):
+def open_store(old=False):
+    """A cell; `old`: one that writes its lines to DuckDB first, as a platform cell did."""
     s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
-    s.set_setting("edition", edition)
+    if old:
+        s.append = lambda envs: append_duckdb_first(s, envs)
     return s
 
 
@@ -370,146 +374,125 @@ def damaged(s, session, source=SRC):
 
 def reading():
     print("== a damaged session born in the table (step 1) ==")
-    for edition in ("factory", "platform"):
-        s = open_store(edition)
-        factory = edition == "factory"
+    s = open_store()
 
-        def seed(session, days=0):
-            s.append([env(session, 1, "tool_result", days, result_block("call-1")),
-                      env(session, 2, days=days), env(session, 3, days=days)])
+    def seed(session, days=0):
+        s.append([env(session, 1, "tool_result", days, result_block("call-1")),
+                  env(session, 2, days=days), env(session, 3, days=days)])
 
-        # not every line was written: one row is missing
-        seed("short")
-        with s.sessions_db.begin() as c:
-            c.execute(delete(session_lines).where(session_lines.c.session == "short",
-                                                  session_lines.c.seq == 3))
-        set_row(s, "short", lines_complete=False)
-        rows, where, block, tool_where, out, read = damaged(s, "short")
-        if factory:
-            ck("factory: an incomplete session answers with the rows it has, not from DuckDB",
-               where == "table" and len(rows) == 2 and tool_where == "table" and block
-               and not read, (where, len(rows), read))
-            ck("factory: and says which lines it shows, once", "may not be all of them" in out
-               and "read from DuckDB" not in out and out.count("\n") == 1, out)
-        else:
-            ck("platform: it is read from DuckDB as before",
-               where == "events" and len(rows) == 3 and tool_where == "events" and block and read,
-               (where, len(rows)))
+    # not every line was written: one row is missing
+    seed("short")
+    with s.sessions_db.begin() as c:
+        c.execute(delete(session_lines).where(session_lines.c.session == "short",
+                                              session_lines.c.seq == 3))
+    set_row(s, "short", lines_complete=False)
+    rows, where, block, tool_where, out, read = damaged(s, "short")
+    ck("an incomplete session answers with the rows it has, not from DuckDB",
+       where == "table" and len(rows) == 2 and tool_where == "table" and block
+       and not read, (where, len(rows), read))
+    ck("and says which lines it shows, once", "may not be all of them" in out
+       and "read from DuckDB" not in out and out.count("\n") == 1, out)
 
-        # marked complete, a row gone: the counts do not add up
-        seed("count")
-        with s.sessions_db.begin() as c:
-            c.execute(delete(session_lines).where(session_lines.c.session == "count",
-                                                  session_lines.c.seq == 2))
-        rows, where, _, _, out, read = damaged(s, "count")
-        ck(f"{edition}: a count that does not add up answers from "
-           + ("the table" if factory else "DuckDB"),
-           (where, len(rows), bool(read)) == (("table", 2, False) if factory else ("events", 3, True)),
-           (where, len(rows), out))
-        ck(f"{edition}: with the warning that is true for it",
-           ("read from DuckDB" in out) is not factory and out != "", out)
+    # marked complete, a row gone: the counts do not add up
+    seed("count")
+    with s.sessions_db.begin() as c:
+        c.execute(delete(session_lines).where(session_lines.c.session == "count",
+                                              session_lines.c.seq == 2))
+    rows, where, _, _, out, read = damaged(s, "count")
+    ck("a count that does not add up answers from the table",
+       (where, len(rows), bool(read)) == ("table", 2, False), (where, len(rows), out))
+    ck("with the warning that is true for it", "read from DuckDB" not in out and out != "", out)
 
-        # a row that does not parse
-        seed("bad")
-        with s.sessions_db.begin() as c:
-            c.execute(update(session_lines).where(session_lines.c.session == "bad",
-                                                  session_lines.c.seq == 2).values(payload="nope"))
-        rows, where, _, _, out, read = damaged(s, "bad")
-        ck(f"{edition}: a row that does not parse is " + ("left out" if factory else "read from DuckDB"),
-           (where, len(rows), bool(read)) == (("table", 2, False) if factory else ("events", 3, True))
-           and ("do not parse" in out or not factory), (where, len(rows), out))
+    # a row that does not parse
+    seed("bad")
+    with s.sessions_db.begin() as c:
+        c.execute(update(session_lines).where(session_lines.c.session == "bad",
+                                              session_lines.c.seq == 2).values(payload="nope"))
+    rows, where, _, _, out, read = damaged(s, "bad")
+    ck("a row that does not parse is left out",
+       (where, len(rows), bool(read)) == ("table", 2, False) and "do not parse" in out,
+       (where, len(rows), out))
 
-        # another source than the session's own (a name no session line is stored under, TR-1811)
-        seed("mine")
-        rows, where, block, tool_where, out, read = damaged(s, "mine", source="other_cc")
-        ck(f"{edition}: another source than the session's " + ("has no lines" if factory
-                                                             else "is asked of DuckDB"),
-           (rows, where, block, bool(read)) == ([], "table", None, False) if factory
-           else (where, tool_where, bool(read)) == ("events", "events", True), (rows, where, read))
+    # another source than the session's own (a name no session line is stored under, TR-1811)
+    seed("mine")
+    rows, where, block, tool_where, out, read = damaged(s, "mine", source="other_cc")
+    ck("another source than the session's has no lines",
+       (rows, where, block, bool(read)) == ([], "table", None, False), (rows, where, read))
 
-        # a session from before `lines_origin` still reads DuckDB in both editions
-        seed("older")
-        set_row(s, "older", lines_origin=None, lines_complete=False)
-        rows, where, _, _, out, read = damaged(s, "older")
-        ck(f"{edition}: a session not born in the table is read from DuckDB",
-           where == "events" and len(rows) == 3 and read, (where, len(rows)))
+    # a session from before `lines_origin` still reads DuckDB
+    seed("older")
+    set_row(s, "older", lines_origin=None, lines_complete=False)
+    rows, where, _, _, out, read = damaged(s, "older")
+    ck("a session not born in the table is read from DuckDB",
+       where == "events" and len(rows) == 3 and read, (where, len(rows)))
 
-        # a part that cannot be read
-        seed("parted", days=20)
-        session_move.plan(s)
-        assert session_move.move_old(s) == 1
-        with s.sessions_db.begin() as c:
-            part = c.execute(select(session_archive_parts).where(
-                session_archive_parts.c.session == "parted")).one()
-        ck(f"{edition}: the old session is in the archive",
-           s.key_events_from(SRC, "parted")[1] == "archive")
-        found = [os.path.join(d, f) for d, _, fs in os.walk(ARCHIVE) for f in fs
-                 if os.path.join(d, f).endswith(part.key)]
-        assert len(found) == 1, (part.key, found)
-        os.remove(found[0])
-        rows, where, block, _, out, read = damaged(s, "parted")
-        ck(f"{edition}: a part that cannot be read " + ("leaves its lines out" if factory
-                                                       else "sends the read to DuckDB"),
-           (where, rows, block, bool(read)) == ("archive", [], None, False) if factory
-           else (where, len(rows), bool(read)) == ("events", 3, True), (where, len(rows), out))
+    # a part that cannot be read
+    seed("parted", days=20)
+    session_move.plan(s)
+    assert session_move.move_old(s) == 1
+    with s.sessions_db.begin() as c:
+        part = c.execute(select(session_archive_parts).where(
+            session_archive_parts.c.session == "parted")).one()
+    ck("the old session is in the archive",
+       s.key_events_from(SRC, "parted")[1] == "archive")
+    found = [os.path.join(d, f) for d, _, fs in os.walk(ARCHIVE) for f in fs
+             if os.path.join(d, f).endswith(part.key)]
+    assert len(found) == 1, (part.key, found)
+    os.remove(found[0])
+    rows, where, block, _, out, read = damaged(s, "parted")
+    ck("a part that cannot be read leaves its lines out",
+       (where, rows, block, bool(read)) == ("archive", [], None, False), (where, len(rows), out))
 
-        # a whole session costs no look at the edition
-        seed("whole")
-        with patched(session_read, "_factory", lambda st: (_ for _ in ()).throw(AssertionError())):
-            rows, where = s.key_events_from(SRC, "whole")
-        ck(f"{edition}: a session read in full does not look at the edition",
-           where == "table" and len(rows) == 3, (where, len(rows)))
+    seed("whole")
+    rows, where = s.key_events_from(SRC, "whole")
+    ck("a session read in full comes from the table", where == "table" and len(rows) == 3,
+       (where, len(rows)))
 
-        # the session store fails after the row said the session was born in the table
-        def broken(r):
-            raise RuntimeError("the session store is gone")
-        with patched(session_read, "_row", broken):
-            try:
-                (_, where), _out = said(lambda: s.key_events_from(SRC, "whole"))
-                got = where
-            except RuntimeError:
-                got = "raised"
-        ck(f"{edition}: a session store that fails part way " + ("raises" if factory
-                                                               else "falls back to DuckDB"),
-           got == ("raised" if factory else "events"), got)
-        s.close()
+    # the session store fails after the row said the session was born in the table
+    def broken(r):
+        raise RuntimeError("the session store is gone")
+    with patched(session_read, "_row", broken):
+        try:
+            (_, where), _out = said(lambda: s.key_events_from(SRC, "whole"))
+            got = where
+        except RuntimeError:
+            got = "raised"
+    ck("a session store that fails part way raises", got == "raised", got)
+    s.close()
 
 
 def passes():
     print("== the passes that read DuckDB stop (steps 2 and 3) ==")
-    for edition in ("factory", "platform"):
-        s = open_store(edition)
-        s.append([env("p1", 1, "user"), env("p1", 2), env("p1", 3, "tool_use")])
-        forget_lines(s)
+    s = open_store()
+    s.append([env("p1", 1, "user"), env("p1", 2), env("p1", 3, "tool_use")])
+    forget_lines(s)
 
-        def run():
-            with spying(s) as read:
-                session_ingest.reconcile_sessions(s)
-                a = len(read)
-                session_ingest.fill_facts(s)
-                b = len(read) - a
-                session_ingest.fill_turns(s)
-                return a, b, len(read) - a - b
+    def run():
+        with spying(s) as read:
+            session_ingest.reconcile_sessions(s)
+            a = len(read)
+            session_ingest.fill_facts(s)
+            b = len(read) - a
+            session_ingest.fill_turns(s)
+            return a, b, len(read) - a - b
 
-        with s.sessions_db.begin() as c:
-            c.execute(delete(session_ingest_marks))
-        s._sessions_caught_up = False
-        ck(f"{edition}: before the plan the three passes read DuckDB", all(run()))
-        session_move.plan(s)
-        ck(f"{edition}: with a pending session the move is not complete", not session_move.complete(s))
-        ck(f"{edition}: and they still read DuckDB", all(run()))
-        assert session_move.move_recent(s) == 1
-        ck(f"{edition}: no pending session: complete", session_move.complete(s))
-        with s.sessions_db.begin() as c:
-            c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name.not_in(
-                [session_move.PLANNED, session_ingest.FACTS_FILLED, session_ingest.TURNS_FILLED])))
-        s._sessions_caught_up = False
-        got = run()
-        ck(f"{edition}: after the move they " + ("read nothing from DuckDB" if edition == "factory"
-                                                 else "read DuckDB as before"),
-           got == (0, 0, 0) if edition == "factory" else all(got), got)
-        ck(f"{edition}: and the sessions table counts as caught up", session_ingest.caught_up(s))
-        s.close()
+    with s.sessions_db.begin() as c:
+        c.execute(delete(session_ingest_marks))
+    s._sessions_caught_up = False
+    ck("before the plan the three passes read DuckDB", all(run()))
+    session_move.plan(s)
+    ck("with a pending session the move is not complete", not session_move.complete(s))
+    ck("and they still read DuckDB", all(run()))
+    assert session_move.move_recent(s) == 1
+    ck("no pending session: complete", session_move.complete(s))
+    with s.sessions_db.begin() as c:
+        c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name.not_in(
+            [session_move.PLANNED, session_ingest.FACTS_FILLED, session_ingest.TURNS_FILLED])))
+    s._sessions_caught_up = False
+    got = run()
+    ck("after the move they read nothing from DuckDB", got == (0, 0, 0), got)
+    ck("and the sessions table counts as caught up", session_ingest.caught_up(s))
+    s.close()
 
     # the move can finish before the start-up fills ran, and its own fill of a session can fail
     s = open_store()
@@ -555,94 +538,85 @@ def passes():
 def fills():
     print("== the usage and challenger fills read the events once (step 4) ==")
     usage = {"input_tokens": 5, "output_tokens": 7}
-    for edition in ("factory", "platform"):
-        s = open_store(edition)
+    s = open_store()
+    with s.sessions_db.begin() as c:
+        c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name.in_(
+            [session_ingest.USAGE_FILLED, session_ingest.CHALLENGES_FILLED])))
+    s.append([env("u1", 1, payload={"message": {"id": "msg-1", "model": "claude-opus-5-5",
+                                                "usage": usage, "content": []}}),
+              env("u1", 2, "challenge_commit", labels={"branch": "b1"},
+                  payload={"challenge": {"verdict": "pass"}})])
+
+    def marks():
         with s.sessions_db.begin() as c:
-            c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name.in_(
-                [session_ingest.USAGE_FILLED, session_ingest.CHALLENGES_FILLED])))
-        s.append([env("u1", 1, payload={"message": {"id": "msg-1", "model": "claude-opus-5-5",
-                                                    "usage": usage, "content": []}}),
-                  env("u1", 2, "challenge_commit", labels={"branch": "b1"},
-                      payload={"challenge": {"verdict": "pass"}})])
+            return {r[0] for r in c.execute(select(session_ingest_marks.c.name))}
 
-        def marks():
-            with s.sessions_db.begin() as c:
-                return {r[0] for r in c.execute(select(session_ingest_marks.c.name))}
+    def counts():
+        with s.sessions_db.begin() as c:
+            replies = len(c.execute(select(session_usage.c.message)).all())
+        with s.sessions_db.read() as c:
+            kept = len(c.execute(select(challenges_table.c.branch)).all())
+        return replies, kept
 
-        def counts():
-            with s.sessions_db.begin() as c:
-                replies = len(c.execute(select(session_usage.c.message)).all())
-            with s.sessions_db.read() as c:
-                kept = len(c.execute(select(challenges_table.c.branch)).all())
-            return replies, kept
-
-        def empty():
-            with s.sessions_db.begin() as c:
-                c.execute(delete(session_usage))
-                c.execute(delete(challenges_table))
-
-        def fill():
-            with spying(s) as read:
-                s._claude_usage_fill()
-                s._challenges_fill()
-            return len(read)
-
-        # a fill that fails leaves no mark
-        def broken(*a, **kw):
-            raise RuntimeError("no")
-        empty()
-        raised = []
-        for obj, name, run in ((Store, "_record_challenges", s._challenges_fill),
-                               (claude_usage_store.hourly, "after_write", s._claude_usage_fill)):
-            with patched(obj, name, broken):
-                try:
-                    run()
-                except RuntimeError:
-                    raised.append(name)
-        ck(f"{edition}: a fill that failed leaves no mark",
-           len(raised) == 2 and not marks() & {session_ingest.CHALLENGES_FILLED,
-                                     session_ingest.USAGE_FILLED}, (raised, marks()))
-        empty()
-        reads = fill()
-        ck(f"{edition}: the first fill reads the events and writes both rows",
-           reads == 2 and counts() == (1, 1), (reads, counts()))
-        want = {session_ingest.USAGE_FILLED, session_ingest.CHALLENGES_FILLED}
-        ck(f"{edition}: the factory records the two fills, a platform cell does not",
-           marks() & want == (want if edition == "factory" else set()), marks())
-        empty()
-        reads = fill()
-        ck(f"{edition}: the next fill " + ("reads no event" if edition == "factory"
-                                           else "reads them again"),
-           (reads, counts()) == ((0, (0, 0)) if edition == "factory" else (2, (1, 1))),
-           (reads, counts()))
-        # what the usage fill does besides reading the events runs every time
+    def empty():
         with s.sessions_db.begin() as c:
             c.execute(delete(session_usage))
-            c.execute(session_usage.insert(), [
-                {"session": "u1", "message": "synthetic", "replied_at": NOW, "model": "<synthetic>",
-                 "input_tokens": 1, "output_tokens": 1},
-                {"session": "u1", "message": "unpriced", "replied_at": NOW,
-                 "model": "claude-opus-5-5", "input_tokens": 1000, "output_tokens": 1000}])
-        s._claude_usage_fill()
-        with s.sessions_db.begin() as c:
-            left = {r.message: r.cost_usd for r in c.execute(select(session_usage))}
-        ck(f"{edition}: synthetic rows still go and unpriced replies are still priced",
-           "synthetic" not in left and left.get("unpriced"), left)
-        if edition == "factory":
-            s.set_setting("edition", "platform")
-            empty()
-            reads = fill()
-            ck("switched to platform: the fills read the events again despite the marks",
-               (reads, counts()) == (2, (1, 1)), (reads, counts()))
-        s.close()
+            c.execute(delete(challenges_table))
+
+    def fill():
+        with spying(s) as read:
+            s._claude_usage_fill()
+            s._challenges_fill()
+        return len(read)
+
+    # a fill that fails leaves no mark
+    def broken(*a, **kw):
+        raise RuntimeError("no")
+    empty()
+    raised = []
+    for obj, name, run in ((Store, "_record_challenges", s._challenges_fill),
+                           (claude_usage_store.hourly, "after_write", s._claude_usage_fill)):
+        with patched(obj, name, broken):
+            try:
+                run()
+            except RuntimeError:
+                raised.append(name)
+    ck("a fill that failed leaves no mark",
+       len(raised) == 2 and not marks() & {session_ingest.CHALLENGES_FILLED,
+                                 session_ingest.USAGE_FILLED}, (raised, marks()))
+    empty()
+    reads = fill()
+    ck("the first fill reads the events and writes both rows",
+       reads == 2 and counts() == (1, 1), (reads, counts()))
+    want = {session_ingest.USAGE_FILLED, session_ingest.CHALLENGES_FILLED}
+    ck("the two fills are recorded", marks() & want == want, marks())
+    empty()
+    reads = fill()
+    ck("the next fill reads no event", (reads, counts()) == (0, (0, 0)), (reads, counts()))
+    # what the usage fill does besides reading the events runs every time
+    with s.sessions_db.begin() as c:
+        c.execute(delete(session_usage))
+        c.execute(session_usage.insert(), [
+            {"session": "u1", "message": "synthetic", "replied_at": NOW, "model": "<synthetic>",
+             "input_tokens": 1, "output_tokens": 1},
+            {"session": "u1", "message": "unpriced", "replied_at": NOW,
+             "model": "claude-opus-5-5", "input_tokens": 1000, "output_tokens": 1000}])
+    s._claude_usage_fill()
+    with s.sessions_db.begin() as c:
+        left = {r.message: r.cost_usd for r in c.execute(select(session_usage))}
+    ck("synthetic rows still go and unpriced replies are still priced",
+       "synthetic" not in left and left.get("unpriced"), left)
+    s.close()
 
 
 def payloads():
     print("== recent_payloads reads session_lines (step 5) ==")
     hidden = {"ids": ["uc_hidden"], "names": ["Secret"], "shared": []}
 
-    def build(edition):
-        s = open_store(edition)
+    def build(old=False):
+        s = open_store()
+        if old:      # its lines in DuckDB alone, so what it answers is what DuckDB gives
+            s.append = lambda envs: append_duckdb_first(s, envs, record=False)
         s.link_session("uc_hidden", "linked")
         lines = [env("a", 1), env("a", 2, labels={"tares_project": "secret"}),
                  env("a", 3, labels={"tares_project": "uc_open"}),
@@ -656,7 +630,7 @@ def payloads():
             got = s.recent_payloads(source, limit, exclude=exclude)
         return [p["uuid"] for p in got], len(read)
 
-    f, p = build("factory"), build("platform")
+    f, p = build(), build(old=True)
     for label, kw in (("all of them", {}), ("the newest three", {"limit": 3}),
                       ("without a hidden project's", {"exclude": hidden}),
                       ("with the payload test of a shared source",
@@ -665,12 +639,12 @@ def payloads():
                        {"exclude": {"ids": ["uc_hidden"], "names": ["Secret"]}})):
         got, read = names(f, **kw)
         want, _ = names(p, **kw)
-        ck(f"factory, {label}: what DuckDB gives, read from the table",
+        ck(f"{label}: what DuckDB gives an older cell, read from the table",
            got == want and got and read == 0, (got, want, read))
     kept = names(f, exclude=hidden)[0]
     ck("the hidden label and the linked session are left out, the payload's project is not",
        "u-a-2" not in kept and "u-linked-5" not in kept and "u-a-4" in kept and "u-a-3" in kept, kept)
-    ck("a platform cell reads DuckDB", names(p)[1] == 1)
+    ck("an older cell reads DuckDB", names(p)[1] == 1)
     f.append([env("w1", 1, source="web")])
     ck("another connector's source reads DuckDB", names(f, source="web") == (["u-w1-1"], 1),
        names(f, source="web"))

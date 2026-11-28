@@ -34,6 +34,8 @@ from tares.session_store import SessionStore  # noqa: E402
 from tares.session_archive import FileBackend  # noqa: E402
 from tares.session_store.tables import metadata, session_archive_parts, session_lines, sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
@@ -58,7 +60,11 @@ def line(session, etype="assistant", payload=None, labels=None, source=SRC, sec=
 
 
 def open_store():
-    return Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: this suite
+    compares the table with DuckDB's rows (tests/_old_cell.py)."""
+    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s.append = lambda envs: append_duckdb_first(s, envs)
+    return s
 
 
 def stored(s, session):
@@ -541,7 +547,7 @@ def reads():
     ck("by time, not by arrival", [e["event_time"] for e in s.key_events(SRC, "tie")] == sorted(
         e["event_time"] for e in s.key_events(SRC, "tie")))
 
-    print("== a session the table does not hold in full reads DuckDB ==")
+    print("== a session born in the table is never read from DuckDB (TR-1613) ==")
     s.append(envelopes(SRC, [raw("gap", "user", 1), raw("gap", "assistant", 2)]))
     ev, where = s.key_events_from(SRC, "gap")
     ck("a session born in the table reads the table at once, with no reconcile",
@@ -549,18 +555,17 @@ def reads():
     with s.sessions_db.begin() as c:
         c.execute(sessions.update().where(sessions.c.session == "gap").values(lines_complete=False))
     ev, where = s.key_events_from(SRC, "gap")
-    ck("with the flag false lines_from is events, the lines are all there",
-       row(s, "gap") == (2, False) and where == "events" and len(ev) == 2 and same(ev, duck_read(s, SRC, "gap")[0]), row(s, "gap"))
+    ck("with the flag false lines_from is still table, the lines are all there",
+       row(s, "gap") == (2, False) and where == "table" and len(ev) == 2 and same(ev, duck_read(s, SRC, "gap")[0]), row(s, "gap"))
     with s.sessions_db.begin() as c:
         c.execute(session_lines.delete().where(session_lines.c.session == "t2", session_lines.c.seq == 2))
-    ck("a row the table lost reads DuckDB even though the flag says complete", row(s, "t2") == (3, True)
-       and s.key_events_from(SRC, "t2")[1] == "events" and same(s.key_events(SRC, "t2"), duck_read(s, SRC, "t2")[0]))
-    ck("so does the payload reader and the tool reader", s.key_payload_rows_from(SRC, "t2")[1] == "events"
-       and s.key_tool_result_from(SRC, "t2", "toolu_t2")[1] == "events")
+    got = s.key_events_from(SRC, "t2")
+    ck("a row the table lost: the table answers with the rows it has", row(s, "t2") == (3, True)
+       and got[1] == "table" and len(got[0]) == len(duck_read(s, SRC, "t2")[0]) - 1, (got[1], len(got[0])))
+    ck("so does the payload reader", s.key_payload_rows_from(SRC, "t2")[1] == "table")
     ck("a session with no row in sessions reads DuckDB", s.key_events_from(SRC, "no-such")[1] == "events"
        and s.key_events_from(SRC, "no-such")[0] == [])
-    ck("another source's session of that name reads DuckDB: the table does not know the source",
-       s.key_events_from("other", "t1") == ([], "events"))
+    ck("another source's session of that name has no lines", s.key_events_from("other", "t1") == ([], "table"))
     ck("a missing session on every reader", s.key_payload_rows_from(SRC, "no-such") == ([], "events")
        and s.key_tool_result_from(SRC, "no-such", "x") == (None, "events"))
     s.close()
@@ -624,13 +629,17 @@ def total_of(s, session):
 
 
 def broken_archive():
-    print("== a part that cannot be read falls back to DuckDB and logs one line ==")
+    print("== a part that cannot be read falls back to DuckDB and logs one line (a session from before lines_origin) ==")
     s = open_store()
     folder = tempfile.mkdtemp()
     with archive_at(folder) as b:
         for name in ("missing", "short", "flip", "rot", "count", "none", "sum"):
             make_session(s, name, n=4)
         session_archive.archive_pass(s, b, NOW, limit=10)
+        # sessions from before lines_origin (TR-1606): a session born in the table is never read from
+        # DuckDB (TR-1613, tests/test_session_readers_no_events.py has a part that cannot be read there)
+        with s.sessions_db.begin() as c:
+            c.execute(sessions.update().values(lines_origin=None))
         want = {n: duck_read(s, SRC, n)[0] for n in ("missing", "short", "flip", "rot", "count", "none", "sum")}
         key = lambda n: parts_of(s, n)[0].key
         os.remove(os.path.join(folder, key("missing")))

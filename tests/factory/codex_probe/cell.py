@@ -63,7 +63,7 @@ class Cell:
         self.env.update(TARES_OTLP_GRPC_PORT="off", TARES_HOME=os.path.join(root, "tares-home"),
                         PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring", TARES_AUTH_TOKEN=self.root_token)
         self.daemon = self._spawn("daemon", ["up", "--host", "127.0.0.1", "--port", str(self.port), "--data-dir",
-                                             os.path.join(root, "data"), "--edition", "factory"])
+                                             os.path.join(root, "data")])
         self._wait("the cell", lambda: self.daemon.poll() is None
                    and "integrations" in (self.api("GET", "/health", key="").get("capabilities") or []), 90)
         self.mcp = None

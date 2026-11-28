@@ -5,7 +5,7 @@ repeat it, each reply counted for the project it was stamped with (else its stat
 session's project; the crew's unstamped replies are the crew's), the status line's report on a
 station (its context window, the plan's 5-hour and weekly limits), /usage's limits merged with the
 newer status line reading, a /context reading and the ask for one, meter lines kept off the
-timeline, the fill from replies stored before (and a gap a version that did not count left), a
+timeline, a reply recorded once and priced at the start's pass, a
 project delete, and a private project the caller of the read is not on (neither named nor counted).
 
 Run: .venv/bin/python tests/test_claude_usage.py
@@ -29,7 +29,7 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
 
-from session_helpers import count, delete_rows, rows as session_rows, seed_usage, set_cols
+from session_helpers import delete_rows, rows as session_rows, seed_usage, set_cols
 from tares import claude_usage as cu
 from tares.pricing import cost_usd
 from tares.session_store.tables import session_usage as su
@@ -269,20 +269,15 @@ async def main():
            and d["context_detail"]["categories"][1] == {"name": "Messages", "tokens": 57600, "kind": "used"}
            and d["context_at"] and d["context_asked_at"], d.get("context_detail"))
 
-        print("== the replies stored before ==")
-        delete_rows(store, "session_usage")
-        store._claude_usage_fill()
+        print("== the replies, one row each, recorded as they came in ==")
+        store._claude_usage_fill()     # the start's pass, which prices; DuckDB holds none of the lines
         got_rows = {r["message"]: r for r in session_rows(store, "session_usage")}
         n = (len(got_rows), got_rows["m1"]["output_tokens"], got_rows["m3"]["project"],
              sum(r["cost_usd"] is not None for r in got_rows.values()), got_rows["m2"]["cost_usd"])
-        ck("filled from the stored lines, one row a reply", n[0] == 6 and n[1] == 40, n)
+        ck("one row a reply", n[0] == 6 and n[1] == 40, n)
         ck("with the stamped project, and priced", n[2] == other and n[3] == 5, n)
         ck("an hour's cache writes priced at their rate",
            abs(n[4] - cost_usd("claude-opus-5-5", 2, 20, 1000, 50000, 1000)) < 1e-12, n)
-        delete_rows(store, "session_usage", su.c.message == "m1")
-        store._claude_usage_fill()
-        again = count(store, "session_usage")
-        ck("a gap left by a version that did not count is filled at the next start", again == 6, again)
         from datetime import datetime, timezone
         store.record_reply_usage("b1", "mx", datetime.now(timezone.utc), "claude-opus-5-6", None, None,
                                  {"input_tokens": 5, "output_tokens": 5})

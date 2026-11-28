@@ -22,7 +22,7 @@ os.environ["TARES_EDITION"] = "factory"
 
 import httpx
 
-from tares.projects.icon import ICON_MAX_CODEPOINTS, NOT_ONE_EMOJI, normalize_icon
+from tares.project_icon import ICON_MAX_CODEPOINTS, NOT_ONE_EMOJI, normalize_icon
 
 P = F = 0
 

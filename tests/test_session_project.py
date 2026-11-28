@@ -262,8 +262,8 @@ async def tares(shipped):
         with store.sessions_db.begin() as _c:        # a session the table does not hold in full
             _c.execute(_update(_sessions).values(lines_complete=False))
         r = await cx.get(f"/api/projects/{uid}/sessions/{SID}")
-        ck("the lines come from DuckDB until the table holds them all: lines_from says events",
-           r.json().get("lines_from") == "events", r.json().get("lines_from"))
+        ck("a session born in the table but not marked complete answers from the table (TR-1613)",
+           r.json().get("lines_from") == "table", r.json().get("lines_from"))
         from tares import session_ingest
         session_ingest.reconcile_sessions(store)
         r2 = await cx.get(f"/api/projects/{uid}/sessions/{SID}")

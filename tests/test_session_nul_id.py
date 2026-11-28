@@ -31,6 +31,8 @@ from tares.session_store.tables import (challenges, session_commands,  # noqa: E
                                         session_meters, session_moves, session_states,
                                         session_turns, session_usage, sessions)
 from tares.store import Store  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first, forget_fills  # noqa: E402
 
 SRC = "claude_code"
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
@@ -57,11 +59,9 @@ def attempt(name, fn):
     return got
 
 
-def open_store(edition):
+def open_store():
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
-    s.set_setting("edition", edition)
-    return s
+    return Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
 
 
 def when(sec):
@@ -90,9 +90,9 @@ def duck(s, sql):
         return [r[0] for r in s.con.execute(sql).fetchall()]
 
 
-def posted(edition):
-    print(f"== a posted batch, {edition} edition ==")
-    s = open_store(edition)
+def posted():
+    print("== a posted batch ==")
+    s = open_store()
     conn = ClaudeCodeLines(s, source=SRC, source_type="agent_session")
     no_id = {"type": "user", "uuid": "u9", "timestamp": when(9),
              "message": {"role": "user", "content": "no session"}}
@@ -125,7 +125,7 @@ def posted(edition):
 
 def hold_in_duckdb(s):
     """Three sessions' lines in DuckDB alone, one under an id with a NUL: how a cell upgraded from
-    before TR-1703 holds them. `s` is a platform store, which writes its lines to DuckDB."""
+    before TR-1703 holds them: written to DuckDB alone (tests/_old_cell.py, record=False)."""
     def env(sid, etype, sec, text, payload):
         return Envelope(source=SRC, source_type="agent_session", key_value=sid, event_type=etype,
                         text=text, event_time=T0 + timedelta(seconds=sec), payload=payload,
@@ -139,20 +139,20 @@ def hold_in_duckdb(s):
                 env(sid, "challenge_commit", n + 3, "Challenger reviewed commit abc",
                     {"challenge": {"verdict": "PASS", "sha": f"abc{n}"}})]
 
-    real, keep = session_ingest.record, s._keep_challenges
-    session_ingest.record = lambda *a, **k: None          # DuckDB has the lines, nothing else does
-    s._keep_challenges = lambda *a, **k: None
+    keep = s._keep_challenges
+    s._keep_challenges = lambda *a, **k: None          # DuckDB has the lines, nothing else does
     try:
-        s.append(lines("one", 10) + lines(ODD, 20) + lines("two", 30))
+        append_duckdb_first(s, lines("one", 10) + lines(ODD, 20) + lines("two", 30), record=False)
     finally:
-        session_ingest.record, s._keep_challenges = real, keep
+        s._keep_challenges = keep
+    forget_fills(s)                                   # the start's fills read them
 
 
 def held_by_duckdb():
     """Lines stored under an id with a NUL before TR-1703, and not yet in the sessions tables: what
     the fills of a start find."""
     print("== lines DuckDB already holds under an id with a NUL ==")
-    s = open_store("platform")
+    s = open_store()
     hold_in_duckdb(s)
     pg = s.sessions_db.dialect == "postgresql"
     want = ["one", "two"] if pg else [ODD, "one", "two"]     # SQLite takes the id as it is
@@ -180,9 +180,8 @@ def moved():
     """The one-time move of a factory cell that holds such lines (`session_move.plan` raised on
     Postgres at every start, so nothing moved)."""
     print("== the move of a factory cell that holds them ==")
-    s = open_store("platform")
+    s = open_store()
     hold_in_duckdb(s)
-    s.set_setting("edition", "factory")
     pg = s.sessions_db.dialect == "postgresql"
     want = ["one", "two"] if pg else [ODD, "one", "two"]
     with contextlib.redirect_stdout(io.StringIO()):
@@ -210,7 +209,7 @@ def ticket_view():
     (TR-1710). The session store holds no NUL on Postgres, so the commands are handed in here: the
     check must pass over such an id and still leave out what a session the caller cannot read ran."""
     print("== the ticket view with a NUL in a recorded command's session id ==")
-    s = open_store("factory")
+    s = open_store()
     s.create_project("uc_open", "software_factory", "Open", {})
     s.link_session("uc_open", "mine")
     s.link_session("uc_hidden", "closed")        # a project the caller cannot see
@@ -236,8 +235,7 @@ def ticket_view():
 
 
 def main():
-    for edition in ("platform", "factory"):
-        posted(edition)
+    posted()
     held_by_duckdb()
     moved()
     ticket_view()

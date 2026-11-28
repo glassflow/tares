@@ -1588,11 +1588,7 @@ class FactoryStore:
     def _challenges_not_kept(self, rows: list[tuple], ex: Exception) -> None:
         """Say that `_record_challenges` could not write `rows` (its shape): session and commit
         ids and the error's type only, never the payload or the error's text, which can quote the
-        verdict. On the factory edition they are lost and counted."""
-        if not self._factory_writes():
-            print(f"taresd: keeping {len(rows)} challenger line(s) failed ({type(ex).__name__}); "
-                  "they are copied at the next start", flush=True)
-            return
+        verdict. They are lost and counted."""
         named = []
         for row in rows[:20]:
             try:
@@ -1607,8 +1603,8 @@ class FactoryStore:
 
     def _challenges_fill(self) -> None:
         """Copy challenger lines stored before `challenges` existed, or while a write to it
-        failed. One scan of the events at open, then only the lines `append` records. The factory
-        edition scans once and records it (`challenges_filled`, TR-1613)."""
+        failed. One scan of the events at open, then only the lines `append` records. It scans once
+        and records it (`challenges_filled`, TR-1613)."""
         if session_ingest.filled_once(self, session_ingest.CHALLENGES_FILLED):
             return
         rows = self.con.execute(

@@ -145,8 +145,9 @@ def odd_rows(s) -> None:
             line_count=sessions.c.line_count + len(rows), updated_at=datetime.now(timezone.utc)))
 
 
-def cell(edition="factory", odd=False) -> Store:
-    s = open_store(edition)
+def cell(old=False, odd=False) -> Store:
+    """A cell with the lines; `old`: one that wrote them to DuckDB first, as a platform cell did."""
+    s = open_store(old)
     held._N[0] = 0
     s.append(many_lines() + held.other_lines())
     if odd:
@@ -288,7 +289,7 @@ def same(s, name, read=quick):
 # ── the cases ────────────────────────────────────────────────────────────────────────────────
 def equality():
     print("== from the digest as from the lines ==")
-    p, s = level(cell("platform")), cell()
+    p, s = level(cell(old=True)), cell()
     ck("the lines are only in the session store", duck(s) == 0 and stored(s) == duck(p),
        (duck(s), stored(s), duck(p)))
     USED.clear()
@@ -302,11 +303,11 @@ def equality():
     got = everything(s)
     wrong = [k for k in want if got[k] != want[k]
              and not (k.startswith(("repo", "key_value", "flow", "type", "branch")))]
-    ck("and as a platform cell answers them", not wrong,
+    ck("and as an older cell answers them", not wrong,
        (wrong[:3], got[wrong[0]] if wrong else "", want[wrong[0]] if wrong else ""))
     scan = {k: [e[:2] for e in v] for k, v in labels_read(s).items()}
     base = {k: [e[:2] for e in v] for k, v in labels_read(p).items()}
-    ck("label lists name the same values with the same counts as a platform cell", scan == base,
+    ck("label lists name the same values with the same counts as an older cell", scan == base,
        [(k, scan[k], base[k]) for k in scan if scan[k] != base[k]][:1])
     same(s, "a second time, from what is kept", everything)
     p.close()
@@ -428,12 +429,11 @@ def writers():
     for name, move in (("the move", lambda s: session_move.move_session(s, "S")),
                        ("the move into the archive", lambda s: session_move.move_old_session(
                            s, "old", session_archive.backend_of(s)))):
-        s = open_store("platform")
+        s = open_store(old=True)
         held._N[0] = 0
         s.append(many_lines())
         level(s)                                    # a held line's ingest time is its own time
-        s.set_setting("edition", "factory")
-        s._factory_mode = None
+        del s.append                                # from here on, as a cell writes now
         s.append([one("fresh", ago=3)])         # one session born in the table beside them
         with s.sessions_db.begin() as c:
             c.execute(update(sessions).where(sessions.c.session != "fresh").values(
@@ -492,12 +492,6 @@ def cold_and_warm():
        session_digest.warm(s, stop) is None and digest(s).entries == {})
     s.close()
     ck("closing the store ends the warm-up thread", not th.is_alive())
-    p = cell("platform")
-    with contextlib.redirect_stdout(io.StringIO()) as out:
-        session_digest.start(p).join(30)
-    ck("a platform cell warms nothing and says nothing",
-       "_session_digest" not in p.__dict__ and out.getvalue() == "", out.getvalue())
-    p.close()
 
 
 def bounded():
@@ -584,7 +578,7 @@ NUMBERS = [(None, 5.0), ("1e3", 1005.0), (" 12 ", 17.0), ("\t12\n", 17.0), ("+5"
 def not_numbers():
     print("== a value that is no number (TR-1706) ==")
     values = NO_NUMBER + [v for v, _ in NUMBERS]
-    s = open_store("factory")
+    s = open_store()
     # per value two labels: `in<i>` has it on a line 60 s old, `out<i>` on one two hours old
     good = one("good", ago=30)
     inside, outside = one("recent", ago=60), one("past", ago=7200)
@@ -646,7 +640,7 @@ def not_numbers():
     s.close()
 
     # NaN and the infinities, added up across sessions in either order
-    s = open_store("factory")
+    s = open_store()
     groups = {"a": ("nan", 3), "b": (3, "nan"), "c": ("inf", "-inf"), "d": ("inf", 1),
               "e": (1, "-inf"), "f": ("-inf", "nan"), "g": (1e308, 1e308)}
     lines = []
@@ -668,7 +662,7 @@ def not_numbers():
 
 def edges():
     print("== the quarter hour `since` cuts, a type in another case (TR-1706) ==")
-    s = open_store("factory")
+    s = open_store()
     top = (NOW - timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
 
     def ago(minutes):
@@ -719,7 +713,7 @@ def sound(s) -> tuple:
 def full_cache():
     print("== at the size limit (TR-1706) ==")
     ok = (True,) * 7
-    s = open_store("factory")
+    s = open_store()
     mine = [f"m{i:02d}" for i in range(20)]
     s.append([one(sid, ago=100 + i, repo="shop") for i, sid in enumerate(mine)])
     s.append([one(f"o{i:02d}", ago=100 + i, source=OTHER, repo="shop") for i in range(20)])
@@ -900,7 +894,6 @@ def two_processes():
             note.write(schema)
         cells.append(Store(path, state_dsn=f"{dsn}?options=-csearch_path%3D{schema}"))
     a, b = cells
-    a.set_setting("edition", "factory")
     a.append([one("S", ago=300, repo="a")])
     first = agg(a, LONG)
     ck("the first process counts its own line", first == {"S": 1}, first)

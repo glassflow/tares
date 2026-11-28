@@ -46,8 +46,8 @@ The parts are named by their content (see `session_archive`), so writing them ne
 a committed row points to. They are numbered after the session's last part, so an hourly pass that
 read the session before the move committed runs into the move's part number and rolls back.
 
-The move is `complete` when the plan ran and no session is `pending`. From then on, in the factory
-edition, the passes of `session_ingest` read no claude_code line from DuckDB (`events_done`, TR-1613).
+The move is `complete` when the plan ran and no session is `pending`. From then on the passes of
+`session_ingest` read no claude_code line from DuckDB (`events_done`, TR-1613).
 
 A recent session is moved under `Store._sess_lock`, as the reconcile and `Store.append` take it, so no
 line is counted into it meanwhile. On Postgres the transaction also takes
@@ -81,7 +81,7 @@ from typing import NamedTuple
 
 from sqlalchemy import delete, func, insert, or_, select, text, update
 
-from . import edition, metrics, session_archive, session_ingest
+from . import metrics, session_archive, session_ingest
 from .envelope import Envelope, now_utc
 from .session_archive import ARCHIVE_AFTER_DAYS
 from .session_store.tables import (session_archive_parts, session_ingest_marks, session_lines,
@@ -159,10 +159,9 @@ def complete(store) -> bool:
 
 
 def events_done(store) -> bool:
-    """True in the factory edition once the move is complete: the start-up and ten-minute passes
-    then read no claude_code line from DuckDB's events (TR-1613). The platform editions keep reading
-    them, whatever the ledger says."""
-    return edition.edition(store)[0] == "factory" and complete(store)
+    """True once the move is complete: the start-up and ten-minute passes then read no
+    claude_code line from DuckDB's events (TR-1613)."""
+    return complete(store)
 
 
 def plan(store) -> int:
@@ -786,15 +785,9 @@ def run(store, stop: threading.Event, pause: float = PAUSE, old_pause: float = O
 
 
 def start(store) -> threading.Thread | None:
-    """Run `run` in a background thread, on a factory cell only. `Store.close` stops it and waits.
-    Returns the thread, or None when the move is parked (`MOVE_ENABLED`) or the cell is not a
-    factory."""
+    """Run `run` in a background thread. `Store.close` stops it and waits. Returns the thread, or
+    None when the move is parked (`MOVE_ENABLED`)."""
     if not MOVE_ENABLED:
-        return None
-    try:
-        if edition.edition(store)[0] != "factory":
-            return None
-    except Exception:
         return None
     stop = store._move_stop = threading.Event()
     th = threading.Thread(target=run, args=(store, stop), name="session-move", daemon=True)

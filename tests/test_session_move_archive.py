@@ -29,6 +29,8 @@ from tares.session_archive import FileBackend, S3Backend
 from tares.session_store.tables import (session_archive_parts, session_lines, session_moves,
                                         session_turns, sessions)
 from tares.store import Store
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first, reconcile_as_before  # noqa: E402
 
 # the harness (CI's postgres suite) puts every Store on Postgres; the duckdb and mit suites have
 # TARES_TEST_PG and no harness, so their Stores are on SQLite
@@ -67,12 +69,18 @@ def seed(s, session, n, first_age=20 * DAY, step=60):
 
 
 def open_store(path=None):
-    return Store(path or os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: the
+    cells the one-time move is for (tests/_old_cell.py)."""
+    s = Store(path or os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s.append = lambda envs: append_duckdb_first(s, envs)
+    return s
 
 
 def ready(s):
-    """What the daemon does before the move: the sessions table counts DuckDB's lines, then the plan."""
-    session_ingest.reconcile_sessions(s)
+    """What the daemon does before the move: the sessions table counts DuckDB's lines, then the plan.
+    The count reads DuckDB even once an earlier move here is complete, as an older cell's start did
+    for the sessions seeded after it (a cell now reads no DuckDB line then)."""
+    reconcile_as_before(s)
     session_move.plan(s)
 
 
@@ -818,7 +826,6 @@ def sweep_files():
         used = parts_of(s, "sw")[0]
         ck("the move left the replaced file", tree(root) == sorted(["sw/1.jsonl.gz", used.key])
            and used.part == 2, tree(root))
-        s.set_setting("edition", "factory")
         ck("a young unused file stays", session_archive.sweep(s) == 0 and len(tree(root)) == 2)
         orphan_try = "sw/2-" + "a" * 32 + ".jsonl.gz"        # a try of part 2 that did not finish
         keep = ["sw/3.jsonl.gz",                              # after the last recorded part
@@ -833,11 +840,6 @@ def sweep_files():
         aged(root, young, 6 * DAY)
         everything = tree(root)
 
-        for edition in ("platform", "sre"):
-            s.set_setting("edition", edition)
-            ck(f"a {edition} cell removes nothing", session_archive.sweep(s) == 0
-               and tree(root) == everything)
-        s.set_setting("edition", "factory")
 
         class NoList(FileBackend):
             def files(self):
@@ -920,7 +922,6 @@ def sweep_files():
     print("== no archive folder yet, and no archive ==")
     with own_archive() as root:
         s = open_store()
-        s.set_setting("edition", "factory")
         os.environ["TARES_ARCHIVE_URL"] = "file://" + os.path.join(root, "never")
         ck("a folder that is not there is empty", session_archive.sweep(s) == 0)
         with patched(session_archive, "backend_of", lambda store: None):
@@ -937,7 +938,6 @@ def sweep_and_writers():
     print("== the sweep never runs against a session being written ==")
     with own_archive() as root:
         s = open_store()
-        s.set_setting("edition", "factory")
         seed(s, "wr", 4)
         session_ingest.reconcile_sessions(s)
         session_ingest.record(s, [line("wr", 15 * DAY)])
@@ -1001,7 +1001,6 @@ def sweep_s3():
     client = boto3.client("s3", region_name="us-east-1", aws_access_key_id="test-id",
                           aws_secret_access_key="test-secret")
     s = open_store()
-    s.set_setting("edition", "factory")
     part_row(s, "c1", 2, "c1/2.jsonl.gz")
     b = S3Backend("bkt", "pre/fix/", client=client)
     then = datetime.now(timezone.utc) - timedelta(days=30)

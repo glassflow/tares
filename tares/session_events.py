@@ -1,11 +1,11 @@
 """The transcript lines only the session store holds, for the readers of DuckDB `events` (TR-1647).
 
-In the factory edition new `claude_code` lines are written to the session store alone
+New `claude_code` lines are written to the session store alone
 (`Store._lines_skip_duckdb`). A reader of `events` asks here for what to put after FROM, and runs
 the SQL it always ran. For a session born in the table (`lines_origin = 'table'`, which a verified
 move sets too) the lines come from `session_lines` and the archive, and DuckDB's rows of it are
-left out; every other session is read from DuckDB. The platform editions, and a read that touches
-no such session, get the plain `events` table.
+left out; every other session is read from DuckDB. A read that touches no such session gets the
+plain `events` table.
 
 A born session that is not marked complete has lines the session store refused, and those are in
 DuckDB until the drain copies them (TR-1665). It is read from both: DuckDB's rows, plus the stored
@@ -30,11 +30,11 @@ import json
 import threading
 from collections import Counter, namedtuple
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import func, select
 
-from . import edition, session_archive, session_digest, session_read
+from . import session_archive, session_digest, session_read
 from .session_ingest import TABLE, claude_code_sources
-from .session_store.tables import session_archive_parts, session_lines, sessions, settings
+from .session_store.tables import session_archive_parts, session_lines, sessions
 
 CHUNK = 500                   # sessions, or line numbers, one statement names
 _MIN = session_read._MIN
@@ -190,16 +190,10 @@ class View:
 PLAIN = View()
 
 
-def _born(store, conn, sources, since=None, until=None, key=None, keys=None,
-          factory: bool = False) -> list:
-    """The rows (`_BORN`) of the born sessions a read touches. `_duck_sources` comes first.
-    With `factory`, none unless the cell's edition is factory: `session_read._factory` asked in the
-    same statement, so it costs no round trip of its own."""
+def _born(store, conn, sources, since=None, until=None, key=None, keys=None) -> list:
+    """The rows (`_BORN`) of the born sessions a read touches. `_duck_sources` comes first."""
     c = sessions.c
     q = select(*(c[name] for name in _BORN)).where(c.lines_origin == TABLE)
-    if factory:
-        q = q.where(exists().where(settings.c.key == edition.EDITION_SETTING,
-                                   func.lower(func.trim(settings.c.value)) == "factory"))
     if keys is not None:
         q = q.where(c.session.in_(keys))
     if sources is not None:
@@ -307,7 +301,7 @@ def view(store, sources, since=None, until=None, key=None, filters=None, where=N
     for a stored line and `View.fill` gives it for the rows returned. `counted`: the statement only
     counts and adds up labels, weighing each row by `View.weight`, so lines of one session with the
     same type and labels may come as one row (a trigger asks this on every ingest)."""
-    if (sources is not None and not sources) or not session_read._factory(store):
+    if (sources is not None and not sources):
         return PLAIN
     pushed, types, needles = _pushdown(filters, where)
     key = key if key is not None else pushed
@@ -392,7 +386,7 @@ def newest(store, sources, limit: int, hidden_sessions=frozenset(), hidden_line=
     source) with no window. Only the stored lines that can be among them are loaded: the sessions
     are walked newest first by their last line, until none left can hold a newer one. The caller's
     hidden sessions and lines (`hidden_line(source, labels, payload, at)`) are not counted."""
-    if (sources is not None and not sources) or not session_read._factory(store):
+    if (sources is not None and not sources):
         return PLAIN
     db = store.sessions_db
     _duck_sources(store)
@@ -440,7 +434,7 @@ def grouped(store, sources, need_payload: bool = False) -> View:
     """`events` for a statement that counts the labels of every line of `sources` (None: every
     source). The stored lines of a session that carry the same labels (and payload, when the
     statement looks into it) come as one row with their number in `View.weight`."""
-    if (sources is not None and not sources) or not session_read._factory(store):
+    if (sources is not None and not sources):
         return PLAIN
     _duck_sources(store)
     with store.sessions_db.consistent_read() as c:
@@ -481,8 +475,6 @@ def finish_grouped(store, born: list, rows: list, parts: list) -> list:
 def held_count(store, source: str) -> int:
     """The lines of `source` the events table does not count: what the born sessions hold, less
     the lines DuckDB has of the same sessions."""
-    if not session_read._factory(store):
-        return 0
     t = session_lines.c
     _duck_sources(store)
     with store.sessions_db.read() as conn:

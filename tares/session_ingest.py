@@ -7,8 +7,8 @@ line. Here each line is counted once, as it is stored, into one row per session.
 `caught_up`), and scan events until then (TR-1520), so a cell just upgraded shows right numbers
 at once. Two writers keep the row right:
 
-- `record`, called by `Store.append` after a batch of claude_code lines is committed to DuckDB (in
-  the factory edition `record_first`, before DuckDB, see below). It
+- `record`, which counts a batch of claude_code lines committed to DuckDB (`Store.append` calls
+  `record_first`, before DuckDB, see below). It
   adds the batch to each session's row in one transaction (`ON CONFLICT ... DO UPDATE`), so
   concurrent batches lose nothing.
 - `reconcile_sessions`, run in a background thread at start. It reads the absolute counts from
@@ -19,7 +19,7 @@ at once. Two writers keep the row right:
   chunks it sets the `sessions_caught_up` row in `session_ingest_marks`; a pass that raised does
   not, so the readers stay on the scan and the next start tries again.
 
-In the factory edition the session store is written FIRST (TR-1665, `record_first`): counts, lines,
+The session store is written FIRST (TR-1665, `record_first`): counts, lines,
 facts and turns in one transaction. When the store takes no write, `LinesNotStored` goes up,
 DuckDB gets nothing and `/ingest` answers 503, so the sender sends the same lines again. When the
 store is up but will not take a session's lines, the session is counted and marked
@@ -28,13 +28,13 @@ over later; the request is acknowledged, so one bad line blocks nothing behind i
 session's counts and mark cannot be written, the batch is refused like the first case (TR-1647). A
 DuckDB write that fails after the store's takes the store's back (`take_back`).
 
-With an archive, the factory edition does not write DuckDB at all for the sessions `holdable` names
+With an archive, the cell does not write DuckDB at all for the sessions `holdable` names
 (TR-1479, TR-1647); the readers of DuckDB `events` read those from here (`session_events.py`).
 
-In the factory edition, once the one-time move out of DuckDB is complete (`session_move.complete`:
+Once the one-time move out of DuckDB is complete (`session_move.complete`:
 planned, no session `pending`), `reconcile_sessions` reads nothing from DuckDB, nor do `fill_facts`
 and `fill_turns` once each has finished one pass (TR-1613), and the usage and challenger fills of
-`Store._upgrade` read it once (`filled_once`). The platform editions are as described below.
+`Store._upgrade` read it once (`filled_once`).
 
 The readers know the table has caught up from one row in `session_ingest_marks`, `CAUGHT_UP`. It
 is set by the first complete `reconcile_sessions`, or at once by `Store.__init__` on a cell whose
@@ -77,8 +77,8 @@ origin, starts false, and is set by comparing with DuckDB (every 10 minutes, and
 a week into files and records each file in `session_archive_parts`; the count compared with DuckDB's
 is the rows of `session_lines` plus the `lines` of the parts. `session_read.py` (TR-1507) reads a
 complete session from the table and the parts instead of DuckDB. The table is filled from old events
-once, by `session_move.py` (TR-1609, TR-1611): a background job at the first start of the factory
-edition rebuilds every session from DuckDB's lines and the lines only the table or the archive
+once, by `session_move.py` (TR-1609, TR-1611): a background job at the first start rebuilds every
+session from DuckDB's lines and the lines only the table or the archive
 holds, into the table when its last line is inside the archive window and straight into archive
 parts when it is older, and verifies each. `tares_session_lines_rows` and
 `tares_session_lines_bytes` say how big the table is.
@@ -104,7 +104,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Text, bindparam, delete, exists, func, insert, literal, select, text, update
 
-from . import edition, metrics
+from . import metrics
 from .envelope import now_utc
 from .factory import is_coordination
 from .session_store.tables import (session_archive_parts, session_commands, session_files,
@@ -710,10 +710,10 @@ def record(store, envelopes) -> bool:
     return lines_ok
 
 
-# ── the factory edition writes the session store first (TR-1665) ─────────────────────────────
+# ── the session store is written first (TR-1665) ──────────────────────────────────────────────
 # The factory's pages read only the session store, so a claude_code line is not acknowledged until
 # the store has it, or has a durable mark that says it is missing. `Store.append` calls
-# `record_first` before it writes DuckDB. The platform editions keep `record`, after DuckDB.
+# `record_first` before it writes DuckDB.
 class LinesNotStored(RuntimeError):
     """The sessions database takes no write: the lines are not acknowledged, and nothing of them is
     stored, so the sender sends them again."""
@@ -878,19 +878,15 @@ def mark_drain_todo(store, sids) -> None:
 
 # ── fills the factory runs once ──────────────────────────────────────────────────────────────
 def filled_once(store, name: str) -> bool:
-    """True in the factory edition when the fill `name` has finished before, so it reads DuckDB's
-    events no more (TR-1613). The platform editions run their fills at every open."""
-    if edition.edition(store)[0] != "factory":
-        return False
+    """True when the fill `name` has finished before, so it reads DuckDB's events no more
+    (TR-1613)."""
     with store.sessions_db.read() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == name)).first() is not None
 
 
 def set_filled(store, name: str) -> None:
-    """Record, in the factory edition, that the fill `name` finished. Call it after the fill wrote."""
-    if edition.edition(store)[0] != "factory":
-        return
+    """Record that the fill `name` finished. Call it after the fill wrote."""
     db = store.sessions_db
     stmt = db.upsert(session_ingest_marks).values(name=name, at=now_utc())
     with db.begin() as conn:
@@ -962,7 +958,7 @@ def reconcile_sessions(store, chunk: int = CHUNK) -> int:
     never counted by both. Sets the caught-up row when every chunk has been written (even when it
     found no session). Returns how many sessions it looked at.
 
-    In the factory edition, once the one-time move is complete (`session_move.events_done`), DuckDB
+    Once the one-time move is complete (`session_move.events_done`), DuckDB
     is not read: the caught-up row is set and the mark is left where it was."""
     from . import session_move          # session_move imports this module
     if session_move.events_done(store):
@@ -1133,7 +1129,7 @@ def fill_facts(store, chunk: int = CHUNK) -> int:
     to the newest `ingest_time` read once every chunk is written, so a pass that raised is read
     again from the same place. Returns how many sessions it looked at.
 
-    In the factory edition, once the one-time move is complete and this fill has finished before
+    Once the one-time move is complete and this fill has finished before
     (`FACTS_FILLED`), nothing is read: `record` writes what arrives. A cell where it never finished
     reads once more, so a session whose fill failed during the move is covered."""
     from . import session_move          # session_move imports this module
@@ -1204,7 +1200,7 @@ def fill_turns(store, chunk: int = CHUNK) -> int:
     `ingest_time` read once every chunk is written, so a pass that raised is read again from the
     same place. Returns how many sessions it looked at.
 
-    In the factory edition, once the one-time move is complete and this fill has finished before
+    Once the one-time move is complete and this fill has finished before
     (`TURNS_FILLED`), nothing is read: `record` writes what arrives. A cell where it never finished
     reads once more, so a session whose fill failed during the move is covered."""
     from . import session_move          # session_move imports this module

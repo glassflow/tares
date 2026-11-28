@@ -1,14 +1,14 @@
 """The factory Settings page (TR-738): GET /api/factory/settings.
 
 One read gives the whole page: the tools the crew works with, how far it may go and what it was
-allowed, the model and budget, the keys, the edition and the links to everything else. Nothing is
+allowed, the model and budget, the keys and the links to everything else. Nothing is
 stored here. Each part reads what the cell already keeps (the crew's settings, the grants
 documents, the connections, the keys) and words it for people, so every string is shown as it is.
 The words of a grant are the person's own and are exempt from the word check; a grant that only
 says "D79 A" carries the question of that desk decision beside it.
 
 A change goes through the routes that exist: PUT /api/crew/settings with the one field changed,
-POST /api/grants, PUT /api/settings/edition. `can_change` is false for a read key; those routes
+POST /api/grants. `can_change` is false for a read key; those routes
 refuse it anyway, and the page dims its controls.
 """
 from __future__ import annotations
@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 
 from fastapi import Body, Request
 
-from .. import edition as edition_mod
 from .. import linear as linear_mod
 from .. import providers as providers_mod
 from .. import factory_tools
@@ -32,7 +31,6 @@ GRANT_LINE = re.compile(r'^\s*-\s+"(.*)"\s+\((\d{4}-\d{2}-\d{2})\)\s*$')
 DESK_ANSWER = re.compile(r"^(D\d+)(?:\s+\S{1,20})?$")
 MAX_GRANTS = 200
 REPORTING_DAYS = 7
-OTHER = {"factory": "sre", "sre": "factory", "platform": "factory"}
 
 
 def _text(v) -> str:
@@ -134,7 +132,6 @@ def register(app, store, h, ctx):
         builders = builders if isinstance(builders, int) and 1 <= builders <= 20 else 3
         pace = safe(fx.pace, {}) or {}
         given, total = grants(now)
-        value, _ = edition_mod.edition(store)
         hidden = h.hidden_ids()   # a private project's keys are not counted for a non-member
         keys = [k for k in safe(store.list_api_keys, []) or []
                 if not k.get("revoked_at") and k.get("project") not in hidden]
@@ -160,14 +157,11 @@ def register(app, store, h, ctx):
                                 "text": ("No access keys yet" if not keys
                                          else _count(len(keys), "access key"))},
                        "cloud_team_href": team or None},
-            "edition": {"value": value, "label": edition_mod.NAMES[value],
-                        "can_switch": can_change,
-                        "options": [{"value": e, "label": edition_mod.NAMES[e]}
-                                    for e in edition_mod.EDITIONS if e != value],
-                        "other": {"value": OTHER[value],
-                                  "label": edition_mod.NAMES[OTHER[value]]},
-                        "note": ("Switching changes the screens, not your data. What only the "
-                                 "other edition shows stays reachable under Settings, Advanced.")},
+            # a fixed value the console's Edition tab still reads, until the console drops the tab
+            # (TR-1817): there is one kind of cell, and nothing to switch to
+            "edition": {"value": "factory", "label": "Software Factory", "can_switch": False,
+                        "options": [], "other": {"value": "factory", "label": "Software Factory"},
+                        "note": "This Tares is a software factory."},
         }
 
     # ── Morning status (TR-825): an admin's, like every other change here ────

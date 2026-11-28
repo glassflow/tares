@@ -1,19 +1,17 @@
 /*
- * Browser e2e for TR-768: the route table of the factory edition and Settings, Advanced.
+ * Browser e2e for TR-768: the console's route table and Settings, Advanced.
  *
  * Factory: /settings/advanced lands on Settings; /reviews opens the Reviews page (TR-735), /report the
  * Report page (TR-1667), /docs lands
  * on /projects, a ticket address opens the ticket page (the old ?view=ticket:<ref> goes there too); the menu is Home, Integrations, Projects, Tickets, Reviews, Report, Crew, People, Docs and memory, Settings;
  * / on a new cell (no project, setup not done) opens Set up your factory;
  * ?sample=busy without the browser flag renders the same as /.
- * AI SRE: /timeline is the Timeline page (TR-752); /incidents is the Incidents page (TR-751); /services and /runbooks are their own pages.
- * Platform: /settings/advanced lands on /settings, /reviews and /report on /, Settings has no Advanced tab.
- * Every edition: /welcome/edition lands on /. /feed and /feed?item=x land on / and /?item=x, the query kept (TR-1527). The Advanced tab passes the words check, and is shot at
+ * /welcome/edition and the old AI SRE pages land on /. The Advanced tab passes the words check, and is shot at
  * 1440 and 390 wide. useSample (src/editions/sample.ts) is run as written, with a fake browser, for
  * the flag rule: the address alone never shows sample data.
  *
- * Starts two scratch daemons with an empty cell each (TARES_EDITION factory, platform) on
- * TARES_E2E_PORT (default 8837), +1 and +2, MCP port +20, each with a fresh data directory, and stops only those.
+ * Starts a scratch daemon with an empty cell on TARES_E2E_PORT (default 8837), MCP port +20, with a fresh
+ * data directory, and stops only that one. A cell has no edition since TR-1813.
  * Run:  npm run test:edition-routes     (builds first: the daemon serves ui/dist; tares installed in ../.venv or on PATH)
  * Set SHOTS_DIR to keep screenshots. TARES_E2E_CHROME points Playwright at another Chrome binary.
  */
@@ -32,7 +30,7 @@ const { checkWords } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8837);
 const SHOTS = process.env.SHOTS_DIR;
-const EDITIONS = ["factory", "platform"];   // the AI SRE edition went with TR-1809
+const EDITIONS = ["factory"];   // one kind of cell (TR-1813)
 const base = (e) => `http://127.0.0.1:${PORT + EDITIONS.indexOf(e)}`;
 
 let pass = 0, fail = 0;
@@ -89,7 +87,7 @@ function loadSample(env) {
 
     EDITIONS.forEach((e, i) => {
       homes[e] = fs.mkdtempSync(path.join(os.tmpdir(), `tares-edition-routes-${e}-`));
-      const env = { ...process.env, TARES_EDITION: e, TARES_HOME: homes[e], TARES_PORT: String(PORT + i),
+      const env = { ...process.env, TARES_HOME: homes[e], TARES_PORT: String(PORT + i),
                     TARES_MCP_PORT: String(PORT + 20 + i), TARES_UI_DIST: dist,
                     PYTHONPATH: REPO };   // the venv installs the main checkout; this runs the code under test
       for (const k of ["TARES_SLACK_BOT_TOKEN", "TARES_SLACK_SIGNING_SECRET", "TARES_SLACK_CONNECT_URL", "TARES_AUTH_TOKEN",
@@ -111,17 +109,9 @@ function loadSample(env) {
       await page.waitForLoadState("networkidle");
       await page.locator("main, .main").first().waitFor();
     };
-    // Moves inside the console without a page load.
-    const goInApp = async (page, to) => {
-      await page.evaluate((t) => { history.pushState({}, "", t); window.dispatchEvent(new PopStateEvent("popstate")); }, to);
-      await page.waitForLoadState("networkidle");
-      await page.waitForTimeout(300);
-    };
     // Where "/" ends up: Home opens Start on a cell with no project of its own, else Projects.
     const homeOf = async (page, e) => { await go(page, e, "/"); return where(page); };
     const where = (page) => { const u = new URL(page.url()); return u.pathname + u.search; };
-    const settingsNav = (page) => page.locator('nav[aria-label="Settings"]');
-    const advancedTab = (page) => settingsNav(page).getByRole("button", { name: "Advanced", exact: true });
     const menuLabels = async (page) => (await page.locator('nav[aria-label="Main"] a:not([data-testid="menu-setup"])').allInnerTexts()).map((t) => t.trim());
 
     // 1. factory
@@ -185,35 +175,6 @@ function loadSample(env) {
       await checkWords(narrow.page, ck, "factory 390 Advanced tab");
       await shot(narrow.page, "advanced-factory-390.png");
       await narrow.ctx.close();
-    }
-
-    // 3. platform: today's console, no new path
-    {
-      const e = "platform";
-      const { page, ctx } = await open();
-      await go(page, e, "/settings/advanced");
-      ck("platform: /settings/advanced lands on /settings", where(page) === "/settings", where(page));
-      await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
-      ck("platform: Settings has no Advanced tab", (await advancedTab(page).count()) === 0);
-      await go(page, e, "/settings?tab=advanced");
-      ck("platform: ?tab=advanced shows no Advanced panel", (await page.getByTestId("advanced-panel").count()) === 0
-         && (await advancedTab(page).count()) === 0);
-      const home = await homeOf(page, e);
-      for (const p of ["/reviews", "/report", "/tickets", "/services", "/incidents", "/timeline", "/runbooks", "/welcome/edition"]) {
-        await go(page, e, p);
-        ck(`platform: ${p} lands on /`, where(page) === home && !(await page.locator("main, .main").first().innerText()).includes("does not exist"), where(page));
-      }
-      await goInApp(page, "/docs");
-      ck("platform: /docs lands on /", where(page) === home, where(page));
-      await go(page, e, "/feed?item=x%3Ay&k=1");
-      ck("platform: /feed?item=x lands on /?item=x", where(page) === `${home}?item=x%3Ay&k=1`, where(page));
-      await go(page, e, "/feed");
-      ck("platform: /feed lands on /", where(page) === home, where(page));
-      await go(page, e, "/projects/x/tickets/T1");
-      ck("platform: a ticket address stays and says the page does not exist", where(page) === "/projects/x/tickets/T1"
-         && (await page.locator("main, .main").first().innerText()).includes("does not exist"), where(page));
-      await shot(page, "settings-platform-1440.png");
-      await ctx.close();
     }
   } finally {
     if (browser) await browser.close();

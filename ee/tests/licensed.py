@@ -9,7 +9,7 @@ daemon that trusts that root. Not a test itself.
 
 A licensed scratch daemon, started the way `tares up` starts one, trusting the test root:
 
-    python ee/tests/licensed.py serve --port 8799 --data-dir /tmp/x [--edition factory] [--auth] \\
+    python ee/tests/licensed.py serve --port 8799 --data-dir /tmp/x [--auth] \\
         [--licence valid|expired|over_seats|none|invalid] [--seats N]
 
 A licensed daemon that keeps the environment it is started with (the browser suites):

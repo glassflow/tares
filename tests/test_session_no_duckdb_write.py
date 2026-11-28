@@ -1,11 +1,11 @@
-"""In the factory edition, with an archive, claude_code lines go only to the session store (TR-1479).
+"""With an archive, claude_code lines go only to the session store (TR-1479).
 
-`Store.append` leaves the lines of a claude_code source out of the DuckDB events table when the cell's
-edition is factory and an archive backend exists (the folder archive always does on SQLite; a Postgres
+`Store.append` leaves the lines of a claude_code source out of the DuckDB events table when an archive
+backend exists (the folder archive always does on SQLite; a Postgres
 cell needs TARES_ARCHIVE_URL). A challenger line is still kept in `challenges` (entity counts went in
 TR-1810, and the per source counter `source_stats` in TR-1811; a new database has neither): the readers
 of `events` answer from the session store for them (TR-1647). Every other case writes to DuckDB as
-before, and a factory cell on Postgres with no archive says so once and keeps writing there.
+before, and a cell on Postgres with no archive says so once and keeps writing there.
 
 Plain:                python tests/test_session_no_duckdb_write.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -48,16 +48,13 @@ def line(session, etype="assistant", source=SRC, labels=None):
                     labels=labels or {})
 
 
-def open_store(edition=None, archive=True):
-    """A store of the given edition. `archive` points TARES_ARCHIVE_URL at a folder (or clears it)."""
+def open_store(archive=True):
+    """A store. `archive` points TARES_ARCHIVE_URL at a folder (or clears it)."""
     if archive:
         os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
     else:
         os.environ.pop("TARES_ARCHIVE_URL", None)
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
-    if edition:
-        s.set_setting("edition", edition)
-    return s
+    return Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
 
 
 def duck_count(s, source=SRC):
@@ -94,8 +91,8 @@ def counter():
 
 
 def main():
-    print("== the factory edition, with an archive ==")
-    s = open_store("factory")
+    print("== with an archive ==")
+    s = open_store()
     batch = [line("s1") for _ in range(49)] + [line("s1", "challenge_commit", labels={"branch": "b1"})]
     before = counter()
     s.append(batch)
@@ -107,11 +104,7 @@ def main():
     ck("the session counts 50 lines, complete", got is not None and tuple(got) == (50, True), got)
     ck("challenges holds the challenge line", challenges(s) == 1, challenges(s))
     ck("the DuckDB counter did not move", counter() == before, (before, counter()))
-    plat = open_store("platform")
-    plat.append(batch)
-    ck("a new database has no entity count tables (TR-1810), and the platform cell writes DuckDB",
-       entity_tables(s) == [] and entity_tables(plat) == [] and duck_count(plat) == 50,
-       (entity_tables(s), entity_tables(plat)))
+    ck("a new database has no entity count tables (TR-1810)", entity_tables(s) == [], entity_tables(s))
     s.append([line("s1") for _ in range(5)])
     ck("a second batch adds to session_lines", table_count(s) == 55, table_count(s))
     other = line("s2", source="github")
@@ -128,7 +121,7 @@ def main():
 
     print("== before the sessions table has caught up, the lines go to both ==")
     from tares import session_ingest
-    s = open_store("factory")
+    s = open_store()
     real_cu = session_ingest.caught_up
     session_ingest.caught_up = lambda st: False
     try:
@@ -142,7 +135,7 @@ def main():
 
     print("== a session from before lines_origin keeps its lines in DuckDB (F1) ==")
     from tares import session_ingest as si
-    s = open_store("factory")
+    s = open_store()
     s._archive_on = False                    # the old lines were written to both stores
     s.append([line("old") for _ in range(5)])
     s.append([line("old2") for _ in range(3)])
@@ -161,7 +154,7 @@ def main():
     ck("and the new one", rows["new"] == (2, True), rows["new"])
 
     print("== a session id with a NUL byte does not stop the batch it is in ==")
-    s = open_store("factory")
+    s = open_store()
     odd = "n\x00ul"
     s.append([line("plain"), line(odd)])          # raised on every retry on Postgres
     with s.sessions_db.begin() as c:
@@ -173,7 +166,7 @@ def main():
         ck("SQLite takes both", held == [odd, "plain"] and duck_count(s) == 0, (held, duck_count(s)))
 
     print("== a session a failed write left incomplete keeps its lines in DuckDB ==")
-    s = open_store("factory")
+    s = open_store()
     s.append([line("f1") for _ in range(2)])
     with s.sessions_db.begin() as c:
         c.execute(sessions.update().where(sessions.c.session == "f1").values(lines_complete=False))
@@ -181,7 +174,7 @@ def main():
     ck("its new lines are written to DuckDB", duck_count(s) == 2, duck_count(s))
 
     print("== when the session store takes no write, nothing is stored and the lines are sent again (TR-1665) ==")
-    s = open_store("factory")
+    s = open_store()
     real = s.sessions_db.begin
 
     class Down:
@@ -205,22 +198,11 @@ def main():
     ck("sent again, the lines are held back as usual", (duck_count(s), table_count(s)) == (0, 3),
        (duck_count(s), table_count(s)))
 
-    print("== the platform edition ==")
-    s = open_store("platform")
-    before = counter()
-    s.append([line("p1") for _ in range(10)])
-    ck("lines are written to DuckDB", duck_count(s) == 10, duck_count(s))
-    ck("and to session_lines", table_count(s) == 10, table_count(s))
-    ck("the DuckDB counter moved by 10", counter() == before + 10, (before, counter()))
-    s = open_store(None)
-    s.append([line("p2")])
-    ck("a cell with no edition set writes to DuckDB", duck_count(s) == 1, duck_count(s))
-
     # the store's own backend decides, not the env: CI's duckdb shard sets TARES_TEST_PG without the
     # harness on the path, so its session store is SQLite
     if s.sessions_db.dialect == "postgresql":
-        print("== the factory edition on Postgres with no archive ==")
-        s = open_store("factory", archive=False)
+        print("== Postgres with no archive ==")
+        s = open_store(archive=False)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             s.start_session_reconcile()
@@ -231,12 +213,12 @@ def main():
         ck("and to session_lines", table_count(s) == 8, table_count(s))
         said = out.getvalue().count("transcript lines are still written to DuckDB: no archive configured")
         ck("the cell says so once", said == 1, said)
-        s = open_store("factory", archive=True)
+        s = open_store(archive=True)
         s.append([line("n2")])
         ck("with TARES_ARCHIVE_URL set it leaves DuckDB", duck_count(s) == 0, duck_count(s))
     else:
         print("== SQLite: the folder archive is always there ==")
-        s = open_store("factory", archive=False)
+        s = open_store(archive=False)
         s.append([line("n1")])
         ck("a factory cell with no URL still leaves DuckDB", duck_count(s) == 0, duck_count(s))
 

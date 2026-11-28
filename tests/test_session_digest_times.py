@@ -99,7 +99,7 @@ def judge(name, times, fast, slow, same, answer) -> None:
 
 
 def main() -> int:
-    s = open_store("factory")
+    s = open_store()
     t = time.perf_counter()
     fill(s)
     print(f"{LINES} lines of {SESSIONS} sessions written in {time.perf_counter() - t:.1f} s")

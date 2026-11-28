@@ -9,8 +9,6 @@ Cases:
   settings_copy      a cell from before the move: DuckDB's settings rows arrive in SQLite, counts
                      verified, one ledger row per moved table, DuckDB untouched
   legacy_file        sessions.sqlite becomes tares.sqlite on start, with its -wal and -shm files
-  cli_edition        tares up reads the edition from tares.sqlite beside the data file, not from
-                     DuckDB's copy; a changed edition is the one it sees
   copy_units         _from_duckdb parses a JSONText column, _duckdb_columns skips a column DuckDB
                      lacks, and a rename that stops half way is finished by the next start
   takeover_unit      takeover(): create, add a column, error on an extra column, types ignored,
@@ -1165,39 +1163,6 @@ def projects_methods():
             ("delete_github_credential", lambda: s.delete_github_credential("locked"))):
         ck(f"{name} waits for the write lock", _waits_for_write_lock(s, call))
     s.close()
-
-
-def cli_edition():
-    print("== tares up reads the edition from tares.sqlite ==")
-    from tares import cli
-    keep = os.environ.pop("TARES_STATE_DSN", None)
-    try:
-        d = tempfile.mkdtemp()
-        path = os.path.join(d, "t.duckdb")
-        s = Store(path, state_dsn="")
-        s.set_setting("edition", "factory")
-        s.close()
-        ck("the edition saved in the session store is the one the CLI reads", cli._stored_edition(path) == "factory",
-           cli._stored_edition(path))
-        s = Store(path, state_dsn="")
-        s.set_setting("edition", "sre")
-        s.close()
-        ck("and a changed one is read as changed (DuckDB's copy is not what it sees)",
-           cli._stored_edition(path) == "sre", cli._stored_edition(path))
-        # DuckDB's own copy says something else: the session store wins
-        con = duckdb.connect(path)
-        con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP)")
-        con.execute("INSERT INTO settings (key, value, updated_at) VALUES ('edition', 'platform', now())")
-        con.close()
-        ck("DuckDB's older copy does not win over the session store", cli._stored_edition(path) == "sre",
-           cli._stored_edition(path))
-        # no session store file at all: DuckDB's copy is the fallback (a cell that has not moved yet)
-        d2, path2, _ = _legacy_cell()
-        ck("a cell that has not moved yet answers from DuckDB", cli._stored_edition(path2) == "factory",
-           cli._stored_edition(path2))
-    finally:
-        if keep is not None:
-            os.environ["TARES_STATE_DSN"] = keep
 
 
 def copy_units():
@@ -4096,8 +4061,6 @@ if __name__ == "__main__":
     if not HARNESS:
         settings_copy()
     legacy_file()
-    if not HARNESS:
-        cli_edition()
     copy_units()
     sqlite_and_pg_units()
     ddl_skips()

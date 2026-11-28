@@ -1,5 +1,6 @@
 """Instance metering, GET /api/usage. Real daemon: file sizes match the db on disk, the event count is
-the stored lines (no per source counts since the source catalog went, TR-1811), the TARES_MAX_DB_SIZE
+DuckDB's rows, which a Claude Code line no longer reaches (it goes to the session store, TR-1813; no per
+source counts since the source catalog went, TR-1811), the TARES_MAX_DB_SIZE
 denominator drives max_bytes/pct_used (null when unset), the endpoint is a read scope (ingest-only
 keys are refused), and the response stays fast as the event count grows (no table scan).
 """
@@ -10,6 +11,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import clean_env, remove_db
 
 from tares.daemon import _parse_size
+import tares.store as _store
+
+# With an archive (always on SQLite) a Claude Code line goes to the session store alone; a Postgres cell
+# with no TARES_ARCHIVE_URL (the harness, tests/pg_harness) still writes DuckDB too. The daemon this test
+# starts inherits the same environment.
+ON_PG = _store.Store.__init__.__name__ == "_init"
+
+
+def duck(n):
+    """How many rows DuckDB holds after `n` lines were posted."""
+    return n if ON_PG else 0
 
 P = F = 0
 def ck(l, c, d=""):
@@ -96,7 +108,7 @@ async def main():
             ck("no TARES_MAX_DB_SIZE -> pct_used against the volume",
                u["pct_used"] is not None and 0 <= u["pct_used"] < 100, str(u["pct_used"]))
             ck("ingest not paused on a roomy volume", u["ingest_paused"] is False, str(u))
-            ck("events total", u["events"] == 25, str(u["events"]))
+            ck("events counts DuckDB's rows", u["events"] == duck(25), str(u["events"]))
             ck("no per source counts", u["sources"] == [], str(u["sources"]))
             ck("agent_runs / dispatch_deliveries present",
                u["agent_runs"] == 0 and u["dispatch_deliveries"] == 0, str(u))
@@ -107,14 +119,14 @@ async def main():
                 await ingest(cx, B, lines(f"big{k}", 1000, size=300), timeout=120)
             t0 = time.perf_counter(); u2 = (await cx.get(f"{B}/api/usage")).json()
             big = time.perf_counter() - t0
-            ck("counted the new events", u2["events"] == 5025, str(u2["events"]))
+            ck("counted the new rows", u2["events"] == duck(5025), str(u2["events"]))
             ck("response time flat at 5k events (no scan)", big < max(0.25, small * 5),
                f"{small*1000:.1f}ms at 25 events -> {big*1000:.1f}ms at 5k")
     finally:
         proc.terminate(); proc.wait(timeout=10)
 
     # ── a limit the data already exceeds: ingest refused, health says why ──
-    proc = _boot(TARES_MAX_DB_SIZE="1Mi")
+    proc = _boot(TARES_MAX_DB_SIZE="100Ki")   # less than the DuckDB file alone
     try:
         if not await _wait(f"{B}/health"):
             ck("daemon up (tiny limit)", False); return
@@ -130,7 +142,7 @@ async def main():
             ck("a webhook delivery is refused with 507 too", r.status_code == 507, str(r.status_code))
             ck("reads still work", (await cx.get(f"{B}/api/projects")).status_code == 200)
             u2 = (await cx.get(f"{B}/api/usage")).json()
-            ck("nothing was stored while paused", u2["events"] == 5025, str(u2["events"]))
+            ck("nothing was stored while paused", u2["events"] == duck(5025), str(u2["events"]))
     finally:
         proc.terminate(); proc.wait(timeout=10)
 
@@ -153,7 +165,7 @@ async def main():
             expect = round(100 * (u["db_bytes"] + u["wal_bytes"]) / (1 << 30), 2)
             ck("pct_used = (db+wal)/max as a percentage", u["pct_used"] == expect and u["pct_used"] > 0,
                f"{u['pct_used']} vs {expect}")
-            ck("counts survived the restart", u["events"] == 5025, str(u["events"]))
+            ck("counts survived the restart", u["events"] == duck(5025), str(u["events"]))
             ck("ingest resumes under a roomier limit", u["ingest_paused"] is False
                and (await ingest(cx, B, lines("after", 1), headers=H(ing_key))).status_code == 202)
     finally:

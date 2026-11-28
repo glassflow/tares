@@ -4,8 +4,8 @@
  * The page has a two-level sidebar (Crew, Models, Team, Workspace, Advanced) in place of the
  * main menu, with a Back link, and shows one item at a time. Each change goes through the route that exists and is read back from the cell:
  * builders at once, the second check, pacing, how far the crew may go (merging on its own asks first),
- * a grant, the edition. A grant shows its words and, for "D79 A", the question it answers. A read key
- * sees the page with every control dimmed and disabled, and no way to switch the edition. Markup in a
+ * a grant. The Edition item names the factory and offers no switch. A grant shows its words and, for
+ * "D79 A", the question it answers. A read key sees the page with every control dimmed and disabled. Markup in a
  * grant stays text. Each load is one read of the cell. Every state shows only words from words.json
  * (a grant's own words and names are exempt) and none scrolls sideways.
  *
@@ -604,24 +604,11 @@ const until = async (fn, tries = 40) => {
     await settle(page);
     ck("and shows first, given today", /close stale pull requests/.test(await grants.first().innerText()) && /given today/.test(await grants.first().innerText()), await grants.first().innerText());
 
-    // 8. the edition
+    // 8. the edition: one kind of cell since TR-1813, nothing to switch to
     await go(page, "edition");
-    ck("the edition is Software Factory, with the note", /Software Factory/.test(await text(page, "row-edition")) && /Switching changes the screens, not your data/.test(await text(page, "row-edition")));
-    ck("an admin is offered the switch to AI SRE", (await text(page, "edition-sre")) === "Switch to AI SRE");
-    await page.getByTestId("edition-sre").click();
-    const ed = page.getByTestId("confirm-edition");
-    await ed.waitFor();
-    ck("the switch asks first, with the note", /Switch to AI SRE\?/.test(await ed.innerText()) && /not your data/.test(await ed.innerText()));
-    await checkWords(page, ck, "confirm edition");
-    await shot(page, "live-confirm-edition-1440.png");
-    await ed.getByRole("button", { name: "Cancel" }).click();
-    ck("Cancel leaves the edition alone", (await api(TOKEN, "GET", "/api/settings/edition")).body.edition === "factory");
-    await page.getByTestId("edition-sre").click();
-    await ed.waitFor();
-    await ed.getByRole("button", { name: "Switch to AI SRE" }).click();
-    ck("confirming switches the cell", await until(async () => (await api(TOKEN, "GET", "/api/settings/edition")).body.edition === "sre"));
-    await settle(page);
-    await api(TOKEN, "PUT", "/api/settings/edition", { edition: "factory" });
+    ck("the edition is Software Factory", /Software Factory/.test(await text(page, "row-edition")), await text(page, "row-edition"));
+    ck("and no switch is offered", (await page.locator('[data-testid^="edition-"]').filter({ hasText: "Switch to" }).count()) === 0);
+    ck("the edition switch is gone from the cell", (await api(TOKEN, "GET", "/api/settings/edition")).status === 404);
 
     // 10. the old addresses still land on the right item
     for (const [address, id] of [["/settings#crew", "crew"], ["/settings#models", "providers"], ["/settings?tab=anthropic", "providers"],

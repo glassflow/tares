@@ -37,6 +37,8 @@ from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import (session_archive_parts, session_commands,  # noqa: E402
                                         session_lines, session_moves, session_turns, sessions)
 from tares.store import Store  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first, reconcile_as_before  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
 # the harness (CI's postgres suite) puts every Store on Postgres; the duckdb and mit suites have
@@ -68,7 +70,11 @@ def line(session, at, etype="assistant", text_="t", block=None):
 
 
 def open_store():
-    return Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: the
+    cells the one-time move is for (tests/_old_cell.py)."""
+    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s.append = lambda envs: append_duckdb_first(s, envs)
+    return s
 
 
 def rows_of(s, session):
@@ -166,14 +172,14 @@ def main_run():
     # dual: the first half in DuckDB only, reconciled; the second half through append (both
     # stores), then 3 lines only in the table (written after the stop)
     seed(s, "dual", 5, 5000)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     s.append([line("dual", 4000 - i * 60, "assistant") for i in range(5)])
     extra_dual = [line("dual", 600 - i * 60, "assistant") for i in range(3)]
     ck("the extra lines go only into the table", session_ingest.record(s, extra_dual))
     # arch: 8 lines in DuckDB, 4 more in both, 2 only in the table, all archived into part 1, then
     # one more only in the table
     seed(s, "arch", 8, 7000)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     s.append([line("arch", 5000 - i * 60, "assistant") for i in range(4)])
     extra_arch = [line("arch", 900 - i * 60, "assistant") for i in range(2)]
     session_ingest.record(s, extra_arch)
@@ -182,7 +188,7 @@ def main_run():
        and len(parts_of(s, "arch")) == 1 and rows_of(s, "arch") == [])
     extra_arch2 = [line("arch", 300, "assistant")]
     session_ingest.record(s, extra_arch2)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     extra_dual_p = [json.dumps(e.payload) for e in extra_dual]
     extra_arch_p = [json.dumps(e.payload) for e in extra_arch + extra_arch2]
     ck("30 sessions in DuckDB", s.con.execute(
@@ -263,7 +269,7 @@ def repeats():
     ck("the table holds 4 rows", len(rows_of(s, "rep")) == 4, len(rows_of(s, "rep")))
     # a session written out of time order: the move keeps time order (`event_time`, then rowid)
     s._append_events([line("shuf", 100 + i * 60, "assistant") for i in range(6)])
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     session_move.plan(s)
     ck("the move takes both", session_move.move_recent(s) == 2)
     check_rows(s, "shuf", [], "shuf")
@@ -282,10 +288,10 @@ def failures():
     backend = FileBackend(ARCHIVE)
     seed(s, "bad", 6, 5000)
     seed(s, "gone", 4, 4000)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     s.append([line("gone", 3000 - i * 60) for i in range(3)])
     session_ingest.record(s, [line("gone", 200)])
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     session_archive._archive_session(s.sessions_db, backend, "gone", NOW)
     session_ingest.record(s, [line("bad", 100)])         # a table-only line for "bad"
     snap = {sid: (rows_of(s, sid), parts_of(s, sid), row_of(s, sid)) for sid in ("bad", "gone")}
@@ -333,7 +339,7 @@ def transient():
     s = open_store()
     seed(s, "blip", 5, 3000)
     seed(s, "blip2", 4, 2500)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     session_move.plan(s)
     real = session_move._rebuild
     boom = {"n": 1}
@@ -365,7 +371,7 @@ def transient():
         session_move.RETRY_AFTER = old
     # the thread keeps going while a session waits to be tried again
     seed(s, "blip3", 3, 2000)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     with s.sessions_db.begin() as c:
         c.execute(session_moves.insert().values(session="blip3", state="pending", target="table",
                                                 lines_events=3))
@@ -388,7 +394,7 @@ def transient():
     ck("the thread tried again until it verified", m["state"] == "verified" and m["attempts"] == 2, m)
     # a failed write of the failure is printed and leaves the row as it was
     seed(s, "blip4", 3, 1500)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     with s.sessions_db.begin() as c:
         c.execute(session_moves.insert().values(session="blip4", state="pending", target="table",
                                                 lines_events=3))
@@ -446,7 +452,7 @@ def locks():
         seed(s, f"busy-{i}", 5, 3000)
     for sid in ("late", "bare", "quiet"):
         seed(s, sid, 5, 3000)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     session_move.plan(s)
     db = s.sessions_db
     begin = db.begin
@@ -557,13 +563,11 @@ def locks():
 
 
 def thread():
-    print("== the daemon's thread, its switch and the edition ==")
+    print("== the daemon's thread and its switch ==")
     s = open_store()
     seed(s, "t1", 5, 3000)
     seed(s, "t2", 5, 2000)
-    session_ingest.reconcile_sessions(s)
-    ck("a cell that is not a factory starts no move", session_move.start(s) is None)
-    s.set_setting("edition", "factory")
+    reconcile_as_before(s)
     session_move.MOVE_ENABLED = False
     try:
         ck("parked, it starts none", session_move.start(s) is None)
@@ -584,7 +588,7 @@ def thread():
     s = open_store()
     for i in range(3):
         seed(s, f"u{i}", 4, 3000 - i * 100)
-    session_ingest.reconcile_sessions(s)
+    reconcile_as_before(s)
     stop = threading.Event()
     real = session_move.move_recent
 

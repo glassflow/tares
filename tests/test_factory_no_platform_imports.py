@@ -38,11 +38,6 @@ MIXED = {"tares.store", "tares.config", "tares.daemon", "tares.cli", "tares.mcp_
 # that ticket. The ticket deletes the line from here; an entry that no longer matches fails the test,
 # so the list only shrinks.
 KNOWN = {
-    ("tares/session_ingest.py", "tares.edition"): "TR-1813",
-    ("tares/session_archive.py", "tares.edition"): "TR-1813",
-    ("tares/session_read.py", "tares.edition"): "TR-1813",
-    ("tares/screens/start.py", "tares.edition"): "TR-1813",
-    ("tares/screens/factory_settings.py", "tares.edition"): "TR-1813",
     ("tares/session_ingest.py", "tares.session_move"): "TR-1815",
     ("tares/session_ingest.py", "tares.session_drain"): "TR-1815",
 }

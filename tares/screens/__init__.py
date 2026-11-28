@@ -1,4 +1,4 @@
-"""One module per edition screen. A screen ticket adds tares/screens/<name>.py with
+"""One module per console screen. A screen ticket adds tares/screens/<name>.py with
 register(app, store, h, ctx) and uncomments its own line below. Keep the blank lines:
 they keep two tickets from editing adjacent lines."""
 import importlib

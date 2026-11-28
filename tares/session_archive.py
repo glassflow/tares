@@ -473,11 +473,8 @@ def _sweep_session(db, backend: Backend, session: str, files: list, cutoff: date
 
 
 def sweep(store, backend: Backend | None = None, now: datetime | None = None) -> int:
-    """Remove the archive files no part row names (see the module docstring), on a factory cell
-    only; returns how many. Raises when the listing or the rows cannot be read."""
-    from . import edition
-    if edition.edition(store)[0] != "factory":
-        return 0
+    """Remove the archive files no part row names (see the module docstring); returns how many.
+    Raises when the listing or the rows cannot be read."""
     backend = backend or backend_of(store)
     if backend is None:
         return 0

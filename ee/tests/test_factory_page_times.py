@@ -205,7 +205,7 @@ NOT_TIMED = [
     ("/api/projects/{id}/skills/{name}", _OLDER + "project setup"),
     ("/api/projects/{id}/tickets", _OLDER + "project setup"),
     ("/api/projects/{id}", _OLDER + "the older project setup forms"),
-    ("/api/projects/templates", _OLDER + "the older project pages and the AI SRE home"),
+    ("/api/projects/templates", "gone with project templates (TR-1812); the console stops asking in its own ticket"),
     ("/api/projects/{id}/assumptions", _OLDER + "the older project page"),
     ("/api/projects/{id}/crew", _OLDER + "the older project page"),
     ("/api/projects/{id}/decisions", _OLDER + "the older project page"),
