@@ -167,7 +167,7 @@ async def state(label, cx, want_o, setup_text="", projects=0):
     ck(f"{tag}: setup's progress", s["progress"] == progress, s["progress"])
     ck(f"{tag}: setup's onboarding", s["onboarding"] == want_o, _diff(s["onboarding"], want_o))
     ck(f"{tag}: setup's terminal", s["terminal"] == terminal, _diff(s["terminal"], terminal))
-    ck(f"{tag}: setup's other fields", sorted(s) == ["edition", "exit_label", "licence", "onboarding",
+    ck(f"{tag}: setup's other fields", sorted(s) == ["edition", "exit_label", "integrations_only", "licence", "onboarding",
        "progress", "steps", "terminal", "title", "tools"]
        and (s["title"], s["exit_label"]) == ("Set up your factory", "Exit setup")
        and s["licence"] == {"state": "none", "ended_on": None, "text": "This cell has no licence."}

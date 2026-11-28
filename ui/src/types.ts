@@ -328,7 +328,7 @@ export interface ProjectSession {
 }
 
 // The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,
-// split by surface (agent runs vs Ask).
+// split by surface ("ask": the summaries and setup plans; "agent": agent runs from before 2.0).
 export interface ModelUsageBucket {
   calls: number;
   input_tokens: number;

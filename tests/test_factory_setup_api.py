@@ -228,7 +228,7 @@ async def main():
             ck("an admin reads it", r.status_code == 200, r.text[:300])
             body = r.json()
             ck("nothing was written by the read", snapshot(store) == before)
-            ck("the top-level keys", sorted(body) == ["edition", "exit_label", "licence", "onboarding", "progress", "steps",
+            ck("the top-level keys", sorted(body) == ["edition", "exit_label", "integrations_only", "licence", "onboarding", "progress", "steps",
                                                  "terminal", "title", "tools"],
                sorted(body))
             ck("title and exit label", body["title"] == "Set up your factory" and body["exit_label"] == "Exit setup")
@@ -711,6 +711,11 @@ async def main():
             b = (await get()).json()
             slots = [x["slot"] for x in b["steps"]]
             ck("monitoring is left out until it is tested", "monitoring" not in slots and "monitoring" in HIDDEN, slots)
+            more = b.get("integrations_only") or []
+            ck("Integrations still gets monitoring, with its forms (TR-1823)",
+               [x["slot"] for x in more] == ["monitoring"]
+               and {a["id"] for a in more[0]["available"]} | {c["id"] for c in more[0]["connected"]} >= {"rius", "otlp"},
+               [(x["slot"], [a["id"] for a in x["available"]], [c["id"] for c in x["connected"]]) for x in more])
             ck("memory and guardrails stay while they offer a choice",
                all(x in slots for x in ("memory", "guardrails")) and set(HIDE_WITHOUT) == {"memory", "guardrails"}, slots)
             ck("the count is out of the steps shown, and the crew, GitHub and the terminal",
