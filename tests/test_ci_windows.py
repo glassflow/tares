@@ -151,7 +151,7 @@ print("the skip list")
 marker = BASE / "standup ran"
 t = tree({"test_crew_standup.py": "open(%r, 'w').close()\nimport sys\nsys.exit(1)\n" % str(marker)}, parity())
 code, out = runner(t)
-ck("test_crew_standup.py is not run, and the output says why", code == 0 and not marker.exists() and "skip  test_crew_standup.py" in out and "DuckDB" in out, out)
+ck("test_crew_standup.py is not run, and the output says why", code == 0 and not marker.exists() and "skip  test_crew_standup.py" in out and "FastAPI" in out, out)
 
 print("a test that exits 0 and prints no summary line")
 code, out = runner(tree({"test_crew_state.py": "print('all fine')\n"}, parity()))

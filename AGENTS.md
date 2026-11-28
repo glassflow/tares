@@ -10,7 +10,8 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
   slack, projects, docs, tickets, milestones, standup, home, console), `deps.py` (the `Deps` every
   router and route module is given: the store, the projects and the caller helpers), `guard.py`
   (the auth guard), `cli.py` (`tares up`, `tares mcp`),
-  `store.py` (DuckDB), `providers.py` and `models.py` (the model provider layer the
+  `store.py` (every read and write, on the session store), `session_store/` (SQLite or Postgres,
+  with its Alembic revisions), `providers.py` and `models.py` (the model provider layer the
   standup, milestone and report summaries call), `mcp*.py` (the MCP proxy),
   `factory_projects.py` (a project's row and its lifecycle).
 - `ui/` the console, a Vite + React app. The daemon serves `ui/dist` and the wheel bundles it.
@@ -134,7 +135,8 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 
 | Variable | Meaning |
 |---|---|
-| `TARES_HOME` | data directory (default `~/.tares`); `--data-dir` overrides |
+| `TARES_HOME` | data directory (default `~/.tares`); `--data-dir` overrides. The daemon keeps `tares.sqlite` and the default archive there; `taresd` alone uses the current directory when it is unset |
+| `TARES_STATE_DSN` | a Postgres DSN: the session store (every table of the cell) lives there instead of `tares.sqlite` |
 | `TARES_HOST`, `TARES_PORT` | daemon bind address (127.0.0.1:8787) |
 | `TARES_MCP_HOST`, `TARES_MCP_PORT`, `TARES_MCP_TRANSPORT` | the MCP endpoint (127.0.0.1:8788, streamable-http) |
 | `TARESD_URL` | where `tares-mcp` finds the daemon |
@@ -147,9 +149,9 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_PLATFORM_PROVIDER_URL`, `TARES_PLATFORM_PROVIDER_KEY`, `TARES_PLATFORM_PROVIDER_NAME` | seed an OpenAI-compatible provider entry the deployment hands the cell (Tares Cloud's LiteLLM with a per-cell key); the default unless a console choice or `TARES_MODEL_PROVIDER` says otherwise; not editable in the console |
 | `TARES_MODEL_PROVIDER` | id of the default provider (`anthropic`, `openai`, or a saved endpoint's id) when none is chosen in the console |
 | `TARES_MODEL` | model the summaries use on the default provider; `TARES_AGENT_MODEL` is the old name, still read |
-| `TARES_ARCHIVE_URL` | where the hourly job archives sessions idle for a week, and the one-time move writes older ones: `file:///path` or `s3://bucket/prefix/`; unset gives `<data dir>/archive/` on SQLite and nothing on Postgres |
+| `TARES_ARCHIVE_URL` | where the hourly job archives sessions idle for a week: `file:///path` or `s3://bucket/prefix/`; unset gives `<data dir>/archive/` on SQLite and nothing on Postgres |
 | `TARES_ARCHIVE_ENDPOINT`, `TARES_ARCHIVE_REGION`, `TARES_ARCHIVE_ACCESS_KEY_ID`, `TARES_ARCHIVE_SECRET_ACCESS_KEY` | the S3 endpoint, region and keys for the archive (needs the `archive-s3` extra); unset, boto3's own credential chain applies |
-| `TARES_MAX_DB_SIZE` | storage limit `/api/usage` and `/health` measure against; unset = the volume the database sits on |
+| `TARES_MAX_DB_SIZE` | storage limit `/api/usage`, `/health` and the metrics measure against: the session store (`tares.sqlite` and its WAL, or the Postgres database) plus the archive; unset = the volume the data directory sits on |
 | `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507); default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
 | `TARES_WEBHOOK_ALLOW_PRIVATE` | let an integration's URL point at an internal address (loopback, private, link-local); off by default |
@@ -185,7 +187,7 @@ The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the pari
 
 One push to a crew PR is hours of runner time, and main gets many merges, so the heavy checks run when asked for (TR-1233, TR-1235):
 
-| Event | Light Linux set (`console`, `test (duckdb)`, `wheel`, `secrets`) | Rest of the Linux set (`test` postgres and mit, `test-ee`, `e2e`, `wheel-clean`) | Linux parity | `parity-macos` | `windows-crew` |
+| Event | Light Linux set (`console`, `test (sqlite)`, `wheel`, `secrets`) | Rest of the Linux set (`test` postgres and mit, `test-ee`, `e2e`, `wheel-clean`) | Linux parity | `parity-macos` | `windows-crew` |
 |---|---|---|---|---|---|
 | Push to main | yes | no | no | no | no |
 | Draft PR | yes | no | yes | no | no (check green, skipped) |

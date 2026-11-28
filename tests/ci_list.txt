@@ -199,6 +199,7 @@ test_model_providers
 test_monitoring_integration
 test_morning_status
 test_no_console
+test_no_duckdb
 test_openai_provider
 test_owner_claims_local
 test_parity
@@ -229,6 +230,7 @@ test_report_demo_seed
 test_report_weeks
 test_report_words
 test_request_memo
+test_restart_cost
 test_review_gate
 test_review_post
 test_revision_imports

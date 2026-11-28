@@ -1,8 +1,10 @@
-"""Instance metering, GET /api/usage. Real daemon: file sizes match the db on disk, the event count is
-DuckDB's rows, which a Claude Code line no longer reaches (it goes to the session store, TR-1813; no per
-source counts since the source catalog went, TR-1811), the TARES_MAX_DB_SIZE
-denominator drives max_bytes/pct_used (null when unset), the endpoint is a read scope (ingest-only
-keys are refused), and the response stays fast as the event count grows (no table scan).
+"""Instance metering, GET /api/usage. Real daemon: the sizes are the session store's (the SQLite file
+and its WAL on disk, or the Postgres database) plus the archive, `events` is the lines the sessions
+hold (no per source counts since the source catalog went, TR-1811), the TARES_MAX_DB_SIZE denominator
+drives max_bytes/pct_used, the endpoint is a read scope (ingest-only keys are refused), the response
+stays fast as the lines grow (no table scan), and transcript lines that fill the limit pause ingest
+(TR-1815). The store is measured at most every `Store.SIZE_FOR` seconds, so a read that must see a
+change waits that long first.
 """
 import asyncio, json, os, subprocess, sys, time
 import httpx
@@ -13,15 +15,9 @@ from _env import clean_env, remove_db
 from tares.daemon import _parse_size
 import tares.store as _store
 
-# With an archive (always on SQLite) a Claude Code line goes to the session store alone; a Postgres cell
-# with no TARES_ARCHIVE_URL (the harness, tests/pg_harness) still writes DuckDB too. The daemon this test
-# starts inherits the same environment.
+# the Postgres harness (tests/pg_harness) puts the daemon's store on Postgres: no file to compare with
 ON_PG = _store.Store.__init__.__name__ == "_init"
-
-
-def duck(n):
-    """How many rows DuckDB holds after `n` lines were posted."""
-    return n if ON_PG else 0
+FRESH = _store.SIZE_FOR + 0.5   # seconds after which the next read measures the store again
 
 P = F = 0
 def ck(l, c, d=""):
@@ -30,7 +26,7 @@ def ck(l, c, d=""):
 
 DB, PORT = "/tmp/usage", "8809"
 AUTH = "root-token"
-BLOCK = 1 << 18   # DuckDB writes in 256KiB blocks; sizes are compared to that tolerance
+BLOCK = 1 << 18   # the file grows while the test reads it: sizes are compared to this tolerance
 
 
 async def _wait(url):
@@ -95,11 +91,18 @@ async def main():
         async with httpx.AsyncClient() as cx:
             await ingest(cx, B, lines("a", 20))
             await ingest(cx, B, lines("b", 5))
+            await asyncio.sleep(FRESH)
             u = (await cx.get(f"{B}/api/usage")).json()
 
-            db, wal = os.path.getsize(DB), (os.path.getsize(DB + ".wal") if os.path.exists(DB + ".wal") else 0)
-            ck("db_bytes matches the file on disk", abs(u["db_bytes"] - db) <= BLOCK, f"{u['db_bytes']} vs {db}")
-            ck("wal_bytes matches the wal on disk", abs(u["wal_bytes"] - wal) <= BLOCK, f"{u['wal_bytes']} vs {wal}")
+            f = os.path.join(DB, "tares.sqlite")
+            if ON_PG:
+                ck("db_bytes is the Postgres database's size, and there is no WAL of its own",
+                   u["db_bytes"] > 0 and u["wal_bytes"] == 0, str(u))
+            else:
+                db, wal = os.path.getsize(f), (os.path.getsize(f + "-wal") if os.path.exists(f + "-wal") else 0)
+                ck("db_bytes matches the file on disk", abs(u["db_bytes"] - db) <= BLOCK, f"{u['db_bytes']} vs {db}")
+                ck("wal_bytes matches the wal on disk", abs(u["wal_bytes"] - wal) <= BLOCK, f"{u['wal_bytes']} vs {wal}")
+            ck("archive_bytes is there, nothing archived yet", u["archive_bytes"] == 0, str(u))
             ck("db_bytes > 0", u["db_bytes"] > 0, str(u["db_bytes"]))
             ck("disk_total/disk_free are real",
                u["disk_total"] > 0 and 0 < u["disk_free"] <= u["disk_total"], str(u))
@@ -108,7 +111,7 @@ async def main():
             ck("no TARES_MAX_DB_SIZE -> pct_used against the volume",
                u["pct_used"] is not None and 0 <= u["pct_used"] < 100, str(u["pct_used"]))
             ck("ingest not paused on a roomy volume", u["ingest_paused"] is False, str(u))
-            ck("events counts DuckDB's rows", u["events"] == duck(25), str(u["events"]))
+            ck("events counts the lines the sessions hold", u["events"] == 25, str(u["events"]))
             ck("no per source counts", u["sources"] == [], str(u["sources"]))
             ck("agent_runs / dispatch_deliveries present",
                u["agent_runs"] == 0 and u["dispatch_deliveries"] == 0, str(u))
@@ -117,16 +120,17 @@ async def main():
             t0 = time.perf_counter(); await cx.get(f"{B}/api/usage"); small = time.perf_counter() - t0
             for k in range(5):
                 await ingest(cx, B, lines(f"big{k}", 1000, size=300), timeout=120)
+            await asyncio.sleep(FRESH)
             t0 = time.perf_counter(); u2 = (await cx.get(f"{B}/api/usage")).json()
             big = time.perf_counter() - t0
-            ck("counted the new rows", u2["events"] == duck(5025), str(u2["events"]))
+            ck("counted the new lines", u2["events"] == 5025, str(u2["events"]))
             ck("response time flat at 5k events (no scan)", big < max(0.25, small * 5),
                f"{small*1000:.1f}ms at 25 events -> {big*1000:.1f}ms at 5k")
     finally:
         proc.terminate(); proc.wait(timeout=10)
 
     # ── a limit the data already exceeds: ingest refused, health says why ──
-    proc = _boot(TARES_MAX_DB_SIZE="100Ki")   # less than the DuckDB file alone
+    proc = _boot(TARES_MAX_DB_SIZE="100Ki")   # less than the store alone
     try:
         if not await _wait(f"{B}/health"):
             ck("daemon up (tiny limit)", False); return
@@ -142,7 +146,9 @@ async def main():
             ck("a webhook delivery is refused with 507 too", r.status_code == 507, str(r.status_code))
             ck("reads still work", (await cx.get(f"{B}/api/projects")).status_code == 200)
             u2 = (await cx.get(f"{B}/api/usage")).json()
-            ck("nothing was stored while paused", u2["events"] == duck(5025), str(u2["events"]))
+            await asyncio.sleep(FRESH)
+            u2 = (await cx.get(f"{B}/api/usage")).json()
+            ck("nothing was stored while paused", u2["events"] == 5025, str(u2["events"]))
     finally:
         proc.terminate(); proc.wait(timeout=10)
 
@@ -162,12 +168,47 @@ async def main():
             ck("read key -> 200", r.status_code == 200, r.text)
             u = r.json()
             ck("max_bytes from TARES_MAX_DB_SIZE", u["max_bytes"] == 1 << 30, str(u["max_bytes"]))
-            expect = round(100 * (u["db_bytes"] + u["wal_bytes"]) / (1 << 30), 2)
-            ck("pct_used = (db+wal)/max as a percentage", u["pct_used"] == expect and u["pct_used"] > 0,
+            expect = round(100 * (u["db_bytes"] + u["wal_bytes"] + u["archive_bytes"]) / (1 << 30), 2)
+            ck("pct_used = (db+wal+archive)/max as a percentage", u["pct_used"] == expect and u["pct_used"] > 0,
                f"{u['pct_used']} vs {expect}")
-            ck("counts survived the restart", u["events"] == duck(5025), str(u["events"]))
+            ck("counts survived the restart", u["events"] == 5025, str(u["events"]))
             ck("ingest resumes under a roomier limit", u["ingest_paused"] is False
                and (await ingest(cx, B, lines("after", 1), headers=H(ing_key))).status_code == 202)
+    finally:
+        proc.terminate(); proc.wait(timeout=10)
+
+    # ── transcript lines that fill the limit pause ingest (TR-1815) ──
+    proc = _boot()
+    try:
+        if not await _wait(f"{B}/health"):
+            ck("daemon up (growth)", False); return
+        async with httpx.AsyncClient() as cx:
+            u = (await cx.get(f"{B}/api/usage")).json()
+            used = u["db_bytes"] + u["wal_bytes"] + u["archive_bytes"]
+    finally:
+        proc.terminate(); proc.wait(timeout=10)
+    grow = 512 * 1024                 # the pause mark is this many bytes away
+    limit = int((used + grow) / 0.95)
+    proc = _boot(TARES_MAX_DB_SIZE=str(limit))
+    try:
+        if not await _wait(f"{B}/health"):
+            ck("daemon up (near the limit)", False); return
+        async with httpx.AsyncClient() as cx:
+            u = (await cx.get(f"{B}/api/usage")).json()
+            ck("near the limit, ingest is not paused yet", u["ingest_paused"] is False, str(u))
+            for k in range(12):
+                r = await ingest(cx, B, lines(f"grow{k}", 500, size=600), timeout=120)
+                if r.status_code != 202:
+                    break
+                await asyncio.sleep(FRESH)
+            u = (await cx.get(f"{B}/api/usage")).json()
+            ck("the transcript lines filled it: paused", u["ingest_paused"] is True and u["pct_used"] >= 95,
+               str(u))
+            r = await ingest(cx, B, lines("over", 1))
+            ck("and the next post is refused with 507", r.status_code == 507, f"{r.status_code} {r.text[:120]}")
+            h = (await cx.get(f"{B}/health")).json()
+            ck("health says ingest is paused", h["status"] == "degraded" and "ingest paused" in (h.get("detail") or ""),
+               str(h))
     finally:
         proc.terminate(); proc.wait(timeout=10)
 

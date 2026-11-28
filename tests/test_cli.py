@@ -22,7 +22,7 @@ def test_up_wires_data_home(tmp):
     args = types.SimpleNamespace(host="127.0.0.1", port=9999, data_dir=str(tmp), open=False)
     cli._up(args)
     ck("creates the data home", Path(tmp).is_dir())
-    ck("points DB at the data home", os.environ["TARES_HOME"] == str(Path(tmp) / "tares"), os.environ.get("TARES_HOME"))
+    ck("points the daemon at the data home (TARES_HOME)", os.environ["TARES_HOME"] == str(tmp), os.environ.get("TARES_HOME"))
     ck("no catalog file is pointed at (the source catalog went, TR-1811)", "TARES_CATALOG" not in os.environ)
     ck("sets host/port for the daemon", os.environ["TARES_PORT"] == "9999")
     ck("starts the daemon", started.get("ran") is True)
@@ -30,9 +30,9 @@ def test_up_wires_data_home(tmp):
 
 def test_up_respects_explicit_db():
     cli.run_daemon = lambda: None
-    os.environ["TARES_HOME"] = "/custom/path"   # user override must win (setdefault)
+    os.environ["TARES_HOME"] = "/custom/path"   # --data-dir wins: its default is TARES_HOME
     cli._up(types.SimpleNamespace(host="0.0.0.0", port=1, data_dir="/tmp/nf_x", open=False))
-    ck("explicit TARES_HOME is not overridden", os.environ["TARES_HOME"] == "/custom/path")
+    ck("--data-dir decides the daemon's data home", os.environ["TARES_HOME"] == "/tmp/nf_x")
     os.environ.pop("TARES_HOME", None)
 
 
