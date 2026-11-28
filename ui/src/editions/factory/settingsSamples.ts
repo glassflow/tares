@@ -5,8 +5,7 @@ import type { Person } from "../../types";
 import type { MorningStatus, SettingsGrant, SettingsPage, SettingsTool } from "./FactorySettings.api";
 
 const PACE_OFF = "Pacing is off. The crew keeps starting builders whatever the plan has left.";
-const NOTE = "Switching changes the screens, not your data. What only the other edition shows stays reachable under Settings, Advanced.";
-const ADV = "/settings/advanced";
+const INT = "/integrations";
 
 const tool = (key: SettingsTool["key"], name: string, detail: string | null, href: string): SettingsTool =>
   ({ key, name, connected: detail !== null, detail: detail ?? "Not connected", href,
@@ -18,10 +17,10 @@ const COVERS: Record<SettingsTool["key"], string> = {
   claude_code: "Your sessions and the crew's report here, so their work shows on each ticket",
 };
 const tools = (gh: string | null, li: string | null, sl: string | null, cc: string | null): SettingsTool[] => [
-  tool("github", "GitHub", gh, `${ADV}?tab=github`),
-  tool("linear", "Linear", li, `${ADV}?tab=linear`),
-  tool("slack", "Slack", sl, `${ADV}?tab=slack`),
-  { ...tool("claude_code", "Claude Code", cc, "/sources/claude-code"),
+  tool("github", "GitHub", gh, `${INT}?step=github`),
+  tool("linear", "Linear", li, `${INT}?step=tickets`),
+  tool("slack", "Slack", sl, `${INT}?step=notifications`),
+  { ...tool("claude_code", "Claude Code", cc, `${INT}?step=runtime`),
     detail: cc ?? "Not connected. Nothing has reported in 7 days." },
 ];
 
@@ -51,10 +50,8 @@ const BASE: SettingsPage = {
     challenger: false, pace: false, pace_text: PACE_OFF,
     grants: GRANTS, grants_total: GRANTS.length,
   },
-  models: { default_provider: "Anthropic", chosen: true, budget_text: "$38.20 spent so far. Each agent may start up to 50 times a day." },
+  models: { default_provider: "Anthropic", chosen: true },
   people: { keys: { count: 2, text: "2 access keys" }, cloud_team_href: "https://example-org.example.com/team" },
-  edition: { value: "factory", label: "Software Factory", can_switch: true,
-             options: [{ value: "sre", label: "AI SRE" }], other: { value: "sre", label: "AI SRE" }, note: NOTE },
 };
 
 const LONG = "customer-connectors-for-the-enterprise-edition-2026-organisation";
@@ -92,10 +89,10 @@ const SAMPLES: Record<string, SettingsPage> = {
     tools: tools(null, null, null, null),
     crew: { ...BASE.crew, how_far: { value: "L3-review", releases: false, text: "Up to merge" }, builders_max: 3,
             builders_text: "Up to 3 builders at once", grants: [], grants_total: 0 },
-    models: { default_provider: "Not chosen yet", chosen: false, budget_text: "No budget set. Each agent may start up to 50 times a day." },
+    models: { default_provider: "Not chosen yet", chosen: false },
     people: { keys: { count: 0, text: "No access keys yet" }, cloud_team_href: null },
   },
-  ro: { ...BASE, can_change: false, edition: { ...BASE.edition, can_switch: false } },
+  ro: { ...BASE, can_change: false },
   rel: {
     ...BASE,
     crew: { ...BASE.crew, how_far: { value: "L3-review", releases: true, text: "Up to merge" }, release_profile: true,

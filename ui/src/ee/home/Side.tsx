@@ -93,7 +93,7 @@ export function ReposYouOwn({ areas }: HomeReposProps) {
   if (areas.length === 0) return null;
   return (
     <section aria-label="Repos you own" className="min-w-0" data-testid="repos-you-own">
-      <Head title="Repos you own" link={{ to: "/settings/advanced?tab=areas", text: "All owners" }} />
+      <Head title="Repos you own" link={{ to: "/settings?tab=areas", text: "All owners" }} />
       <div>
         {areas.map((a) => (
           <div key={a.repo} data-testid="repo-you-own" className="mt-2 flex justify-between gap-2 text-[13px] first:mt-0">
