@@ -34,7 +34,7 @@ export function WhoProvider({ children }: { children: ReactNode }) {
     let live = true;
     api.whoami()
       .then((w) => { if (live) setWho(fromWhoami(w)); })
-      .catch(() => { if (live) setWho({ loaded: true }); });
+      .catch(() => { if (live) setWho({ loaded: true, admin: false, canWrite: false }); });   // a page that waits on admin settles
     return () => { live = false; };
   }, []);
   // a failed read keeps what is shown and says so (false)

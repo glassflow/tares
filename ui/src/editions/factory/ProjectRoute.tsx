@@ -49,7 +49,7 @@ function OldLink({ id, view }: { id: string; view: string }) {
 
 // The route behind /projects/:id on a factory cell. The factory project page answers for a factory
 // project that is past its setup, and an old ?view= address goes to its factory page (see OldLink).
-// OtherProject answers for the rest: another kind of project, a draft (it sends that to its setup), an
+// OtherProject answers for the rest: another kind of project, a draft (shown as being planned), an
 // address with no project.
 export default function ProjectRoute() {
   const { id = "" } = useParams();

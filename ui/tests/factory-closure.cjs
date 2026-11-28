@@ -43,8 +43,31 @@ function resolve(spec, from) {
 }
 
 // Comments out, so an import named in a comment is not walked.
+// Comments out, strings kept: a scan that knows when it is inside a quoted string or a template, so
+// "a//b" or a URL in a string is not taken for a comment. Newlines are kept, for line numbers.
 function stripComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\\"'`])\/\/.*$/gm, "$1");
+  let out = "", i = 0, quote = null;
+  while (i < text.length) {
+    const c = text[i], n = text[i + 1];
+    if (quote) {
+      out += c;
+      if (c === "\\") { out += n ?? ""; i += 2; continue; }
+      if (c === quote) quote = null;
+      i += 1;
+    } else if (c === "/" && n === "/") {
+      while (i < text.length && text[i] !== "\n") i += 1;
+    } else if (c === "/" && n === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end < 0 ? text.length : end + 2;
+      out += text.slice(i, stop).replace(/[^\n]/g, "");
+      i = stop;
+    } else {
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      out += c;
+      i += 1;
+    }
+  }
+  return out;
 }
 
 const IMPORT_RES = [
@@ -78,9 +101,17 @@ function globSpecs(arg, from) {
   return out;
 }
 
+// an import() whose argument is not one quoted string cannot be walked, so it fails the check
+const COMPUTED_IMPORT = /\bimport\s*\(\s*(?!["'][^"'`$]*["']\s*\))[^)]/g;
+const computed = [];
+
 function importsOf(file) {
   if (!/\.(tsx?|jsx?|mjs|cjs)$/.test(file)) return [];
   const text = stripComments(fs.readFileSync(file, "utf8"));
+  for (const m of text.matchAll(COMPUTED_IMPORT)) {
+    const line = text.slice(0, m.index).split("\n").length;
+    computed.push(`${path.relative(UI, file)}:${line} has an import() of a computed address`);
+  }
   const out = new Set();
   for (const re of IMPORT_RES) for (const m of text.matchAll(re)) out.add(m[1]);
   for (const m of text.matchAll(GLOB_RE)) for (const spec of globSpecs(m[1], file)) out.add(spec);
@@ -113,7 +144,8 @@ const chain = (file) => {
 
 console.log(`factory closure: ${parent.size} files reached from src/main.tsx`);
 for (const m of missing) console.log(`  unresolved: ${m}`);
-if (offenders.length === 0 && missing.length === 0) {
+for (const c of computed) console.log(`  FAIL ${c}: name the file in a string so the walk can follow it`);
+if (offenders.length === 0 && missing.length === 0 && computed.length === 0) {
   console.log("ok: no platform page, AI SRE screen or edition chooser is reachable");
   process.exit(0);
 }
@@ -121,4 +153,5 @@ for (const [file, why] of offenders) {
   console.log(`\n  FAIL ${path.relative(SRC, file)} (${why}) is reachable:\n      ${chain(file)}`);
 }
 console.log(`\n${offenders.length} file(s) outside the factory are reachable` + (missing.length ? `, ${missing.length} import(s) unresolved` : ""));
+if (computed.length) console.log(`${computed.length} import(s) of a computed address`);
 process.exit(1);

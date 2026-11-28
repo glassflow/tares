@@ -148,12 +148,19 @@ function loadSample(env) {
       ck("factory: /welcome/edition lands on /", where(page) === "/" && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
       // TR-1817: the console routes only factory pages; an AI SRE or platform address is not found
       for (const p of ["/timeline", "/services", "/services/service-a", "/incidents/i-1", "/runbooks", "/sources", "/explore",
-                       "/ask", "/connect", "/reads", "/agents/a1", "/projects/x/setup", "/nope"]) {
+                       "/ask", "/connect", "/reads", "/projects/x/setup", "/nope"]) {
         await go(page, e, p);
         await page.getByTestId("not-found").waitFor();
         ck(`factory: ${p} is Page not found`, where(page) === p
            && (await page.getByRole("heading", { name: "Page not found" }).isVisible()), where(page));
       }
+
+      // links in Slack messages already sent land on a page that exists
+      await go(page, e, "/agents/a1");
+      ck("factory: an old /agents link lands on /projects", where(page) === "/projects", where(page));
+      await go(page, e, "/dispatches/d1");
+      ck("factory: an old /dispatches link lands on /", where(page) !== "/dispatches/d1"
+         && (await page.getByTestId("not-found").count()) === 0, where(page));
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);
