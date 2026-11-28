@@ -137,7 +137,9 @@ async def main():
         ck("resumed", r.status_code == 200 and r.json()["status"] == "active", r.text)
         r = await cx.get(f"/api/projects/{blog}/summary")
         log = [x["action"] for x in r.json().get("log") or []]
-        ck("the summary has the log", r.status_code == 200 and log == ["resumed", "paused", "created"]
+        ck("the summary has the log, each change of name, goal or icon in it",
+           r.status_code == 200 and log[:2] == ["resumed", "paused"] and log[-1] == "created"
+           and set(log[2:-1]) == {"updated"} and len(log) == 6
            and r.json()["ready_to_close"] is False, r.text)
         r = await cx.get("/api/projects/uc_nothere")
         ck("an unknown project answers 404", r.status_code == 404, r.text)

@@ -73,7 +73,7 @@ class Projects:
         return [self._card(p, default) for p in rows]
 
     def summary(self, uid: str) -> dict:
-        """The project with its log (created, paused, resumed), newest first."""
+        """The project with its log (created, updated, paused, resumed), newest first."""
         return {**self._require_card(uid), "log": self.store.list_project_log(uid)}
 
     def _card(self, row: dict, default: str | None) -> dict:
@@ -139,12 +139,18 @@ class Projects:
                 raise ProjectError(f"a project named {name!r} already exists")
         new_goal = _goal(goal) if goal is not self._UNSET else self._UNSET
         new_icon = _icon(icon) if icon is not self._UNSET else self._UNSET
+        changed = []
         if name and name != row["name"]:
             self.store.update_project(uid, name=name)
+            changed.append(f"renamed to {name}")
         if new_goal is not self._UNSET:
             self.store.update_project(uid, goal=new_goal)
+            changed.append("goal")
         if new_icon is not self._UNSET:
             self.store.set_project_icon(uid, new_icon)
+            changed.append("icon")
+        if changed:
+            self.store.log_project(uid, "updated", ", ".join(changed))   # the summary's history shows it
         return self.get(uid)
 
     def pause(self, uid: str) -> dict:
