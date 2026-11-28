@@ -27,10 +27,15 @@ for _k in [k for k in os.environ if k.startswith(("TARES", "FACTORY", "CODEX", "
 SCRATCH = Path(tempfile.mkdtemp(prefix="tcrt-"))
 BIN = SCRATCH / "bin"
 BIN.mkdir()
-(BIN / "codex").write_text("#!/bin/sh\necho 'codex-cli 0.171.0'\n")
-(BIN / "codex").chmod(0o755)
+if sys.platform == "win32":   # Windows runs no shell script: a .cmd that prints the same
+    CODEX = BIN / "codex.cmd"
+    CODEX.write_bytes(b"@echo codex-cli 0.171.0\r\n")
+else:
+    CODEX = BIN / "codex"
+    CODEX.write_text("#!/bin/sh\necho 'codex-cli 0.171.0'\n")
+    CODEX.chmod(0o755)
 os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"), TARES_HOME=str(SCRATCH / "tares-home"), FACTORY_NO_WATCH="1",
-                  PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring", CODEX_BIN=str(BIN / "codex"))
+                  PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring", CODEX_BIN=str(CODEX))
 _crew_guard.install()
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE / "factory"))
