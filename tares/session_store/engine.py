@@ -1,4 +1,4 @@
-"""The session store's engine: SQLite beside the DuckDB file, or the cell's state Postgres.
+"""The session store's engine: SQLite in the data directory, or the cell's Postgres.
 
 Locally (no TARES_STATE_DSN) the store is `tares.sqlite` in the data directory, in WAL mode (it was
 `sessions.sqlite` before TR-1480, and a start renames the old file, with its -wal and -shm files). Each

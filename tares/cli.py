@@ -1,7 +1,7 @@
 """Entry points: `tares` (the user CLI), `taresd` (the daemon), `tares-mcp` (stdio MCP proxy).
 
 `tares up` is the one command a local install needs: it picks a data home (~/.tares), points the
-daemon's DuckDB + catalog there, and starts the server (API + console UI) on http://127.0.0.1:8787.
+daemon's store there, and starts the server (API + console UI) on http://127.0.0.1:8787.
 """
 from __future__ import annotations
 
@@ -95,9 +95,9 @@ def _up(args: argparse.Namespace):
     """Start the daemon with a persistent data home, so a fresh `pip install` just works."""
     home = Path(args.data_dir).expanduser()
     home.mkdir(parents=True, exist_ok=True)
-    # point the daemon at the data home unless the user already set these explicitly.
-    # (the daemon reads these env vars at import time, so set them before run_daemon imports it.)
-    os.environ.setdefault("TARES_DB", str(home / "tares.duckdb"))
+    # point the daemon at the data home: --data-dir, whose default is TARES_HOME (the daemon reads
+    # these env vars at import time, so set them before run_daemon imports it)
+    os.environ["TARES_HOME"] = str(home)
     os.environ["TARES_HOST"] = args.host
     os.environ["TARES_PORT"] = str(args.port)
 
@@ -302,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="bind address (default 127.0.0.1; use 0.0.0.0 to expose on the network)")
     up.add_argument("--port", type=int, default=int(os.getenv("TARES_PORT", "8787")))
     up.add_argument("--data-dir", default=str(DEFAULT_HOME),
-                    help=f"where to keep the DuckDB + catalog (default {DEFAULT_HOME})")
+                    help=f"where to keep the cell's data (default {DEFAULT_HOME})")
     up.add_argument("--open", action="store_true", help="open the console in your browser")
     up.add_argument("--auth", nargs="?", const=_AUTH_GENERATE, default=None, metavar="TOKEN",
                     help="require a login for the console + API. Bare --auth generates and persists "

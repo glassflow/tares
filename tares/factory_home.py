@@ -66,8 +66,8 @@ def _dt(v) -> datetime | None:
 
 
 def _iso(v) -> str | None:
-    """An ISO string in UTC. In one offset, because the console orders `since` as text, and DuckDB
-    reads a time back in the machine's own offset where the session store reads it in UTC."""
+    """An ISO string in UTC. In one offset, because the console orders `since` as text, and a time
+    can be read back in the machine's own offset (SQLite's `closed_at`) or in UTC."""
     t = _dt(v)
     return t.astimezone(timezone.utc).isoformat() if t else None
 

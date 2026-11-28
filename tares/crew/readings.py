@@ -11,7 +11,7 @@ Ports `serve_readings` of `claude-plugin/bin/factory`. On every tick of the watc
     /api/crew/context/asks, and crews repeat station names, so only an ask whose session is the one this watch's
     own station plays is read (a read for another crew's ask would fail every tick).
 
-Standard library plus the crew modules (no duckdb, fastapi or daemon).
+Standard library plus the crew modules (no fastapi or daemon).
 """
 from __future__ import annotations
 

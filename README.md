@@ -49,7 +49,7 @@ tares up                  # choose 2) AI SRE; console on http://127.0.0.1:8787
 
 **[Tares Cloud](https://console.tares-glassflow.com/)** is the managed version: create a Software Factory or AI SRE workspace, and it is ready in about a minute. Team features are included.
 
-On your own machine, `tares up` runs the same open source Tares: one daemon and one DuckDB file, with no external database, no broker and no telemetry. To run it on your private cloud for a team, use the enterprise version: write to [help@glassflow.ai](mailto:help@glassflow.ai).
+On your own machine, `tares up` runs the same open source Tares: one daemon and one SQLite file, with no external database, no broker and no telemetry. To run it on your private cloud for a team, use the enterprise version: write to [help@glassflow.ai](mailto:help@glassflow.ai).
 
 ## Why Tares
 

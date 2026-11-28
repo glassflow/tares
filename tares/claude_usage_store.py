@@ -8,12 +8,12 @@ Three things arrive through the claude_code source (tares/connectors/claude_code
 Cost is priced at write time at API list prices (tares/pricing.py): on a subscription it is what the
 tokens would cost on the API, a way to compare projects, not a bill.
 The usage and meter rows live in the session store (tares/session_store), read and written with
-SQLAlchemy Core on `self.sessions_db`; the DDL below stays, because on Postgres it makes the same tables.
+SQLAlchemy Core on `self.sessions_db`.
 """
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import (BigInteger, bindparam, case, distinct, false, func, literal, select, union,
                         union_all, update)
@@ -24,41 +24,6 @@ from .pricing import cost_usd
 from .request_memo import kept
 from .session_store.tables import (project_sessions, session_meters, session_stations,
                                    session_usage, session_usage_hourly)
-from .session_store.tables import usecases as projects_table
-
-CLAUDE_USAGE_SCHEMA = [
-    # One row per model reply in a Claude Code session. Claude Code repeats a reply's usage on each
-    # of its content lines, so a reply is one row (session, message id) holding the largest count
-    # seen. `project` is the project the line was stamped with, when the plugin knew one.
-    """CREATE TABLE IF NOT EXISTS session_usage (
-      session            TEXT,
-      message            TEXT,
-      replied_at         TIMESTAMPTZ,
-      model              TEXT,
-      project            TEXT,
-      subagent           TEXT,
-      input_tokens       BIGINT,
-      output_tokens      BIGINT,
-      cache_write_tokens BIGINT,
-      cache_read_tokens  BIGINT,
-      cost_usd           DOUBLE,
-      PRIMARY KEY (session, message)
-    )""",
-    # of the cache writes, the ones kept an hour (they bill at twice the 5-minute rate)
-    "ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS cache_write_1h_tokens BIGINT",
-    # Per session: the status line's latest report, the latest /context reading, and when a person
-    # last asked for a new reading.
-    """CREATE TABLE IF NOT EXISTS session_meters (
-      session          TEXT PRIMARY KEY,
-      status           JSON,
-      status_at        TIMESTAMPTZ,
-      context          JSON,
-      context_at       TIMESTAMPTZ,
-      context_asked_at TIMESTAMPTZ
-    )""",
-    # the person of the credential that sent the status line, so the plan it carries has an owner
-    "ALTER TABLE session_meters ADD COLUMN IF NOT EXISTS status_person TEXT",
-]
 
 PLAN_SETTING = "claude_plan"          # the plan's limits as /usage last reported them
 SYNTHETIC = "<synthetic>"             # the model of Claude Code's own notices: no model call, no tokens
@@ -89,62 +54,17 @@ def _json(v):
 
 
 class ClaudeUsageStore:
-    """Methods Store gains for Claude Code usage. Expects self.con, self._lock and self.sessions_db."""
+    """Methods Store gains for Claude Code usage. Expects self.sessions_db."""
 
     # ── upgrade and clean-up ──────────────────────────────────────────────────
-    def _claude_usage_fill(self) -> None:
-        """Replies stored as claude_code events without a usage row get one: every one on the
-        first start, then those from a day before the newest row on (a version that did not count
-        them may have run in between). Lock not needed (init). The usage rows are in the session
-        store and the replies are events, so they are read from DuckDB and written there. The
-        events are read once and that is recorded (`claude_usage_filled`, TR-1613); the
-        SYNTHETIC rows are removed and unpriced rows priced at every start, as before."""
+    def _claude_usage_reprice(self) -> None:
+        """At every start: the SYNTHETIC rows are removed, and the rows of a model that had no price
+        when they were written are priced now (a newer price list). Every usage row is written as its
+        reply is stored (`record_reply_usage`); nothing here reads the session lines."""
         u = session_usage
-        with self.sessions_db.read() as conn:
-            newest = conn.execute(select(func.max(u.c.replied_at))).scalar_one()
-        since = newest - timedelta(days=1) if newest is not None else None
-        sources = sorted(session_ingest.claude_code_sources(self))
-        with self.sessions_db.read() as conn:
-            names = conn.execute(select(projects_table.c.id, projects_table.c.name)).all()
-        projects = {}
-        for pid, pname in names:
-            projects.setdefault(pname, pid)
-            projects[pid] = pid                            # an id wins over a same-named project
-        j = "json_extract(e.payload, '$.message.usage')"
-        done = session_ingest.filled_once(self, session_ingest.USAGE_FILLED)
-        rows = [] if done else self.con.execute(
-            "SELECT e.key_value, json_extract_string(e.payload, '$.message.id'), min(e.event_time), "
-            "any_value(json_extract_string(e.payload, '$.message.model')), "
-            "any_value(json_extract_string(e.payload, '$.tares_project')), "
-            "any_value(json_extract_string(e.payload, '$.subagent')), "
-            f"max(CAST(json_extract({j}, '$.input_tokens') AS BIGINT)), "
-            f"max(CAST(json_extract({j}, '$.output_tokens') AS BIGINT)), "
-            f"max(CAST(json_extract({j}, '$.cache_creation_input_tokens') AS BIGINT)), "
-            f"max(CAST(json_extract({j}, '$.cache_read_input_tokens') AS BIGINT)), "
-            f"max(CAST(json_extract({j}, '$.cache_creation.ephemeral_1h_input_tokens') AS BIGINT)) "
-            "FROM events e "
-            f"WHERE e.source IN ({', '.join('?' * len(sources)) or 'NULL'}) "
-            f"AND {j} IS NOT NULL AND json_extract_string(e.payload, '$.message.id') IS NOT NULL "
-            "AND coalesce(json_extract_string(e.payload, '$.message.model'), '') <> ? "
-            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR e.event_time >= ?) "
-            "GROUP BY 1, 2", [*sources, SYNTHETIC, since, since]).fetchall()
-        cols = ("session", "message", "replied_at", "model", "project", "subagent", "input_tokens",
-                "output_tokens", "cache_write_tokens", "cache_read_tokens", "cache_write_1h_tokens")
-        rows = self._usage_without_nul([dict(zip(cols, r)) for r in rows
-                                        if session_ingest.holds_session(self, r[0])])
-        deleted = self.deleted_private_projects()   # a reply stamped with one stays its own
-        for ref in {r["project"] for r in rows if r["project"]} - projects.keys():
-            projects[ref] = self.deleted_private_ref(ref, deleted)
-        for r in rows:
-            r["project"] = projects.get(r["project"])
-        # priced by family as pricing.cost_usd prices them (longest prefix first, a model with
-        # another version number after the prefix is left unpriced)
+
         def price(model, *tokens):
             return cost_usd(model or "", *(t or 0 for t in tokens))
-        for r in rows:
-            r["cost_usd"] = price(r["model"], *(r[c] for c in cols[6:]))
-        stmt = self.sessions_db.upsert(u).on_conflict_do_nothing(
-            index_elements=["session", "message"])
         with self.sessions_db.begin() as conn:
             hourly.hold(self, conn)
             # every session this transaction changes, found before it writes a row, so that their
@@ -155,43 +75,18 @@ class ClaudeUsageStore:
             ).where(u.c.cost_usd.is_(None), u.c.model.is_not(None))).all()
             priced = [{"b_session": r[0], "b_message": r[1], "b_cost": cost} for r in unpriced
                       if (cost := price(*r[2:])) is not None]
-            touched = {r["session"] for r in rows}
-            touched.update(p["b_session"] for p in priced)
+            touched = {p["b_session"] for p in priced}
             touched.update(r[0] for r in conn.execute(
                 select(u.c.session).where(u.c.model == SYNTHETIC).distinct()))
+            if not touched:
+                return
             covered = hourly.lock_covered(self, conn, touched)
-            for i in range(0, len(rows), 1000):
-                conn.execute(stmt, rows[i:i + 1000])
             conn.execute(u.delete().where(u.c.model == SYNTHETIC))
             if priced:
                 conn.execute(update(u).where(u.c.session == bindparam("b_session"),
                                              u.c.message == bindparam("b_message"))
                              .values(cost_usd=bindparam("b_cost")), priced)
             hourly.after_write(self, conn, covered)
-        if not done:
-            session_ingest.set_filled(self, session_ingest.USAGE_FILLED)
-
-    def _usage_without_nul(self, rows: list[dict]) -> list[dict]:
-        """The fill's replies as a posted line reads now: without NULs. DuckDB may hold lines from
-        before they were dropped (TR-1707), and Postgres takes none in text. A reply with an empty
-        id, or one of nothing but NULs, is left out, as ingest leaves it out. On SQLite an older
-        version could count a reply under its id as it was: that one is not counted a second time."""
-        db, u = self.sessions_db, session_usage.c
-        out = []
-        for r in rows:
-            raw = r["message"]
-            for k in ("message", "model", "project", "subagent"):
-                if r[k] and "\x00" in r[k]:
-                    r[k] = r[k].replace("\x00", "") or None
-            if not r["message"]:
-                continue
-            if r["message"] != raw and db.dialect == "sqlite":
-                with db.read() as conn:
-                    if conn.execute(select(u.message).where(u.session == r["session"],
-                                                            u.message == raw)).first():
-                        continue
-            out.append(r)
-        return out
 
     def _usage_forget_project(self, uid: str, private: bool = False) -> None:
         """A project is deleted. A team project's replies stay, counted as the session's own. A

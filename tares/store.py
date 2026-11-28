@@ -1,7 +1,9 @@
-"""DuckDB store — the collapsed Bronze+Silver. One events table; lossless via the JSON payload.
+"""The store: every read and write of the cell, in the session store (P-TR-295, Tares 2.0).
 
-taresd is the sole owner of this connection (DuckDB is single-writer). All reads and writes go
-through here; the MCP server never touches the DB directly.
+One database holds it all: `tares.sqlite` in the data directory, or the cell's Postgres when
+TARES_STATE_DSN is set (`tares.session_store`). Its tables are SQLAlchemy Core definitions
+(`session_store/tables.py`) made by its Alembic revisions. All reads and writes go through here; the
+MCP server never touches the database directly.
 """
 from __future__ import annotations
 
@@ -11,26 +13,24 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
-from datetime import datetime, timedelta
-
-import duckdb
+from datetime import timedelta
 
 from .envelope import Envelope, now_utc
-from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
+from .claude_usage_store import ClaudeUsageStore
 from .factory import DONE_STATUSES, OPEN_STAGES, state_of
-from .factory_store import FACTORY_SCHEMA, FactoryStore
+from .factory_store import FactoryStore
 from .request_memo import kept
 
 from sqlalchemy import (Date, LargeBinary, Text, and_, case, cast, delete, func, insert, literal, null,
-                        or_, select, union_all, update)
+                        or_, select, text, union_all, update)
 
-from . import (metrics, session_archive, session_digest, session_events, session_ingest,
-               session_move, session_read, state_db)
+from . import session_ingest, session_read
 from .session_store import SessionStore
-from .session_store.copy import copy_from_duckdb
+from .session_store.engine import MEMORY, SQLITE_FILE
 from .session_store.pr_columns import fill_pr_columns, pr_columns
-from .session_store.tables import (MOVED_TABLE_NAMES, merge_records, project_sessions, report_texts,
+from .session_store.tables import (merge_records, project_sessions, report_texts,
                                    report_weeks, session_stations, session_states)
 from .session_store.tables import settings as settings_table
 from .session_store.tables import api_keys as api_keys_table
@@ -46,57 +46,8 @@ from .session_store.tables import github_credentials as github_table
 from .session_store.tables import model_usage as usage_table
 from .session_store.tables import tickets as tickets_table
 from .session_store.tables import pending_writeback as writeback_table
-from .session_store.tables import session_commands, session_messages
-from .session_store.tables import (session_archive_parts, session_files, session_ingest_marks,
-                                   session_lines, session_said, session_turns)
+from .session_store.tables import session_archive_parts, session_files, session_said
 from .session_store.tables import sessions as sessions_table
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS events (
-  source       TEXT,
-  source_type  TEXT,
-  key_value    TEXT,
-  event_type   TEXT,
-  text         TEXT,
-  payload      JSON,
-  event_time   TIMESTAMPTZ,
-  ingest_time  TIMESTAMPTZ
-);
-CREATE TABLE IF NOT EXISTS settings (
-  key        TEXT PRIMARY KEY,
-  value      TEXT,
-  updated_at TIMESTAMPTZ
-);
--- Claude Code sessions that worked in a project (TR-405): the plugin tells Tares which project a
--- session works in with a `session_project` line, and the whole session (its claude_code events,
--- keyed by session id, the lines from before the project existed included) reads as the project's
-CREATE TABLE IF NOT EXISTS project_sessions (
-  project    TEXT,
-  session    TEXT,
-  repo       TEXT,
-  linked_at  TIMESTAMPTZ,
-  PRIMARY KEY (project, session)
-);
--- What a Claude Code session is doing now (TR-405 follow-up), from the plugin's session_state
--- lines: working, idle (a turn ended), waiting (for the person, `reason` says why) or ended. One row per session.
-CREATE TABLE IF NOT EXISTS session_states (
-  session    TEXT PRIMARY KEY,
-  state      TEXT,
-  reason     TEXT,
-  state_at   TIMESTAMPTZ
-);
-"""
-
-# Columns added after the first release; bring pre-existing DBs up to the current schema.
-_MIGRATIONS = [
-    "ALTER TABLE events ADD COLUMN IF NOT EXISTS labels JSON",
-    "ALTER TABLE events DROP COLUMN IF EXISTS fields",
-]
-
-_FILTER_COLS = {"event_type", "source", "text", "key_value"}
-_FILTER_OPS = {"eq": "=", "neq": "!=", "gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
-_FIELD_RE = re.compile(r"^[A-Za-z0-9_]+$")
-_DOTTED_FIELD_RE = re.compile(r"^[A-Za-z0-9_.]+$")
 
 # the setting that remembers the deleted private projects (Store.deleted_private_projects)
 _DELETED_PRIVATE = "deleted_private_projects"
@@ -112,92 +63,10 @@ def _digest_of(record) -> str:
     return record["name"] if isinstance(record, dict) else record
 
 
-def _label_expr(name: str) -> str:
-    """SQL expression for label `name`: its own column if it's the legacy primary key, else
-    read from the labels JSON. Lets a query slice by key_value or any named label uniformly."""
-    if not _FIELD_RE.match(name):
-        raise ValueError(f"bad label name {name!r}")
-    if name == "key_value":
-        return "key_value"
-    return f"json_extract_string(labels, '$.{name}')"
-
-
-def _aggregated(agg: str, sums: list):
-    """The value of `Store.aggregate` for one group of `session_digest.aggregate`'s
-    [lines, lines with a value, sum, max, min]."""
-    lines, with_value, total, high, low = sums
-    value = {"count": lines, "sum": total, "avg": total / with_value if with_value else None,
-             "max": high, "min": low, "any": high}[agg]
-    return value if value is not None else 0.0
-
-
-def _where_sql(where) -> tuple[str, list]:
-    """{label: value} -> ('AND ...' equality SQL, params). Matches on key_value or any label."""
-    clauses, params = [], []
-    for name, value in (where or {}).items():
-        clauses.append(f"{_label_expr(name)} = ?")
-        params.append(str(value))
-    return (" AND " + " AND ".join(clauses)) if clauses else "", params
-
-
-def _filter_sql(filters) -> tuple[str, list]:
-    """Trigger filters -> ('AND ...' SQL fragment, params). A field name resolves against the source's
-    extracted labels (the string/number axes a user defined). JSON paths are quoted so dotted names
-    address one flat key, not a nested object. Numeric ops cast to DOUBLE (TRY_CAST: rows without
-    the label — or non-numeric values — simply don't match)."""
-    clauses, params = [], []
-    for f in filters or []:
-        name, op, value = f["field"], f["op"], f["value"]
-        if not _DOTTED_FIELD_RE.match(name):
-            raise ValueError(f"bad filter field {name!r}")
-        numeric = op in ("gt", "lt", "gte", "lte")
-        if name in _FILTER_COLS:
-            expr = f"TRY_CAST({name} AS DOUBLE)" if numeric else name
-        else:
-            expr = f"json_extract_string(labels, '$.\"{name}\"')"
-            if numeric:
-                expr = f"TRY_CAST({expr} AS DOUBLE)"
-        if op == "contains":
-            clauses.append(f"{expr} ILIKE ?")
-            params.append(f"%{value}%")
-        elif op == "in":
-            values = [str(v) for v in (value if isinstance(value, list) else [value])]
-            if not values:
-                raise ValueError("filter op 'in' needs at least one value")
-            # case-insensitive: GitHub names (owner/repo) are, and a typed list rarely matches case
-            clauses.append(f"lower({expr}) IN ({', '.join('?' * len(values))})")
-            params.extend(v.lower() for v in values)
-        elif op in _FILTER_OPS:
-            clauses.append(f"{expr} {_FILTER_OPS[op]} ?")
-            params.append(float(value) if numeric else str(value))
-        else:
-            raise ValueError(f"bad filter op {op!r}")
-    return (" AND " + " AND ".join(clauses)) if clauses else "", params
-
-
-def _scope_sql(scope) -> tuple[str, list]:
-    """A project's view of the shared findings and memory sources -> ('AND ...' SQL, params).
-    `scope` is {"sources": [the shared sources], "project": id, "agents": [its agents]}: rows of
-    other sources pass; rows of a shared source only when they were recorded in the project
-    (payload `project`) or, for rows from before findings named their project, by one of its
-    agents (the `agent` label)."""
-    if not scope or not scope.get("sources"):
-        return "", []
-    shared = list(scope["sources"])
-    agents = list(scope.get("agents") or [])
-    sql = (f" AND (source NOT IN ({', '.join(['?'] * len(shared))}) "
-           "OR json_extract_string(payload, '$.project') = ?")
-    params = [*shared, scope.get("project") or ""]
-    if agents:
-        sql += (" OR (json_extract_string(payload, '$.project') IS NULL AND "
-                f"json_extract_string(labels, '$.agent') IN ({', '.join(['?'] * len(agents))}))")
-        params += agents
-    return sql + ")", params
-
-
 class ReadExclude(dict):
-    """One request's `exclude` (see _exclude_sql): the same dict, with room for what Store._exclude
-    works out from it, so a request that reads several times looks each thing up once. `records` is
+    """One request's `exclude` ({"ids": [hidden project ids], "names": [their names], "shared":
+    [...]}): the same dict, with room for what a reader works out from it, so a request that reads
+    several times looks each thing up once. `records` is
     the deleted private projects' records as read when the dict was built (None: look them up). It
     belongs to the request that built it: nothing here is kept for the next one."""
 
@@ -207,151 +76,12 @@ class ReadExclude(dict):
         self.built: dict = {}
 
 
-# Licence-independent by design (TR-915): never consult licence or team here.
-def _exclude_sql(exclude, sources=None, sessions=None, digests=None,
-                 moved=None) -> tuple[str, list]:
-    """Rows that belong to projects the caller cannot see -> ('AND ...' SQL, params). `exclude` is
-    {"ids": [project ids], "names": [project names], "shared": [the shared finding and
-    memory sources, or None for every source]}, or None/empty for no filter (the common
-    case: no private project, nothing added to the query). A row is left out when its
-    `tares_project` label names one of them, when its session (key) is linked to one in
-    project_sessions, or when a shared finding or memory row was recorded in one (payload
-    `project`). A row with none of those is kept. `sources` is what the query reads: the payload
-    test is left out when none of them is a shared source. `sessions` is the keys linked in
-    project_sessions to those projects (Store._exclude reads them from the state, which may
-    be Postgres while the events are in DuckDB). `digests` is (digest of a name, until) for the
-    deleted private projects among them (Store._deleted_names): a row whose `tares_project`
-    label has that name is left out, when it is older than `until` if there is one. `moved` is
-    (source, until) for the sources only those deleted projects had (Store._moved_sources): the
-    source's rows older than `until` are left out."""
-    if not exclude or not (exclude.get("ids") or exclude.get("names")):
-        return "", []
-    # every list is sorted, so the same rows left out give the same SQL and parameters
-    ids = sorted(exclude.get("ids") or [])
-    both = sorted({v.lower() for v in [*ids, *(exclude.get("names") or [])]})
-    ph = lambda n: ", ".join(["?"] * n)
-    # NOT COALESCE(x IN (...), FALSE) keeps a row with no value: x is NULL, so is the test. It
-    # also leaves the NULLs as NULLs, which is cheaper than COALESCE(x, '') on every row.
-    # The payload is the dear column to open, so it is only looked into for the shared sources
-    # that can carry another project's rows (`shared`); no list given means every source.
-    shared = exclude.get("shared")
-    if shared is not None:
-        shared = sorted(x for x in shared if sources is None or x in sources)
-    if shared is None:
-        pay, pparams = (f" AND NOT COALESCE(json_extract_string(payload, '$.project') "
-                        f"IN ({ph(len(ids))}), FALSE)"), ids
-    elif shared:
-        pay = (f" AND NOT COALESCE(CASE WHEN source IN ({ph(len(shared))}) THEN "
-               f"json_extract_string(payload, '$.project') IN ({ph(len(ids))}) END, FALSE)")
-        pparams = [*shared, *ids]
-    else:
-        pay, pparams = "", []
-    sql = (f" AND NOT COALESCE(lower(json_extract_string(labels, '$.tares_project')) "
-           f"IN ({ph(len(both))}), FALSE){pay}")
-    sessions = sorted(sessions or [])
-    if sessions:
-        sql += f" AND NOT COALESCE(key_value IN ({ph(len(sessions))}), FALSE)"
-    always = [d for d, until in digests or () if until is None]
-    before = [(d, until) for d, until in digests or () if until is not None]
-    digest = "sha256(json_extract_string(labels, '$.tares_project'))"
-    tests = [f"{digest} IN ({ph(len(always))})"] if always else []
-    tests += [f"({digest} = ? AND event_time < ?)"] * len(before)
-    if tests:
-        sql += f" AND NOT COALESCE({' OR '.join(tests)}, FALSE)"
-    moved = sorted(((s, until) for s, until in moved or () if sources is None or s in sources),
-                   key=lambda pair: pair[0])
-    if moved:
-        old = " OR ".join(["(source = ? AND event_time < ?)"] * len(moved))
-        sql += f" AND NOT COALESCE({old}, FALSE)"
-    return sql, [*both, *pparams, *sessions, *always, *(v for pair in before for v in pair),
-                 *(v for pair in moved for v in pair)]
-
-
-def _line_hidden(exclude, source: str, digests=(), moved=()):
-    """The label, payload, name and source tests of `_exclude_sql` for a line read from
-    `session_lines`: a function of (labels, payload, at), the first two JSON texts and `at` the
-    line's time, true when the line is left out. `digests` and `moved` are as there. The session
-    test is the caller's."""
-    ids = list((exclude or {}).get("ids") or [])
-    names = list((exclude or {}).get("names") or [])
-    if not (ids or names):
-        return lambda labels, payload, at=None: False
-    digests = dict(digests)
-    moved_until = dict(moved).get(source)
-    both = {v.lower() for v in [*ids, *names]}
-    shared = exclude.get("shared")
-    in_payload = shared is None or source in shared
-
-    def field(blob, name):
-        try:
-            return json.loads(blob or "{}").get(name)
-        except (ValueError, TypeError, AttributeError):
-            return None
-
-    def hidden(labels, payload, at=None) -> bool:
-        tag = field(labels, "tares_project")
-        if tag is not None:
-            if str(tag).lower() in both:
-                return True
-            digest = _name_digest(str(tag)) if digests else None
-            if digest in digests:      # a deleted private project's name
-                until = digests[digest]
-                if until is None or (at is not None and at < until):
-                    return True
-        if moved_until is not None and at is not None and at < moved_until:
-            return True
-        return in_payload and field(payload, "project") in ids
-    return hidden
-
-
-def _cgroup_mem_bytes() -> int | None:
-    """The container's memory limit in bytes (cgroup v2, then v1), or None if unlimited/unknown."""
-    for p in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
-        try:
-            raw = open(p).read().strip()
-        except OSError:
-            continue
-        if raw.isdigit():
-            n = int(raw)
-            if 0 < n < (1 << 62):        # "max" or a huge sentinel = effectively unlimited
-                return n
-    return None
-
-
 def _file_size(path: str) -> int:
     """Bytes on disk, 0 if the file isn't there (an in-memory db, or a WAL that's checkpointed)."""
     try:
         return os.path.getsize(path)
     except OSError:
         return 0
-
-
-DEFAULT_DUCKDB_MEMORY_LIMIT = "1GB"
-
-
-def _bound_duckdb_memory(con, path: str) -> None:
-    """Bound DuckDB to the CONTAINER, not the host. Without a memory_limit DuckDB sizes itself to
-    the node's RAM, so one heavy scan over a grown dataset blows past the cgroup limit and the
-    process is OOMKilled (this took the dev cell down at ~1M events). With a limit set, DuckDB
-    spills intermediates to temp_directory (on the data volume) instead of dying. Override with
-    TARES_DUCKDB_MEMORY_LIMIT (e.g. "800MB"). With no container limit (`tares up` on a laptop)
-    the cap is DEFAULT_DUCKDB_MEMORY_LIMIT: DuckDB's own default is 80% of the machine's RAM, and
-    its cache grew to about 4 GB on a Mac and never shrank."""
-    limit = os.getenv("TARES_DUCKDB_MEMORY_LIMIT")
-    if not limit:
-        cg = _cgroup_mem_bytes()
-        if cg:
-            limit = f"{max(256, int(cg * 0.6) // (1024 * 1024))}MB"   # 60% of the container
-    if not limit:
-        limit = DEFAULT_DUCKDB_MEMORY_LIMIT
-    try:
-        con.execute(f"PRAGMA memory_limit='{limit}'")
-        con.execute(f"PRAGMA threads={os.getenv('TARES_DUCKDB_THREADS', '2')}")
-        tmp = os.path.join(os.path.dirname(os.path.abspath(path)) or ".", ".duckdb_tmp")
-        os.makedirs(tmp, exist_ok=True)
-        con.execute(f"PRAGMA temp_directory='{tmp}'")
-    except Exception as e:                 # never let tuning block startup
-        print(f"taresd: could not bound DuckDB memory ({e})")
 
 
 _MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September",
@@ -368,27 +98,11 @@ def day_month_words(when) -> str:
     return f"{when.day} {_MONTHS[when.month - 1][:3]}"
 
 
-# The tables a CREATE, ALTER or CREATE INDEX statement names, for `Store._ddl()` to leave out the
-# tables that have moved to the session store (their revisions make them)
-_DDL_TARGET = re.compile(
-    r"^\s*(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE(?:\s+IF\s+EXISTS)?|"
-    r"CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+\S+\s+ON)\s+\"?(\w+)", re.I)
-
-
-def _unmoved(statements) -> list[str]:
-    """`statements` without the ones that make, change or index a table in MOVED_TABLES."""
-    out = []
-    for stmt in statements:
-        m = _DDL_TARGET.match(state_db._strip_comments(stmt))
-        if not (m and m.group(1).lower() in MOVED_TABLE_NAMES):
-            out.append(stmt)
-    return out
-
-
 class StoreUnavailable(RuntimeError):
-    """The database could not be opened or initialized — locked by another daemon, permissions,
-    a full disk, a corrupt file. Raised instead of the raw DuckDB error so taresd can start in
-    degraded mode (serve the console and explain itself) rather than exit with a traceback."""
+    """The database could not be opened or initialized: a Postgres that does not answer or refuses
+    the login, a file that cannot be opened, a full disk. Raised instead of the raw error so taresd
+    can start in degraded mode (serve the console and explain itself) rather than exit with a
+    traceback."""
 
     def __init__(self, reason: str, path: str = ""):
         super().__init__(reason)
@@ -396,160 +110,50 @@ class StoreUnavailable(RuntimeError):
         self.path = path
 
 
+# How long one measure of the store's size (`Store.disk_bytes`) is used again: /health, every
+# ingest and every scrape ask for it, and on Postgres it is a query
+SIZE_FOR = 5.0
+
+
 class Store(FactoryStore, ClaudeUsageStore):
-    def __init__(self, path: str = "tares.duckdb", state_dsn: str | None = None):
-        # One DuckDB connection, used under self._lock from whichever thread a request runs on.
-        # State (every table but state_db.EVENT_TABLES) is read through self.sc: the same DuckDB
-        # connection and lock by default; with a state_dsn, Postgres, where reads take no lock and
-        # run in parallel and writes take self._swrite, so read-then-write steps stay atomic.
-        self._lock = threading.Lock()
-        # held by append (commit to DuckDB, then the sessions row) and by the reconcile's writes
+    def __init__(self, data_dir: str = ".", state_dsn: str | None = None):
+        # Everything is in the session store: `tares.sqlite` in `data_dir`, or the Postgres of
+        # `state_dsn`. A read is the session store's own read transaction and takes no lock
+        # (`_sread`). A write takes `_swrite`, one lock in this process, so a step that reads and
+        # then writes, in one transaction or several, is not run in between another one's; between
+        # processes the database decides (BEGIN IMMEDIATE on SQLite, the numbering locks on Postgres).
+        self._sread = contextlib.nullcontext()
+        self._swrite = threading.Lock()
+        # held by append across a batch's write to the session store, so a refused batch is taken
+        # back before the next one is numbered
         self._sess_lock = threading.Lock()
-        self._archive_on = None            # whether an archive backend exists (settled at first use)
         self._challenges_unreadable: set = set()    # challenger lines already logged as unreadable
-        self.path = path          # kept so usage() can size the db file and its WAL
+        self._size: tuple | None = None             # (when, the sizes) of the last measure
+        self.data_dir = data_dir                    # ":memory:" for a store with no file
         self.state_dsn = state_dsn
-        # Opening the DB is the one startup step that routinely fails for reasons outside the
-        # process (another daemon holds the lock, the file is unreadable, the volume is full).
-        # Fail as StoreUnavailable so the caller can degrade; the original error is kept as the
-        # cause so the traceback still reaches the process log.
+        where = "the state database" if state_dsn else (
+            "memory" if data_dir == MEMORY else os.path.join(os.path.abspath(data_dir), SQLITE_FILE))
         try:
-            self.con = duckdb.connect(path)
-        except Exception as e:
-            raise StoreUnavailable(f"cannot open the database at {path}: {e}", path) from e
-        self._use_duckdb_state()
-        try:
-            _bound_duckdb_memory(self.con, path)
-            for stmt in self._ddl():
-                self.con.execute(stmt)
-            pg = None
-            moved_at = self._moved_mark()
-            if moved_at and not state_dsn:
-                # the DuckDB copy stopped at the move; serving it would quietly lose everything
-                # written since, so say what is missing instead
-                raise StoreUnavailable(
-                    f"this cell's state moved to Postgres on {moved_at}; TARES_STATE_DSN is not "
-                    "set, so it cannot be read. Set it again and restart.", path)
-            if state_dsn:
-                pg = state_db.PgState(state_dsn)
-                for stmt in state_db.state_ddl(self._ddl()):
-                    pg.execute(stmt)
-                if state_db.moved(pg):
-                    self._use_pg_state(pg)        # upgrades below run on the moved state
-                    if not moved_at:
-                        # the move committed but the start stopped before marking DuckDB: mark
-                        # it now, so a later start without the DSN still refuses
-                        self._mark_moved(now_utc().isoformat())
-                elif moved_at:
-                    # this cell moved before, yet this database holds none of it (recreated,
-                    # restored from before the move, or the wrong DSN): moving again would put
-                    # the DuckDB copy from the day of the move in place of everything since
-                    raise StoreUnavailable(
-                        f"this cell's state moved to Postgres on {moved_at}, but the database "
-                        "TARES_STATE_DSN points at does not hold it. Point it at the cell's "
-                        "state database and restart.", path)
-            # The session store: SQLite beside the DuckDB file, or the state Postgres. Built here,
-            # where the guards above have passed (a start refused for a missing DSN leaves no file)
-            # and the DuckDB-or-Postgres choice is made (state_dsn is set), before any data upgrade.
+            if data_dir != MEMORY and not state_dsn:
+                os.makedirs(data_dir, exist_ok=True)
             self.sessions_db = SessionStore(
-                ":memory:" if path == ":memory:" else os.path.dirname(os.path.abspath(path)),
-                state_dsn or None)
+                MEMORY if data_dir == MEMORY else os.path.abspath(data_dir), state_dsn or None)
             self.sessions_db.upgrade()
-            # The five session tables are copied in before the data upgrades, so the fills in
-            # _upgrade() write into a table that already holds its rows. On SQLite that is a copy
-            # from DuckDB (once; the ledger skips a table already copied). On the first start with
-            # a state database the same copy fills the new Postgres tables (from tares.sqlite
-            # when the cell ran locally first, else from DuckDB), and the one-time move below
-            # leaves them out. DuckDB's own copies and tares.sqlite are never changed.
-            first_pg_start = pg is not None and self.sc is self.con
-            copy_from_duckdb(
-                self, self.sessions_db, state_move=first_pg_start,
-                local_dir=None if path == ":memory:" else os.path.dirname(os.path.abspath(path)))
             self._upgrade()
-            # an empty cell has nothing to catch up on: its readers use the sessions table at once
-            # (one with claude_code lines scans events until its reconcile finishes, TR-1520)
-            session_ingest.mark_caught_up_if_empty(self)
-            if first_pg_start:
-                # first start with a state database: the state moves over once, then is read
-                # from Postgres only; the DuckDB copy is left as it was, as a fallback
-                state_db.move(self.con, pg, self._state_tables())
-                self._mark_moved(now_utc().isoformat())
-                self._use_pg_state(pg)
-            # Write the upgrade into the database file now. Left in the WAL, the new columns on
-            # agent_runs (a table with an index) replay after a hard stop into a corrupted index:
-            # "Corrupted ART index", and every query after it fails until a restart.
-            self.con.execute("CHECKPOINT")
         except Exception as e:
-            raise StoreUnavailable(f"cannot initialize the database at {path}: {e}", path) from e
+            raise StoreUnavailable(f"cannot open the database in {where}: {e}", where) from e
 
     def close(self) -> None:
-        """Let go of the session store's connections. The DuckDB and Postgres state connections are
-        left to the process, as before."""
-        warm_stop = getattr(self, "_digest_stop", None)
-        if warm_stop is not None:
-            warm_stop.set()     # the digest warm-up (session_digest.start) stops between batches
-        th = getattr(self, "_digest_thread", None)
-        if th is not None and th is not threading.current_thread():
-            th.join(60)
+        """Let go of the session store's connections, after the ten minute pass has stopped."""
         stop = getattr(self, "_reconcile_stop", None)
         if stop is not None:
-            stop.set()          # the ten minute reconcile (session_ingest._cycle) ends
-        # The start-up pass reads `con` and `sessions_db` from its own thread: let it finish, or a
-        # close that follows (`con.close()`) meets a busy connection (TR-1638)
+            stop.set()          # the ten minute pass (session_ingest._cycle) ends
         th = getattr(self, "_reconcile_thread", None)
-        if th is not None and th is not threading.current_thread():
-            th.join(60)
-        move_stop = getattr(self, "_move_stop", None)
-        if move_stop is not None:
-            move_stop.set()     # the session move (session_move.run) stops between sessions
-        th = getattr(self, "_move_thread", None)
         if th is not None and th is not threading.current_thread():
             th.join(60)
         sessions_db = getattr(self, "sessions_db", None)
         if sessions_db is not None:
             sessions_db.close()
-
-    # The one setting that stays in DuckDB: `state_moved_to_postgres` says that this DuckDB file's
-    # state went to Postgres, so a start without TARES_STATE_DSN refuses to serve the stale copy
-    # (TR-1480: the other settings are in the session store, which a start without the DSN would
-    # not see the Postgres rows of). The table is the old `settings` table, made here only when
-    # the mark is first written; a cell that moved before TR-1480 already has it with the mark.
-    def _moved_mark(self) -> str | None:
-        if "settings" not in self._tables_of(self.con):
-            return None
-        row = self.con.execute(
-            "SELECT value FROM settings WHERE key = 'state_moved_to_postgres'").fetchone()
-        return row[0] if row else None
-
-    def _mark_moved(self, when: str) -> None:
-        self.con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, "
-                         "updated_at TIMESTAMPTZ)")
-        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                         "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
-                         "UPDATE SET value = excluded.value", [when])
-
-    def _use_duckdb_state(self) -> None:
-        self.sc, self._sread, self._swrite = self.con, self._lock, self._lock
-
-    def _use_pg_state(self, pg) -> None:
-        self.sc, self._sread, self._swrite = pg, contextlib.nullcontext(), threading.Lock()
-
-    @staticmethod
-    def _ddl() -> list[str]:
-        # a table that has moved to the session store (MOVED_TABLES) is made by its revision there,
-        # not here: its CREATE and ALTER statements below stay as the record of the old schema
-        # (tests/old_ddl.py keeps them as text) and are left out of what runs
-        return _unmoved([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
-                        + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA))
-
-    def _state_tables(self) -> list[str]:
-        """The DuckDB state tables the one-time move to Postgres copies: those this schema still
-        makes. An old cell's tables of the source catalog, triggers and agents (TR-1810, TR-1811)
-        stay in its DuckDB file and are not moved."""
-        made = {m.group(1).lower() for s in self._ddl()
-                if (m := re.match(r"\s*(?:--[^\n]*\n\s*)*CREATE TABLE IF NOT EXISTS (\w+)", s))}
-        return sorted(t for t in self._tables_of(self.con)
-                      if t not in state_db.EVENT_TABLES and t not in MOVED_TABLE_NAMES and t in made)
 
     def _upgrade(self) -> None:
         """The data upgrades every open runs; each is idempotent."""
@@ -558,21 +162,14 @@ class Store(FactoryStore, ClaudeUsageStore):
         self._factory_upgrade()
         self._ticket_pr_columns()
         self._people_upgrade()
-        self._claude_usage_fill()
-        self._challenges_fill()
+        self._claude_usage_reprice()
 
     def _ticket_pr_columns(self) -> None:
         """tickets.pr_repo and pr_number say what `pr` says (TR-1614). A release before them writes
         `pr` and knows nothing of the two columns (a cell rolled back and up again), so every start
-        repairs the rows that differ. After the copy from DuckDB, which has `pr` only."""
+        repairs the rows that differ."""
         with self._swrite, self.sessions_db.begin() as conn:
             fill_pr_columns(conn)
-
-    @staticmethod
-    def _tables_of(con) -> set:
-        return {r[0] for r in con.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = current_schema()").fetchall()}
 
     def _people_upgrade(self) -> None:
         """The person `local` always exists: the one person of a cell with auth off, and the one
@@ -582,10 +179,6 @@ class Store(FactoryStore, ClaudeUsageStore):
                 id="local", name="You", email=None, emails=[], github=None, is_admin=True,
                 created_at=now_utc(), created_via="boot").on_conflict_do_nothing(
                 index_elements=["id"]))
-
-    def _tables(self) -> set:
-        """The state tables where the state lives, plus the event tables."""
-        return self._tables_of(self.sc) | (self._tables_of(self.con) & state_db.EVENT_TABLES)
 
     def _skills_upgrade(self) -> None:
         """Once per database: the skills each project kept become skills of the cell that those
@@ -627,147 +220,70 @@ class Store(FactoryStore, ClaudeUsageStore):
                 .group_by(o.c.usecase_id).order_by(func.min(o.c.created_at))).scalars())
 
     def ping(self) -> None:
-        """Cheapest possible liveness probe for /health — proves the connection still answers.
-        Raises whatever DuckDB raises when the store has gone away underneath us."""
-        with self._lock:
-            self.con.execute("SELECT 1").fetchone()
+        """Cheapest possible liveness probe for /health: one SELECT 1 in the session store. Raises
+        whatever the database raises when it has gone away underneath us."""
+        with self.sessions_db.read() as conn:
+            conn.execute(text("SELECT 1")).scalar()
+
+    def _sizes(self) -> dict:
+        """{"db": the store's own bytes (the SQLite file, or the Postgres database), "wal": the
+        SQLite WAL, "archive": the bytes of the archived parts, "lines": the lines the sessions
+        hold}. Measured at most once every SIZE_FOR seconds; nothing here scans `session_lines`."""
+        now = time.monotonic()
+        if self._size is not None and now - self._size[0] < SIZE_FOR:
+            return self._size[1]
+        db = self.sessions_db
+        with db.read() as conn:
+            if db.dialect == "postgresql":
+                own = int(conn.execute(text("SELECT pg_database_size(current_database())")).scalar_one())
+                wal = 0
+            elif self.data_dir == MEMORY:
+                own = wal = 0
+            else:
+                f = os.path.join(os.path.abspath(self.data_dir), SQLITE_FILE)
+                own, wal = _file_size(f), _file_size(f + "-wal")
+            archive = int(conn.execute(select(func.coalesce(func.sum(
+                session_archive_parts.c.bytes), 0))).scalar_one())
+            lines = int(conn.execute(select(func.coalesce(func.sum(
+                sessions_table.c.line_count), 0))).scalar_one())
+        out = {"db": own, "wal": wal, "archive": archive, "lines": lines}
+        self._size = (now, out)
+        return out
 
     def disk_bytes(self) -> int:
-        """db + WAL bytes, from stat() only — no query, so /health can call it on every probe."""
-        return _file_size(self.path) + _file_size(self.path + ".wal")
+        """What the cell stores, measured against its limit: the session store (the SQLite file and
+        its WAL, or the Postgres database) plus the archive."""
+        z = self._sizes()
+        return z["db"] + z["wal"] + z["archive"]
 
     # ── ingest ──────────────────────────────────────────────────────────────
     def append(self, envelopes: list[Envelope]) -> None:
+        """Store a batch: its claude_code lines in the session store (`session_ingest.record_first`,
+        which raises `session_ingest.LinesNotStored` when it took none of them), and the
+        challenger's lines in `challenges`. A line of no session is not kept."""
         if not envelopes:
             return
         cc = session_ingest.claude_code_lines(self, envelopes)
-        if not cc:
-            return self._append(envelopes)
-        session_events.note(self, cc)       # before any of them reaches DuckDB (TR-1695)
-        # With an archive, the claude_code lines of a session the session store answers for alone
-        # go only there (TR-1479); anywhere else they are written to DuckDB too. The reconcile at
-        # start holds the same lock, so a line is never counted by both.
-        gate = self._lines_skip_duckdb()
-        with self._sess_lock:
-            try:
-                held = session_ingest.holdable(self, cc) if gate else []
-            except Exception:                # no answer from the session store: DuckDB keeps them
-                held = []
-            held = self._append_session_first(envelopes, cc, held)
-        if len(cc) > len(held):
-            metrics.session_lines_to_duckdb(len(cc) - len(held))
-
-    def _append_session_first(self, envelopes, cc, held) -> list:
-        """The factory's order (TR-1665): the session store, then DuckDB. Raises
-        `session_ingest.LinesNotStored` with no line stored, so the sender sends the batch again.
-        A DuckDB failure takes the session store's write back before it is raised. Lines of a
-        session the store refused are never held back from DuckDB: the drain copies them from there.
-        Returns the lines that were held back. Called under `_sess_lock`."""
-        try:
-            written = session_ingest.record_first(self, cc)
-        except session_ingest.LinesNotStored:
-            # a challenger line is sent once, with no retry, so its verdict is still written (a
-            # repeat is skipped). That keeps it when the database refused one session's row alone
-            # (TR-1647) or takes writes again. While it takes none, the verdict is lost, said in
-            # the log and counted: accepted (decision A9)
-            self._keep_challenges(envelopes)
-            raise
-        held = [e for e in held if e.key_value not in written.refused]
-        try:
-            self._append(envelopes, held)
-        except Exception:
-            session_ingest.take_back(self, written)
-            raise
-        return held
-
-    def _lines_skip_duckdb(self) -> bool:
-        """True when claude_code lines may go only to the session store: there is an archive backend (the folder archive always exists on SQLite; a Postgres cell needs
-        TARES_ARCHIVE_URL; the answer is settled once per process, so a cell restarts after the URL
-        is set or fixed). A factory cell on Postgres with none keeps writing to DuckDB and says so
-        once. Until the `sessions` table has caught up with the events already in DuckDB, the lines
-        go to both: the readers scan events until then, and a line held back would be missing. Which
-        sessions are held is `session_ingest.holdable`'s call."""
-        if self._archive_on is None:
-            try:
-                self._archive_on = session_archive.backend_of(self) is not None
-            except Exception as e:           # an unusable URL: the archive pass fails too
-                print(f"taresd: transcript lines are still written to DuckDB: the archive is not "
-                      f"usable ({e}); restart after fixing TARES_ARCHIVE_URL", flush=True)
-                self._archive_on = False
-            else:
-                if not self._archive_on:
-                    print("taresd: transcript lines are still written to DuckDB: no archive "
-                          "configured (TARES_ARCHIVE_URL; restart after setting it)", flush=True)
-        if not self._archive_on:
-            return False
-        try:
-            return session_ingest.caught_up(self)
-        except Exception:
-            return False
-
-    def start_session_reconcile(self):
-        """Catch the `sessions` table up with the events in a background thread (TR-1471). The four
-        session readers scan events until this has finished once, and read the table after (TR-1520);
-        a failed pass leaves them on the scan and the next start tries again."""
-        self._lines_skip_duckdb()          # says once, at start, when the lines still go to DuckDB
-        return session_ingest.start_reconcile(self)
-
-    def _append_events(self, envelopes: list[Envelope]) -> None:
-        """Only the rows of the events table, in one transaction (no counters)."""
-        rows = [(e.source, e.source_type, e.key_value, e.event_type, e.text, json.dumps(e.payload),
-                 json.dumps(e.labels), e.event_time, e.ingest_time) for e in envelopes]
-        with self._lock:
-            self.con.execute("BEGIN TRANSACTION")
-            try:
-                for i in range(0, len(rows), 2000):
-                    self.con.executemany(
-                        "INSERT INTO events (source, source_type, key_value, event_type, text, "
-                        "payload, labels, event_time, ingest_time) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows[i:i + 2000])
-                self.con.execute("COMMIT")
-            except Exception:
-                self.con.execute("ROLLBACK")
-                raise
-        metrics.session_lines_to_duckdb(len(envelopes))
-
-    def _append(self, envelopes: list[Envelope], held=()) -> None:
-        """`held`: lines of the batch that do not go to the events table (the session store has
-        them): challenges are recorded for them, as for any line."""
-        # Explicit column list: the `labels` column was added by migration after first release,
-        # so positional INSERT order is no longer guaranteed.
-        skip = {id(e) for e in held}
-        rows = [
-            (e.source, e.source_type, e.key_value, e.event_type, e.text,
-             json.dumps(e.payload), json.dumps(e.labels),
-             e.event_time, e.ingest_time)
-            for e in envelopes if id(e) not in skip
-        ]
-        # Insert in bounded chunks. DuckDB's executemany binds rows one at a time, so a single huge
-        # batch (e.g. a connector catching up a large backlog) would bind millions of parameters at
-        # once and stall the daemon. Chunking caps each bind regardless of how much a caller passes.
-        # The event inserts run in one transaction (a crash rolls back all of them together).
-        chunk = 2000
-        with self._lock:
-            self.con.execute("BEGIN TRANSACTION")
-            try:
-                for i in range(0, len(rows), chunk):
-                    self.con.executemany(
-                        "INSERT INTO events (source, source_type, key_value, event_type, text, "
-                        "payload, labels, event_time, ingest_time) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows[i:i + chunk]
-                    )
-                self.con.execute("COMMIT")
-            except Exception:
-                self.con.execute("ROLLBACK")
-                raise
+        if cc:
+            with self._sess_lock:
+                try:
+                    session_ingest.record_first(self, cc)
+                except session_ingest.LinesNotStored:
+                    # a challenger line is sent once, with no retry, so its verdict is still
+                    # written (a repeat is skipped). While the store takes no write it is lost,
+                    # said in the log and counted: accepted (decision A9)
+                    self._keep_challenges(envelopes)
+                    raise
         self._keep_challenges(envelopes)
 
+    def start_session_reconcile(self):
+        """Start the ten minute pass over the session store (`session_ingest.start_reconcile`)."""
+        return session_ingest.start_reconcile(self)
+
     def _keep_challenges(self, envelopes) -> None:
-        # the challenger's lines also go to `challenges` (sessions database): after the events
-        # committed, or when the batch was refused (_append_session_first). One that cannot be
-        # written is lost: the fill from `events` (_challenges_fill) runs once (TR-1613) and the
-        # challenger sends a line once, so it is said in the log and counted
-        # (`tares_challenges_lost_total`).
+        # the challenger's lines go to `challenges`: after the batch's lines were stored, or when
+        # the batch was refused. One that cannot be written is lost: the challenger sends a line
+        # once, so it is said in the log and counted (`tares_challenges_lost_total`).
         ch = [(e.source, e.key_value or "", e.event_time, e.event_type,
                str((e.labels or {}).get("branch") or ""),
                None if (e.labels or {}).get("tares_project") is None
@@ -780,266 +296,6 @@ class Store(FactoryStore, ClaudeUsageStore):
             except Exception as ex:   # never fail an ingest, or hide why one was refused, for this
                 self._challenges_not_kept(ch, ex)
 
-    # ── reads ───────────────────────────────────────────────────────────────
-    # Licence-independent by design (TR-915): never consult licence or team here.
-
-    def _exclude(self, exclude, sources=None) -> tuple[str, list]:
-        """The module's _exclude_sql, with what the state knows of the hidden projects read
-        first: the sessions linked to them, and the names and sources of the deleted ones. A
-        ReadExclude keeps both, so one request looks them up once and builds each filter once."""
-        built = getattr(exclude, "built", {})     # a plain dict keeps nothing
-        ids = tuple((exclude or {}).get("ids") or [])
-        spot = ("sql", ids, None if sources is None else frozenset(sources))
-        got = built.get(spot)
-        if got is None:
-            got = built[spot] = _exclude_sql(exclude, sources, *self._looked(exclude))
-        return got[0], list(got[1])
-
-    def _looked(self, exclude) -> tuple:
-        """What _looked_up gives for the projects `exclude` names, kept on a ReadExclude."""
-        built = getattr(exclude, "built", {})
-        ids = tuple((exclude or {}).get("ids") or [])
-        looked = built.get(("looked", ids))
-        if looked is None:
-            looked = built["looked", ids] = self._looked_up(
-                list(ids), getattr(exclude, "records", None))
-        return looked
-
-    def _looked_up(self, ids: list, records: dict | None) -> tuple:
-        """(sessions, digests, moved) for _exclude_sql: what the state knows of the projects
-        `ids`. `records` is the deleted private projects' records, when already read."""
-        if not ids:
-            return [], [], []
-        sessions = self.sessions_of_projects(ids)
-        if records is None:
-            records = self._deleted_records()
-        gone = [records[i] for i in ids if i in records]
-        return sessions, self._deleted_names(gone), self._moved_sources(gone)
-
-    @staticmethod
-    def _moved_sources(gone: list) -> list[tuple]:
-        """(source, until) for the sources that only one of the deleted private projects `gone`
-        (`_deleted_records`) had: what each recorded before that delete stays unread. A record
-        made before sources were noted is the name's digest alone."""
-        until: dict[str, datetime] = {}
-        for r in gone:
-            for name in r.get("sources", ()) if isinstance(r, dict) else ():
-                at = datetime.fromisoformat(r["at"])
-                until[name] = max(at, until.get(name, at))
-        return sorted(until.items())
-
-    def _deleted_names(self, gone: list) -> list[tuple]:
-        """(digest of the name, until) for each of the deleted private projects `gone`
-        (`_deleted_records`). `until` is when the project that has the name now was made, as lines
-        from then on are its own, or None when no project has it."""
-        digests = {_digest_of(r) for r in gone}
-        if not digests:
-            return []
-        taken = {_name_digest(p["name"]): p["created_at"] for p in self.list_projects()}
-        return [(d, taken.get(d)) for d in sorted(digests)]
-
-    # ── the event and session readers the session digest answers (TR-1695): no route reads
-    # them since the source catalog went (TR-1811); they go with the digest and DuckDB (TR-1815) ──
-    def read_window(self, sources: list[str], key: str | None, since: datetime, cap: int = 12,
-                         filters: list | None = None, where: dict | None = None,
-                         include_payload: bool = False, scope: dict | None = None,
-                         exclude: dict | None = None, owners: set | None = None,
-                         shared: list[str] | None = None):
-        """Rows for an entity across sources, time-ordered: (event_time, source, text, labels), plus
-        the raw lossless `payload` as a 5th column when `include_payload` is set.
-
-        The entity is selected by `key` (legacy primary key_value) and/or `where` (a
-        {label: value} map matching named labels). Passing key=None with a `where` is the
-        label-native read ("everything where env=prod"); passing a key keeps the old behaviour.
-
-        Caps each source to its most-recent `cap` events so a lossless store doesn't return a
-        bloated payload (e.g. thousands of identical log lines or every 5s metric sample). Ingest
-        stays lossless; this bound is a read-path summary, matching what an SRE actually wants.
-        `include_payload` pulls the full stored record per row (bounded by the same cap) for callers
-        that need fidelity beyond the summary `text`. `scope` narrows the shared findings and
-        memory sources to one project's rows (see _scope_sql). `exclude` drops the rows of the
-        projects the caller cannot see (see _exclude_sql). When `owners` is a set, the ids of the
-        projects the returned rows belong to are added to it (see _row_owners); `shared` names the
-        shared finding and memory sources, the only ones whose payload `project` counts.
-        """
-        cols = "event_time, source, text, labels" + (", payload" if include_payload else "")
-        ocols: list = []
-        if owners is not None:
-            # the payload is only opened for the shared sources, as _exclude_sql does
-            shared = [x for x in (shared or []) if x in sources]
-            if shared:
-                cols += (", key_value, CASE WHEN source IN "
-                         f"({', '.join(['?'] * len(shared))}) THEN "
-                         "json_extract_string(payload, '$.project') END")
-                ocols = shared
-            else:
-                cols += ", key_value, NULL"
-        ph = ", ".join(["?"] * len(sources))
-        fsql, fparams = _filter_sql(filters)
-        wsql, wparams = _where_sql(where)
-        ssql, sparams = _scope_sql(scope)
-        esql, eparams = self._exclude(exclude, sources)
-        wsql, wparams = wsql + ssql + esql, wparams + sparams + eparams
-        ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
-        held = session_events.view(self, sources, since, key=key, filters=filters, where=where,
-                                   need_payload=bool(exclude) and exclude.get("shared") is None)
-        # among lines of one instant, the stored ones keep their order in the session
-        newest, oldest = (", held_ref DESC", ", held_ref") if held.held else ("", "")
-        with self._lock:
-            rows = self.con.execute(
-                f"SELECT * FROM ("
-                f"  SELECT {cols}, {held.ref} AS ref, "
-                f"  ROW_NUMBER() OVER (PARTITION BY source ORDER BY event_time DESC{newest}) AS rn "
-                # reference sources are declarative context — always surfaced for the matched
-                # entity, regardless of the read window (a project note doesn't 'age out').
-                f"  FROM {held.table} WHERE source IN ({ph}) "
-                f"    AND (source_type = 'reference' OR event_time >= ?){ksql}{fsql}{wsql}"
-                f") WHERE rn <= {int(cap)} ORDER BY event_time{oldest.replace('held_ref', 'ref')}",
-                [*ocols, *held.params, *sources, since, *kparams, *fparams, *wparams],
-            ).fetchall()
-        # each row: the columns asked for, then (key, payload project) with owners, ref, rn
-        refs = [r[-2] for r in rows]
-        rows = [r[:-2] for r in rows]
-        if held.held:                     # a stored line's text and payload, for the rows returned
-            text = held.fill(refs)
-            for i, n in enumerate(refs):
-                if n is not None:
-                    row = list(rows[i])
-                    row[2] = text[n][0]
-                    if include_payload:
-                        row[4] = text[n][1]
-                    rows[i] = tuple(row)
-        if owners is None:
-            return rows
-        n = len(rows[0]) - 2 if rows else 0       # the columns asked for, before key and payload project
-        owners |= self._row_owners(rows, n)
-        return [r[:n] for r in rows]
-
-    def _row_owners(self, rows: list, n: int) -> set[str]:
-        """The ids of the projects the `rows` belong to, by the three tests _exclude_sql hides by:
-        the `tares_project` label (id or name), the payload `project` of a shared finding or
-        memory row, and the row's session (key) linked in project_sessions. Each row is its first
-        `n` columns (event_time, source, text, labels, ...), then key_value, the payload project
-        (read only for the shared sources, NULL for the rest) and the row number. Rows the caller
-        could not see were already dropped from the read."""
-        found: set[str] = set()
-        named: set[str] = set()
-        keys: set[str] = set()
-        for r in rows:
-            try:
-                tag = (json.loads(r[3]) if isinstance(r[3], str) else r[3] or {}).get("tares_project")
-            except (ValueError, AttributeError):
-                tag = None
-            if tag:
-                named.add(str(tag))
-            if r[n + 1]:
-                found.add(str(r[n + 1]))
-            if r[n]:
-                keys.add(r[n])
-        found.update(self.project_ids_named(sorted(named)))
-        if keys:
-            found.update(self.projects_of_sessions(sorted(keys)))
-        return found
-
-    def newest_key(self, sources: list[str], filters: list | None,
-                   since: datetime, exclude: dict | None = None) -> tuple[str, datetime] | None:
-        """(entity, event time) of the newest event since `since` across `sources` that passes
-        `filters` (a trigger's), or None. `exclude` drops the rows of projects the caller
-        cannot see."""
-        if not sources:
-            return None
-        ph = ", ".join(["?"] * len(sources))
-        fsql, fparams = _filter_sql(filters)
-        esql, eparams = self._exclude(exclude, list(sources))
-        held = session_events.view(self, list(sources), since, filters=filters,
-                                   need_payload=bool(exclude) and exclude.get("shared") is None)
-        with self._lock:
-            r = self.con.execute(
-                f"SELECT key_value, event_time FROM {held.table} WHERE source IN ({ph}) "
-                f"AND ingest_time >= ? "
-                f"AND COALESCE(key_value, '') <> ''{fsql}{esql} ORDER BY ingest_time DESC LIMIT 1",
-                [*held.params, *sources, since, *fparams, *eparams]).fetchone()
-        return (r[0], r[1]) if r else None
-
-    def recent_events(self, source: str | None = None, limit: int = 50,
-                      exclude: dict | None = None) -> list[dict]:
-        esql, eparams = self._exclude(exclude, [source] if source else None)
-        clauses = (["source = ?"] if source else []) + ([esql[5:]] if esql else [])
-        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        params = ([source] if source else []) + eparams + [int(limit)]
-        held = self._newest_view([source] if source else None, int(limit), exclude)
-        with self._lock:
-            rows = self.con.execute(
-                f"SELECT source, key_value, event_type, text, event_time, ingest_time, "
-                f"{held.ref} AS ref FROM {held.table} {where} ORDER BY ingest_time DESC"
-                f"{', ref DESC' if held.held else ''} LIMIT ?", [*held.params, *params],
-            ).fetchall()
-        text = held.fill([r[6] for r in rows]) if held.held else {}
-        return [
-            {"source": r[0], "key": r[1], "event_type": r[2],
-             "text": r[3] if r[6] is None else text[r[6]][0],
-             "event_time": r[4], "ingest_time": r[5]}
-            for r in rows
-        ]
-
-    def _newest_view(self, sources: list[str] | None, limit: int, exclude: dict | None = None):
-        """session_events.newest for a caller that cannot see some projects: their sessions and
-        lines are not among the newest it counts (the statement still applies `exclude` itself)."""
-        if not exclude or not (exclude.get("ids") or exclude.get("names")):
-            return session_events.newest(self, sources, limit)
-        sessions, digests, moved = self._looked(exclude)
-        return session_events.newest(
-            self, sources, limit, set(sessions),
-            lambda source, labels, payload, at: _line_hidden(exclude, source, digests, moved)(
-                labels, payload, at))
-
-    def source_schema(self, source: str, sample: int = 200) -> dict:
-        """Inferred shape of a source's events, sampled from the most recent `sample` rows: the
-        event types seen and the typed labels (with the type of the latest value). Number-typed
-        labels are the aggregatable ones: a trigger's `field` picks from these."""
-        held = session_events.newest(self, [source], int(sample))
-        with self._lock:
-            rows = self.con.execute(
-                f"SELECT event_type, labels FROM {held.table} WHERE source = ? "
-                "ORDER BY ingest_time DESC LIMIT ?", [*held.params, source, int(sample)],
-            ).fetchall()
-        event_types, fields = set(), {}
-        for etype, ljson in rows:
-            event_types.add(etype)
-            for k, v in (json.loads(ljson) or {}).items():
-                fields.setdefault(k, "number" if isinstance(v, (int, float))
-                                  and not isinstance(v, bool) else "string")
-        return {"event_types": sorted(event_types), "fields": fields,
-                "sampled_events": len(rows)}
-
-    def recent_ingest_gaps(self, source: str, since, limit: int = 1000) -> list[float]:
-        """Seconds between consecutive ingests of a source since `since`, over at most its last
-        `limit` events: how often the source usually hears something (project health)."""
-        newest = self._from_digest(session_digest.newest_times, source, since, int(limit))
-        if newest is None:
-            held = session_events.view(self, [source], since)
-            with self._lock:
-                rows = self.con.execute(
-                    f"SELECT epoch(ingest_time) FROM {held.table} "
-                    "WHERE source = ? AND ingest_time >= ? ORDER BY ingest_time DESC LIMIT ?",
-                    [*held.params, source, since, int(limit)]).fetchall()
-            newest = [float(r[0]) for r in rows if r[0] is not None]
-        ts = sorted(newest)
-        return [b - a for a, b in zip(ts, ts[1:])]
-
-    def recent_ingest_hours(self, source: str, since) -> list:
-        """The distinct hours a source received events in since `since` (project health: a
-        source with a steady rhythm can go silent, a bursty one cannot)."""
-        hours = self._from_digest(session_digest.hours, source, since)
-        if hours is not None:
-            return hours
-        held = session_events.view(self, [source], since)
-        with self._lock:
-            rows = self.con.execute(
-                f"SELECT DISTINCT date_trunc('hour', ingest_time) FROM {held.table} "
-                "WHERE source = ? AND ingest_time >= ?", [*held.params, source, since]).fetchall()
-        return [r[0] for r in rows]
-
     def projects_of_sessions(self, sessions: list[str]) -> set[str]:
         """The projects any of the sessions is linked to."""
         out: set[str] = set()
@@ -1049,134 +305,6 @@ class Store(FactoryStore, ClaudeUsageStore):
                     select(project_sessions.c.project).where(
                         project_sessions.c.session.in_(sessions[i:i + 500]))))
         return out
-
-    def purge_events(self, source: str) -> int:
-        # _sess_lock first, as append and the reconcile take it, so no line is counted into the
-        # sessions table between the purge and the delete of its rows.
-        with self._sess_lock:
-            held = session_events.held_count(self, source)    # lines the events table never got
-            with self._lock:
-                n = held + self.con.execute(
-                    "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
-                self.con.execute("BEGIN TRANSACTION")
-                try:
-                    self.con.execute("DELETE FROM events WHERE source = ?", [source])
-                    self.con.execute("COMMIT")
-                except Exception:
-                    self.con.execute("ROLLBACK")
-                    raise
-            # the sessions table counts those lines too: a re-ship of them would count them twice
-            with self.sessions_db.begin() as conn:
-                # the stored lines go first, through the sessions that name the source (TR-1478):
-                # a row of the session left behind would collide with the numbers of a re-ship
-                conn.execute(delete(session_lines).where(session_lines.c.session.in_(
-                    select(sessions_table.c.session).where(sessions_table.c.source == source))))
-                # and the parts the archive holds of them (TR-1506): their files stay in the archive,
-                # but a count of them left behind would be added to the numbers of a re-ship
-                conn.execute(delete(session_archive_parts).where(session_archive_parts.c.session.in_(
-                    select(sessions_table.c.session).where(sessions_table.c.source == source))))
-                # the drain's marks of those sessions (TR-1665), while their rows still name them
-                for prefix in (session_ingest.DRAIN_TODO, session_ingest.DRAIN_GAVE_UP):
-                    conn.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name.in_(
-                        select(literal(prefix) + sessions_table.c.session).where(
-                            sessions_table.c.source == source))))
-                conn.execute(delete(sessions_table).where(sessions_table.c.source == source))
-                # and so do the facts read from them (TR-1477); a call's results live on its row
-                conn.execute(delete(session_commands).where(session_commands.c.source == source))
-                conn.execute(delete(session_messages).where(session_messages.c.source == source))
-                # and the turns, last words and touched files (TR-1505)
-                conn.execute(delete(session_turns).where(session_turns.c.source == source))
-                conn.execute(delete(session_said).where(session_said.c.source == source))
-                conn.execute(delete(session_files).where(session_files.c.source == source))
-        return n
-
-    def project_ids_named(self, refs: list[str]) -> list[str]:
-        """The ids of the projects whose id or name is one of `refs` (case-insensitive); unknown
-        refs are skipped. Takes no view of who may see them: it is for attributing a read."""
-        want = {str(r).strip().lower() for r in refs if r and str(r).strip()}
-        if not want:
-            return []
-        return [u["id"] for u in self.list_projects()
-                if u["id"].lower() in want or u["name"].lower() in want]
-
-
-    def aggregate(self, sources: list[str], field: str | None, agg: str, since: datetime,
-                  filters: list | None = None, where: dict | None = None,
-                  group_by="key_value", until: datetime | None = None,
-                  scope: dict | None = None) -> dict:
-        """{group: value} for an aggregate over `field` in the window, grouped by one or more
-        labels. `group_by` is a label name (scalar keys, key_value by default) or a list of
-        names (tuple keys — a trigger grouping per (env, app)). NULL group values are dropped
-        (a row lacking a grouping label isn't a real entity); NULL field values are ignored by
-        the aggregate. `until` closes the window (exclusive), for comparing with an earlier one."""
-        names = [group_by] if isinstance(group_by, str) else list(group_by)
-        gexprs = [_label_expr(n) for n in names]
-        ph = ", ".join(["?"] * len(sources))
-        fsql, fparams = _filter_sql(filters)
-        wsql, wparams = _where_sql(where)
-        ssql, sparams = _scope_sql(scope)   # a project's view of the shared sources
-        conditions = (fsql, fparams, wsql, wparams, ssql, sparams)
-        wsql, wparams = wsql + ssql, wparams + sparams
-        if field and not re.match(r"^[A-Za-z0-9_.]+$", str(field)):
-            raise ValueError(f"bad aggregate field {field!r}")
-        # quoted JSON path so dotted field names (http.status_code) resolve as one flat key
-        raw = f"json_extract_string(labels, '$.\"{field}\"')" if field else None
-        valexpr = f"CAST({raw} AS DOUBLE)" if field else "1"
-        aggexpr = {
-            "count": "COUNT(*)",
-            "sum": f"SUM({valexpr})",
-            "avg": f"AVG({valexpr})",
-            "max": f"MAX({valexpr})",
-            "min": f"MIN({valexpr})",
-            "any": f"MAX({valexpr})",
-        }[agg]
-        sel_g = ", ".join(f"{e} AS g{i}" for i, e in enumerate(gexprs))
-        grp_g = ", ".join(f"g{i}" for i in range(len(gexprs)))
-        having = " AND ".join(f"g{i} IS NOT NULL" for i in range(len(gexprs)))
-        # the stored lines are counted from the digest where it can (TR-1695)
-        acc = self._from_digest(session_digest.aggregate, sources, since, until, filters, where,
-                                names, gexprs, None if agg == "count" else raw, scope,
-                                conditions)
-        if acc is not None:
-            return {(g[0] if isinstance(group_by, str) else g): _aggregated(agg, a)
-                    for g, a in acc.items()}
-        held = session_events.view(self, sources, since, until, filters=filters, where=where,
-                                   counted=True)
-        if held.held:                        # one row may stand for several stored lines
-            w = held.weight
-            aggexpr = {"count": f"SUM({w})::BIGINT",
-                       "sum": f"SUM({valexpr} * {w})",
-                       "avg": f"SUM({valexpr} * {w}) / SUM({w}) FILTER (WHERE {valexpr} IS NOT NULL)",
-                       }.get(agg, aggexpr)
-        with self._lock:
-            rows = self.con.execute(
-                f"SELECT {sel_g}, {aggexpr} FROM {held.table} "
-                f"WHERE source IN ({ph}) AND event_time >= ?"
-                f"{' AND event_time < ?' if until is not None else ''}{fsql}{wsql} "
-                f"GROUP BY {grp_g} HAVING {having}",
-                [*held.params, *sources, since, *([until] if until is not None else []), *fparams,
-                 *wparams],
-            ).fetchall()
-        out = {}
-        for r in rows:
-            gvals, val = r[:len(gexprs)], r[-1]
-            key = gvals[0] if isinstance(group_by, str) else tuple(gvals)
-            out[key] = val if val is not None else 0.0
-        return out
-
-    def _from_digest(self, read, *args):
-        """A read answered by `session_digest`, a cache over the stored transcript lines, or None:
-        then the caller reads the lines. A failure of the cache is said once and fails no read."""
-        try:
-            return read(self, *args)
-        except session_digest.NotANumber as e:
-            raise e.__cause__ from None      # the answer: the statement fails on that value too
-        except Exception as e:
-            if not self.__dict__.get("_digest_said"):
-                self._digest_said = True
-                print(f"taresd: a read counts the stored lines one by one, the digest could not "
-                      f"answer it ({type(e).__name__}: {e})", flush=True)
-            return None
 
     # ── model-usage ledger (the cell's Anthropic spend meter) ─────────────────
     def record_model_usage(self, surface: str, agent: str, run_id: str, model: str, calls: int,
@@ -1241,8 +369,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         }
 
     # ── settings (instance config set from the console) ───────────────────────
-    # `settings` lives in the session store (TR-1480): SQLite beside the DuckDB file, or the state
-    # Postgres. These methods take no DuckDB or state lock, so they are safe from inside one.
+    # `settings` lives in the session store (TR-1480). These methods take no lock, so they are safe
+    # from inside one.
     @kept
     def get_setting(self, key: str) -> str | None:
         with self.sessions_db.read() as conn:
@@ -1451,7 +579,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 scope=scope))
 
-    # The member list lives in the session store (TR-1608), like settings: no DuckDB or state lock
+    # The member list lives in the session store (TR-1608), like settings: no lock
     # is taken, so these are safe from inside one.
     def add_project_member(self, uid: str, person_id: str, added_by: str | None = None,
                            reason: str = "manual") -> bool:
@@ -2092,7 +1220,7 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     @staticmethod
     def _ticket_order():
-        """The order of a project's list. NULLs last on SQLite too, as DuckDB and Postgres sort."""
+        """The order of a project's list. NULLs last on SQLite too, as Postgres sorts."""
         return (tickets_table.c.position.nulls_last(), tickets_table.c.created_at.nulls_last(),
                 tickets_table.c.number.nulls_last(), tickets_table.c.id)
 
@@ -2260,18 +1388,13 @@ class Store(FactoryStore, ClaudeUsageStore):
         and last did something, how many lines they have, and their state (working, idle, waiting,
         ended; None before the plugin reported one) with its reason and time."""
         ps, ss, st, sx = project_sessions, session_stations, session_states, sessions_table
-        # once the sessions table has caught up (TR-1520) the lines come from it in the same read
-        # (TR-1499); before, from a scan of events below
-        table = session_ingest.caught_up(self)
-        lines = ((sx.c.started_at, sx.c.last_line_at, sx.c.line_count) if table
-                 else (null(), null(), null()))
+        # the lines come from the sessions table in the same read (TR-1499)
         j = (ps.outerjoin(ss, ss.c.session == ps.c.session)
-             .outerjoin(st, st.c.session == ps.c.session))
-        if table:
-            j = j.outerjoin(sx, and_(sx.c.session == ps.c.session,
-                                     sx.c.source == "claude_code", sx.c.line_count > 0))
+             .outerjoin(st, st.c.session == ps.c.session)
+             .outerjoin(sx, and_(sx.c.session == ps.c.session,
+                                 sx.c.source == "claude_code", sx.c.line_count > 0)))
         q = (select(ps.c.session, ps.c.repo, ps.c.linked_at, st.c.state, st.c.reason,
-                    st.c.state_at, ss.c.station, *lines)
+                    st.c.state_at, ss.c.station, sx.c.started_at, sx.c.last_line_at, sx.c.line_count)
              .select_from(j)
              .where(ps.c.project == project,
                     # the crew's own stations serve every project: they show on the Crew page and
@@ -2285,10 +1408,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             if r[0] not in seen:
                 seen.add(r[0])
                 uniq.append(r)
-        if table:
-            act = {r[0]: (r[7], r[8], int(r[9] or 0)) for r in uniq}
-        else:
-            act = self._session_activity_scan("claude_code", [r[0] for r in uniq])
+        act = {r[0]: (r[7], r[8], int(r[9] or 0)) for r in uniq}
         out = [{"session": r[0], "repo": r[1], "linked_at": r[2],
                 "started_at": act.get(r[0], (None,))[0], "last_at": act.get(r[0], (None, None))[1],
                 "lines": act.get(r[0], (None, None, 0))[2], "state": r[3], "state_reason": r[4],
@@ -2300,10 +1420,7 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def session_activity(self, source: str, sessions: list[str]) -> dict:
         """{session: (first line time, last line time, line count)} for the sessions that have
-        lines on `source`. Read from the sessions table (TR-1471 keeps it) once it has caught up
-        (TR-1520), from a scan of events before."""
-        if not session_ingest.caught_up(self):
-            return self._session_activity_scan(source, sessions)
+        lines on `source`, from the sessions table (TR-1471 keeps it)."""
         out = {}
         t = sessions_table
         for i in range(0, len(sessions), 500):
@@ -2314,21 +1431,6 @@ class Store(FactoryStore, ClaudeUsageStore):
                 t.c.source == source, t.c.session.in_(chunk), t.c.line_count > 0)
             with self.sessions_db.read() as conn:
                 for sid, first, last, n in conn.execute(q):
-                    out[sid] = (first, last, int(n))
-        return out
-
-    def _session_activity_scan(self, source: str, sessions: list[str]) -> dict:
-        """`session_activity` from the events table: what a cell not yet caught up has to use."""
-        out = {}
-        for i in range(0, len(sessions), 500):
-            chunk = sessions[i:i + 500]
-            if not chunk:
-                continue
-            with self._lock:
-                for sid, first, last, n in self.con.execute(
-                        "SELECT key_value, min(event_time), max(event_time), count(*) FROM events "
-                        f"WHERE source = ? AND key_value IN ({', '.join('?' * len(chunk))}) "
-                        "GROUP BY key_value", [source, *chunk]).fetchall():
                     out[sid] = (first, last, int(n))
         return out
 
@@ -2551,21 +1653,22 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     # ── metering ──────────────────────────────────────────────────────────────
     def usage(self) -> dict:
-        """What this instance is costing on disk, for the metering endpoint: file sizes from stat()
-        and the event count, an unfiltered COUNT(*) DuckDB answers from table metadata. The run and
-        delivery counts are 0 since agents and dispatch went (TR-1810); kept for old readers."""
+        """What this instance is costing on disk, for the metering endpoint (`storage_usage`). The
+        run and delivery counts are 0 since agents and dispatch went (TR-1810); kept for old
+        readers."""
         return {**self.storage_usage(), "agent_runs": 0, "dispatch_deliveries": 0}
 
     def storage_usage(self) -> dict:
-        """The disk half of `usage()`: file sizes and event counts, from stat() and the DuckDB file
-        only. /metrics reads this on every scrape, so it never touches the state database: on a
-        cloud cell that is Postgres, and an idle cell would otherwise open a connection each time."""
-        with self._lock:
-            events = self.con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        """The disk half of `usage()`, measured as `disk_bytes` measures it: `db_bytes` the session
+        store (the SQLite file, or the Postgres database), `wal_bytes` its SQLite WAL,
+        `archive_bytes` the archived parts, `events` the lines the sessions hold. /metrics reads
+        this on every scrape: sizes and two sums, no table scan."""
+        z = self._sizes()
         return {
-            "db_bytes": _file_size(self.path),
-            "wal_bytes": _file_size(self.path + ".wal"),
-            "events": int(events or 0),
+            "db_bytes": z["db"],
+            "wal_bytes": z["wal"],
+            "archive_bytes": z["archive"],
+            "events": z["lines"],
             # per source counts went with the source catalog's counter (TR-1811)
             "sources": [],
         }
@@ -2577,21 +1680,12 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def key_events_from(self, source: str, key: str, limit: int = 200, offset: int = 0,
                         tail: dict | None = None) -> tuple[list[dict], str]:
-        """`key_events` and where the lines came from: `table`, `archive`, `both` (the session's
-        own tables and archive, TR-1507) or `events` (DuckDB, for a session they do not hold in
-        full). `tail`: the page is the session's end (`session_read._fetch`)."""
-        got = session_read.lines(self, source, key, limit, offset, tail)
-        if got is not None:
-            rows, where = got
-            return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
-                     "labels": r["labels"]} for r in rows], where
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT event_type, text, event_time, labels FROM events WHERE source = ? AND "
-                "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
-                [source, key, int(limit), int(offset)]).fetchall()
-        return [{"event_type": r[0], "text": r[1], "event_time": r[2],
-                 "labels": json.loads(r[3]) if r[3] else {}} for r in rows], "events"
+        """`key_events` and where the lines came from: `table`, `archive` or `both` (the session's
+        own table rows and archive, TR-1507). `tail`: the page is the session's end
+        (`session_read._fetch`)."""
+        rows, where = session_read.lines(self, source, key, limit, offset, tail)
+        return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
+                 "labels": r["labels"]} for r in rows], where
 
     def key_payload_rows(self, source: str, key: str, limit: int = 200, offset: int = 0) -> list[dict]:
         """One entity's events with their lossless payload, oldest first (TR-1177: a session as a
@@ -2601,18 +1695,9 @@ class Store(FactoryStore, ClaudeUsageStore):
     def key_payload_rows_from(self, source: str, key: str, limit: int = 200, offset: int = 0,
                               tail: dict | None = None) -> tuple[list[dict], str]:
         """`key_payload_rows` and where the lines came from (see `key_events_from`)."""
-        got = session_read.lines(self, source, key, limit, offset, tail)
-        if got is not None:
-            rows, where = got
-            return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
-                     "payload": r["payload"]} for r in rows], where
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT event_type, text, event_time, payload FROM events WHERE source = ? AND "
-                "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
-                [source, key, int(limit), int(offset)]).fetchall()
-        return [{"event_type": r[0], "text": r[1], "event_time": r[2], "payload": r[3]}
-                for r in rows], "events"
+        rows, where = session_read.lines(self, source, key, limit, offset, tail)
+        return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
+                 "payload": r["payload"]} for r in rows], where
 
     def key_tool_result(self, source: str, key: str, tool_use_id: str) -> dict | None:
         """The stored line that holds one tool call's result in this entity's events, or None."""
@@ -2621,60 +1706,10 @@ class Store(FactoryStore, ClaudeUsageStore):
     def key_tool_result_from(self, source: str, key: str,
                              tool_use_id: str) -> tuple[dict | None, str]:
         """`key_tool_result` and where the lines came from (see `key_events_from`)."""
-        got = session_read.tool_result(self, source, key, tool_use_id)
-        if got is not None:
-            return got
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = 'tool_result' "
-                "AND payload LIKE ? ORDER BY event_time DESC LIMIT 5",
-                [source, key, f"%{tool_use_id}%"]).fetchall()
-        for (pj,) in rows:
-            try:
-                o = json.loads(pj) if isinstance(pj, str) else (pj or {})
-            except ValueError:
-                continue
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if isinstance(b, dict) and b.get("type") == "tool_result" and str(b.get("tool_use_id")) == tool_use_id:
-                    return b, "events"
-        return None, "events"
-
-    def _table_payloads(self, source: str, limit: int, exclude) -> list[str] | None:
-        """`recent_payloads` from `session_lines`, newest first by the line's time (TR-1613): the
-        lines still in the table, not the archived ones. None when DuckDB answers: another
-        connector's source, or a table with nothing to show while the one-time move is not
-        complete."""
-        if source not in session_ingest.claude_code_sources(self):
-            return None
-        sessions, digests, moved = self._looked(exclude)
-        got = session_read.newest_payloads(self, source, limit, set(sessions),
-                                           _line_hidden(exclude, source, digests, moved))
-        return got if got or session_move.complete(self) else None
-
-    def recent_payloads(self, source: str, limit: int = 500,
-                        exclude: dict | None = None) -> list[dict]:
-        """The lossless payloads of a source's most recent events (for field profiling). A
-        claude_code source is read from `session_lines` (`_table_payloads`)."""
-        texts = self._table_payloads(source, int(limit), exclude)
-        if texts is None:
-            esql, eparams = self._exclude(exclude, [source])
-            with self._lock:
-                rows = self.con.execute(
-                    f"SELECT payload FROM events WHERE source = ?{esql} "
-                    "ORDER BY ingest_time DESC LIMIT ?",
-                    [source, *eparams, int(limit)]).fetchall()
-            texts = [r[0] for r in rows]
-        out = []
-        for pj in texts:
-            try:
-                out.append(json.loads(pj) if pj else {})
-            except (TypeError, ValueError):
-                pass
-        return out
+        return session_read.tool_result(self, source, key, tool_use_id)
 
     # ── API keys (scoped credentials; only the SHA-256 of the secret is stored) ─
-    # `api_keys` lives in the session store (TR-1608): these methods take no DuckDB or state lock,
+    # `api_keys` lives in the session store (TR-1608): these methods take no lock,
     # so find_api_key, which every authenticated request calls, no longer queues behind them.
     def insert_api_key(self, kid: str, name: str, prefix: str, hash_: str, scopes: list[str],
                        project: str | None = None, person_id: str | None = None) -> None:

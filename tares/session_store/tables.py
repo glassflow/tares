@@ -12,14 +12,14 @@ secret and guardrail tables (`merge_queue`, `project_merge_method`, `project_req
 `integration_choices`, `integration_connections`, `project_integrations`, `pending_writeback`,
 `project_secrets`, `guardrail_rules`, `guardrail_pairs`) and the repo map and brain tables
 (`repo_maps`, `repo_map_history`, `brain_repos`, `brain_repo_folders`, `brain_repo_updates`,
-`brain_calls`), exactly as they are today in DuckDB and in the state Postgres:
-same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
-Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
+`brain_calls`), as the old DDL made them in the state Postgres: same names, same columns, same
+primary keys, and the column types it gave them on Postgres (TEXT, BIGINT, DOUBLE PRECISION,
+TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
 how revision 0002 can take over a Postgres database that already has them.
 
 The Store's session methods (store.py, factory_store.py, claude_usage_store.py) read and write
-these tables, and nothing else does outside `copy.py`, the tests' own seeding, report.py, which
+these tables, and nothing else does outside the tests' own seeding, report.py, which
 owns `report_weeks`, and merge_ledger.py, which owns `merge_records`.
 """
 from __future__ import annotations
@@ -131,12 +131,10 @@ session_meters = Table(
 )
 
 # What a session's lines add up to (session_ingest.py): written as each claude_code line is
-# stored, and caught up from DuckDB at start. Station, role, project and state stay in their own
-# tables and are joined by the readers. `lines_complete` says whether `session_lines` holds every
-# line DuckDB holds for the session (TR-1478): false for a new row, set by the reconcile.
-# `lines_origin` (TR-1606) says how that is judged: null (a row counted from the events) compares
-# with DuckDB's count; 'table' (a session born in `session_lines`) is complete when the table and
-# the archive hold `line_count` lines, with no DuckDB read.
+# stored. Station, role, project and state stay in their own tables and are joined by the readers.
+# `lines_complete` says whether `session_lines` and the archive hold the session's `line_count`
+# lines (TR-1478). `lines_origin` (TR-1606) is 'table' for a session born in `session_lines`, and
+# null for a row an older version counted from its event store.
 sessions = Table(
     "sessions", metadata,
     Column("session", Text, primary_key=True),
@@ -152,9 +150,9 @@ sessions = Table(
 )
 Index("sessions_last_line_at", sessions.c.last_line_at)
 
-# The facts the factory reads from a session's lines, written as each line is stored and filled
-# from DuckDB at start (session_ingest.py, TR-1477). One row per tool call, by its tool_use id, so
-# a resumed session that copies old lines, or a fill that runs twice, adds nothing.
+# The facts the factory reads from a session's lines, written as each line is stored
+# (session_ingest.py, TR-1477). One row per tool call, by its tool_use id, so a resumed session
+# that copies old lines, or a batch written twice, adds nothing.
 # A protocol message the crew sent (a SendMessage call whose text starts `[TF:<TYPE>]`).
 session_messages = Table(
     "session_messages", metadata,
@@ -190,11 +188,10 @@ session_commands = Table(
 Index("session_commands_session_at", session_commands.c.session, session_commands.c.at)
 
 # What a person typed, what a session said last, and the files it touched (session_ingest.py,
-# TR-1505): written as each line is stored and filled from DuckDB at start, so the factory's
-# readers do not scan events.
+# TR-1505): written as each line is stored, so the factory's readers do not scan the lines.
 # A turn the person typed: a `user` line that passes `turn_fact`'s filters. The key is (session,
-# line_key) on purpose: a resumed session copies its old lines under a new session id, and the
-# events table keeps both copies, so a read that asks for both sessions lists both. `person` is
+# line_key) on purpose: a resumed session copies its old lines under a new session id, and
+# `session_lines` keeps both copies, so a read that asks for both sessions lists both. `person` is
 # the recording's `tares_person` label (null when it carries none).
 session_turns = Table(
     "session_turns", metadata,
@@ -234,11 +231,9 @@ Index("session_files_session_last_at", session_files.c.session, session_files.c.
 # A claude_code line as it was stored, one row per line, numbered within its session (TR-1478).
 # `seq` comes from `sessions.line_count` in the transaction that adds the line, so it is dense and
 # unique per session: the lines of a batch get `line_count - n + 1 .. line_count` in order. It is
-# the primary key because DuckDB does not deduplicate (a line sent twice is stored twice) and this
-# table mirrors it, so the two counts can be compared. `line_key` names the line (its uuid, else
+# the primary key because a line sent twice is stored twice. `line_key` names the line (its uuid, else
 # a hash of its payload) and is not unique. `render` holds the flags the line's text was built with
-# (`{"include_thinking": ..., "redact": ...}`), and `payload` the JSON text exactly as DuckDB keeps
-# it. The text is not kept: it is rebuilt from the payload with those flags.
+# (`{"include_thinking": ..., "redact": ...}`), and `payload` the line's JSON text. The text is not kept: it is rebuilt from the payload with those flags.
 session_lines = Table(
     "session_lines", metadata,
     Column("session", Text, primary_key=True),
@@ -268,24 +263,6 @@ session_archive_parts = Table(
     Column("key", Text),
     Column("written_at", UTCDateTime),
 )
-
-# The one-time move of recent sessions' lines into the session store (session_move.py, TR-1609): one
-# row per claude_code session DuckDB holds lines for. `state` is pending, verified or failed;
-# `target` is table or archive; `lines_events` is DuckDB's line count, `lines_after` the rows the
-# move wrote, `error` why a move failed. Not in MOVED_TABLES: nothing is copied from DuckDB into it.
-session_moves = Table(
-    "session_moves", metadata,
-    Column("session", Text, primary_key=True),
-    Column("state", Text, nullable=False),
-    Column("target", Text),
-    Column("lines_events", Integer),
-    Column("lines_after", Integer),
-    Column("started_at", UTCDateTime),
-    Column("verified_at", UTCDateTime),
-    Column("error", Text),
-    Column("attempts", Integer),
-)
-Index("session_moves_state", session_moves.c.state)
 
 # The factory's figures of one project in one ISO week (report.py, TR-1666): worked out from the
 # factory's records and `session_usage`, so a report page reads no raw rows. `week` is the week's
@@ -376,23 +353,8 @@ pr_events = Table(
 Index("pr_events_repo_branch", pr_events.c.repo, pr_events.c.branch)
 Index("pr_events_at", pr_events.c.at)
 
-# How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
-session_ingest_marks = Table(
-    "session_ingest_marks", metadata,
-    Column("name", Text, primary_key=True),
-    Column("at", UTCDateTime),
-)
-
-# One row per table copied from DuckDB by copy.py, so a second start copies nothing
-session_store_copies = Table(
-    "session_store_copies", metadata,
-    Column("table_name", Text, primary_key=True),
-    Column("rows", Integer),
-    Column("copied_at", UTCDateTime),
-)
-
-# The instance's settings (store.py get_setting / set_setting), the first table of the move out of
-# DuckDB (TR-1480). `value` is the text the caller stored (often JSON it parses itself).
+# The instance's settings (store.py get_setting / set_setting), the first table moved into the
+# session store (TR-1480). `value` is the text the caller stored (often JSON it parses itself).
 settings = Table(
     "settings", metadata,
     Column("key", Text, primary_key=True),
@@ -673,7 +635,7 @@ ticket_checks = Table(
     Column("person_id", Text),
 )
 
-# The challenger's lines, copied from the events as they arrive and looked up by branch
+# The challenger's lines, kept as they arrive and looked up by branch
 challenges = Table(
     "challenges", metadata,
     Column("source", Text, primary_key=True),
@@ -1171,21 +1133,3 @@ brain_calls = Table(
     Column("via", Text),
 )
 
-# The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
-# moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
-# copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
-# `state_db.move`. Moving a table means adding it here and a revision that takes it over.
-MOVED_TABLES = (session_stations, session_states, project_sessions, session_usage, session_meters,
-                settings, people, api_keys, project_members, usecases, usecase_objects, usecase_log,
-                docs, skills, shared_skills, github_credentials, model_usage,
-                tickets, ticket_history, ticket_numbers,
-                milestones, milestone_check_results, milestone_acceptances, ticket_checks,
-                challenges, reviews, review_findings, rule_proposals,
-                assumptions, desk_items, decisions, handovers, grants, pending_memory, crews,
-                spec_questions, signoffs, handover_overrides, answers, waiting_told,
-                guardrail_rules, guardrail_pairs, integration_choices, integration_connections,
-                project_integrations, pending_writeback, project_secrets, project_required_checks,
-                merge_queue, project_merge_method,
-                repo_maps, repo_map_history, brain_repos, brain_repo_folders, brain_repo_updates,
-                brain_calls)
-MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)

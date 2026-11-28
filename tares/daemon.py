@@ -28,7 +28,7 @@ from . import morning_status as morning_mod
 from . import project_secrets
 from . import providers as providers_mod
 from . import report as report_mod
-from . import session_archive, session_digest, session_move
+from . import session_archive
 from . import standup as standup_mod
 from . import team as team_mod
 from . import waiting_slack as waiting_slack_mod
@@ -64,7 +64,9 @@ from .slack import resolve_token as resolve_slack_token
 from .store import Store, StoreUnavailable
 
 
-DB_PATH = os.getenv("TARES_DB", "tares.duckdb")
+# The data directory: the session store's `tares.sqlite` (without TARES_STATE_DSN) and the default
+# archive are in it. `tares up` sets it from --data-dir; taresd alone uses the current directory.
+DATA_DIR = os.path.expanduser(os.getenv("TARES_HOME") or ".")
 
 # Auth mode. When set (via `tares up --auth`, which resolves + exports a root token), the whole
 # API + console + ingest require a credential; when unset the instance is open (local default).
@@ -165,21 +167,23 @@ CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points",
 DEGRADED_PCT = float(os.getenv("TARES_DEGRADED_PCT", "90"))
 
 
-def storage_limit(db_path: str) -> tuple[int | None, str]:
+def storage_limit(data_dir: str) -> tuple[int | None, str]:
     """(max_bytes, where it comes from): TARES_MAX_DB_SIZE when set ("env"), else the total size
-    of the volume the database sits on ("volume"). None only when neither is known."""
+    of the volume the data directory sits on ("volume"). None only when neither is known."""
     if MAX_DB_SIZE:
         return MAX_DB_SIZE, "env"
     try:
-        return shutil.disk_usage(os.path.dirname(os.path.abspath(db_path)) or ".").total, "volume"
+        return shutil.disk_usage(os.path.abspath(data_dir)).total, "volume"
     except OSError:
         return None, ""
 
 
-def storage_state(store, db_path: str) -> dict:
-    """How full this instance is against its limit, and whether ingest is paused because of it.
-    stat() calls only, so every probe and every ingest can afford it."""
-    limit, origin = storage_limit(db_path)
+def storage_state(store, data_dir: str) -> dict:
+    """How full this instance is against its limit, and whether ingest is paused because of it:
+    the session store (the SQLite file and its WAL, or the Postgres database) plus the archive
+    (`Store.disk_bytes`, measured at most every few seconds, so every probe and every ingest can
+    afford it)."""
+    limit, origin = storage_limit(data_dir)
     if not limit:
         return {"max_bytes": None, "max_bytes_source": "", "pct_used": None, "paused": False, "detail": None}
     pct = round(100 * store.disk_bytes() / limit, 2)
@@ -207,8 +211,7 @@ def _serve_ui(path: str):
 def _state_db_unreachable(e: BaseException) -> bool:
     """True when the store failed because the Postgres state database (TARES_STATE_DSN) could not
     be reached or refused the login: no DNS, a connect timeout, no connection slots left. Those
-    pass on their own, unlike a locked or corrupt DuckDB file or a state database that does not
-    hold this cell's state."""
+    pass on their own, unlike a corrupt SQLite file or a full disk."""
     try:
         import psycopg
     except ImportError:
@@ -270,9 +273,9 @@ _SCREENS = (
 
 def make_app() -> FastAPI:
     try:
-        # TARES_STATE_DSN (a cloud cell): the state lives in that Postgres database, the events
-        # stay in DuckDB. Unset, everything is in the DuckDB file as before.
-        store = Store(DB_PATH, state_dsn=os.getenv("TARES_STATE_DSN") or None)
+        # TARES_STATE_DSN (a cloud cell): everything is in that Postgres database. Unset, it is in
+        # tares.sqlite in the data directory.
+        store = Store(DATA_DIR, state_dsn=os.getenv("TARES_STATE_DSN") or None)
     except StoreUnavailable as e:
         # Losing the DB must not cost us the ability to SAY that we lost the DB. Log the full
         # traceback (degraded mode explains the failure to the user, it does not hide it from the
@@ -289,23 +292,16 @@ def make_app() -> FastAPI:
     # What the daemon starts in the background, by name, in the order it starts them: the threads
     # here, then the lifespan's tasks (app.state.started_tasks, tests/test_factory_startup.py).
     started: list[str] = []
-    # The sessions table catches up with the events in the background (TR-1471); the lines stored
-    # from here on are counted as they arrive.
+    # the hourly usage totals and the ten minute pass over the session store (session_ingest),
+    # in the background; none of it reads the session lines at start
     if store.start_session_reconcile() is not None:
         started.append("session_reconcile")
-    # the recent sessions are rebuilt in the session store, once (TR-1609)
-    if session_move.start(store) is not None:
-        started.append("session_move")
-    # the times of the stored lines are read into memory in the background, so the
-    # first trigger and page do not wait for it (TR-1695)
-    if session_digest.start(store) is not None:
-        started.append("session_digest")
 
     projects = Projects(store)
 
-    db_path = DB_PATH
-    deps = Deps(store, projects, auth_token=AUTH_TOKEN, db_path=db_path,
-                storage=lambda: storage_state(store, db_path), capabilities=CAPABILITIES,
+    data_dir = DATA_DIR
+    deps = Deps(store, projects, auth_token=AUTH_TOKEN, data_dir=data_dir,
+                storage=lambda: storage_state(store, data_dir), capabilities=CAPABILITIES,
                 version=_installed_version, started_mono=_STARTED_MONO, cloud_links=_cloud_links)
 
     @asynccontextmanager
@@ -356,7 +352,7 @@ def make_app() -> FastAPI:
 
     # the interactive API reference lives under /api so /docs is the console's Docs and memory page
     app = FastAPI(title="taresd", lifespan=lifespan, docs_url="/api/reference", redoc_url=None)
-    app.state.store = store   # for in-process tests; DuckDB is single-writer, so no second Store
+    app.state.store = store   # for in-process tests
     integrations_hooks.bind(store)   # the guardrail hooks resolve a project's guardrails from it
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])

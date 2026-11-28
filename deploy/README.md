@@ -105,6 +105,6 @@ docker compose -f deploy/compose/docker-compose.selfhost.yml up -d
 - **Auth model:** one shared bearer token. For per-user SSO, front the console with oauth2-proxy /
   Tailscale / Caddy basic-auth (machine paths — MCP + ingest — keep their tokens).
 
-**Single-writer.** DuckDB has one writer, so this is exactly one `taresd` + one volume — **do not
-scale to replicas.** Back up the data by snapshotting the `tares-data` volume (or copying
-`/data/tares.duckdb`); restore by putting the file back before boot.
+**Single-writer.** The SQLite store lives on the volume, so this is exactly one `taresd` + one volume:
+**do not scale to replicas.** Back up the data by snapshotting the `tares-data` volume (or copying
+`/data/tares.sqlite` with its `-wal` file, and `/data/archive/`); restore by putting them back before boot.

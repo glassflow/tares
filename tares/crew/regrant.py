@@ -19,7 +19,7 @@ event log as `regrant-skipped`. A Tares that does not answer is never a change. 
 restart, so a restart that fails is not tried again every round. A restart that is refused because the station started a
 turn meanwhile did not fail: `grants_tried` goes back to what it was, and the next round tries again.
 
-Standard library plus the crew modules (no duckdb, fastapi or daemon). lifecycle is imported as a module and
+Standard library plus the crew modules (no fastapi or daemon). lifecycle is imported as a module and
 used at call time: it imports watch, and watch registers this step.
 
 Differences from bash

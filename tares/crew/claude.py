@@ -57,7 +57,7 @@ Differences from bash
     version. The session's own claude.exe is asked instead (`--version`), unless that file was written after
     the process started (an update put a new one there): then the version cannot be told.
 
-Standard library and psutil only (no duckdb, fastapi, tares.daemon or tares.store). Not imported by
+Standard library and psutil only (no fastapi, tares.daemon or tares.store). Not imported by
 tares.crew, so `import tares.crew` stays free of psutil; import it as `tares.crew.claude`.
 """
 from __future__ import annotations
