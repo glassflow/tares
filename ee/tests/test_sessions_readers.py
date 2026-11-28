@@ -8,14 +8,9 @@ shows a session's lines, first and last time, or coordination calls is read as o
 list, one project, one ticket, the ticket list, Docs, Guardrails (the rules), the
 two Crew pages, the project's crew and sessions, and a ticket's messages.
 
-Two checks:
-
-- No page runs the events scan: while a route runs, a statement that counts a session's lines in the events
-  table (`GROUP BY key_value`) raises, and the test fails if one ran. The table is the only place the numbers
-  come from.
-- Every body equals ee/tests/fixtures/sessions_readers_golden.json, the bodies the pages gave when they
-  counted over the events table (captured with `--write-golden` before the readers changed; that mode does
-  not set the guard, as the readers then still read events).
+Every body equals ee/tests/fixtures/sessions_readers_golden.json, the bodies the pages gave when they
+counted over the old event store (captured with `--write-golden` before the readers changed). The
+sessions table is the only place the numbers come from: there is no other store of the lines.
 
 The clock is frozen and the ids are numbered in the order they appear, as in test_factory_query_budget.py.
 
@@ -23,7 +18,6 @@ Run: .venv/bin/python ee/tests/test_sessions_readers.py [--write-golden]
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_sessions_readers.py
 """
 import asyncio
-import contextvars
 import json
 import os
 import re
@@ -42,7 +36,7 @@ LICENCE_LINE = "Tares enterprise licence, see ee/LICENSE"   # the golden file is
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sessions_readers_golden.json")
 WRITE_GOLDEN = "--write-golden" in sys.argv
 
-os.environ["TZ"] = "UTC"      # DuckDB answers times in the machine's zone; the golden file is one zone's
+os.environ["TZ"] = "UTC"      # the golden file is one zone's
 time.tzset()
 
 _TMP = tempfile.mkdtemp(prefix="tares-sessions-readers-")
@@ -113,29 +107,6 @@ def steady(body):
             return {walk(k): walk(x) for k, x in v.items()}
         return v
     return walk(body)
-
-
-# ── the guard: no session count over the events table while a route runs ─────────────────────────
-_ROUTE: contextvars.ContextVar = contextvars.ContextVar("route", default=None)
-EVENT_SCANS: list[str] = []
-
-
-class GuardedCon:
-    """Stands in for the DuckDB connection. While a route runs (a context variable, so the daemon's
-    background threads are not caught), a statement that counts a session's lines in events raises."""
-
-    def __init__(self, real):
-        self._real = real
-
-    def execute(self, sql, *a, **kw):
-        route = _ROUTE.get()
-        if route is not None and "GROUP BY key_value" in str(sql) and "FROM events" in str(sql):
-            EVENT_SCANS.append(f"{route}: {str(sql)[:90]}")
-            raise AssertionError(f"{route} counted a session's lines over the events table")
-        return self._real.execute(sql, *a, **kw)
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
 
 
 def call_line(sid, text, tool, at):
@@ -253,19 +224,10 @@ async def main():
         sessions_rows = store.sessions_db
         ck("the sessions table holds the lines (a row per session with lines)",
            sessions_rows is not None and len(store.station_sessions("claude_code")) >= 12)
-        if not WRITE_GOLDEN:
-            store.con = GuardedCon(store.con)
         uid = uids[0]
         ref = store.get_ticket(uid, tickets[uid][0])["id"]
         for name, path in routes(uid, ref):
-            token = _ROUTE.set(name)
-            try:
-                resp = await call(sam, path)
-            except AssertionError as e:     # the guard: the route reached the events table
-                ck(f"GET {path} ran without the events table", False, str(e))
-                continue
-            finally:
-                _ROUTE.reset(token)
+            resp = await call(sam, path)
             ck(f"GET {path.split('?')[0]} answers 200", resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}")
             try:
                 bodies[name] = steady(resp.json())
@@ -275,8 +237,6 @@ async def main():
            any(s["coordination_calls"] > 0 for s in bodies.get("crew", {}).get("stations", [])),
            str(bodies.get("crew", {}).get("stations", [])[:1]))
 
-    if not WRITE_GOLDEN:
-        ck("no page counted a session's lines over the events table", not EVENT_SCANS, str(EVENT_SCANS[:3]))
     print("== the bodies ==")
     if WRITE_GOLDEN:
         os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
@@ -292,7 +252,7 @@ async def main():
         for name in bodies:
             same = json.loads(json.dumps(bodies[name], sort_keys=True)) == want.get(name)
             ck(f"{name} answers what the golden file has", same, "differs: the pages must answer what they did "
-               "when they counted over the events table")
+               "when they counted over the old event store")
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

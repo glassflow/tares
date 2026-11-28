@@ -48,9 +48,8 @@ def H(tok):
 
 
 def start(name, auth):
-    # a folder of its own: the settings live in a tares.sqlite beside the DuckDB file (TR-1480)
-    os.makedirs(os.path.join(TMP, name), exist_ok=True)
-    db, port = os.path.join(TMP, name, "tares"), free_port()
+    # a data directory of its own: the cells must not share their settings
+    db, port = os.path.join(TMP, name), free_port()
     env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_LICENSE": licensed.test_licence()}
     if auth:

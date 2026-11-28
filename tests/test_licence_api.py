@@ -27,9 +27,8 @@ TMP = tempfile.mkdtemp(prefix="tares-licence-api-")
 
 
 def cell_db(name):
-    """A folder of its own for each cell: the settings live in tares.sqlite beside the database."""
-    os.makedirs(os.path.join(TMP, name), exist_ok=True)
-    return os.path.join(TMP, name, name + ".duckdb")
+    """A data directory of its own for each cell."""
+    return os.path.join(TMP, name)
 
 
 os.environ["TARES_HOME"] = cell_db("inproc")

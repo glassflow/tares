@@ -38,9 +38,8 @@ async def _wait(url):
 
 
 def _db(name):
-    """A DuckDB path in a folder of its own: the people live in tares.sqlite beside it (TR-1608), and
-    two daemons in one folder would share them."""
-    return os.path.join(tempfile.mkdtemp(prefix=name + "-"), name + ".duckdb")
+    """A data directory of its own: two daemons in one would share their people."""
+    return os.path.join(tempfile.mkdtemp(prefix=name + "-"), name)
 
 
 def start(db, port):

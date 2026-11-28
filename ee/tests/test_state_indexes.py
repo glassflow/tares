@@ -1,7 +1,6 @@
 # Tares enterprise licence, see ee/LICENSE
 """The ticket indexes (TR-1503, TR-1612): a Store has an index on tickets(project) and on
-ticket_history(ticket), in the session store on both engines. DuckDB itself has neither (its ART
-indexes have broken after upgrades).
+ticket_history(ticket), in the session store on both engines.
 
 Run: .venv/bin/python ee/tests/test_state_indexes.py
 Postgres half: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_state_indexes.py
@@ -37,12 +36,10 @@ def indexes(store, sql: str) -> dict:
 WANT = {"tickets_project": "tickets", "ticket_history_ticket": "ticket_history"}
 tmp = tempfile.mkdtemp()
 
-duck = Store(os.path.join(tmp, "duck"), state_dsn="")   # "" keeps the state in DuckDB, even under the harness
-got = indexes(duck, "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'")
-ck("beside DuckDB the SQLite store has tickets_project and ticket_history_ticket",
+lite = Store(os.path.join(tmp, "lite"), state_dsn="")   # "" keeps the store on SQLite, even under the harness
+got = indexes(lite, "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'")
+ck("the SQLite store has tickets_project and ticket_history_ticket",
    all(got.get(k) == v for k, v in WANT.items()), got)
-have = {r[0] for r in duck.con.execute("SELECT index_name FROM duckdb_indexes()").fetchall()}
-ck("DuckDB itself has neither", not (have & set(WANT)), have)
 
 if not PG:
     print("  skip the Postgres half: TARES_TEST_PG is not set")

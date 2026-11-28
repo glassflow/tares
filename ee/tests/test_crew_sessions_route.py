@@ -11,8 +11,7 @@ sessions. Now:
   - `usage`, `coordination_calls` and `projects` are the totals over every session, equal to what the
     per-session readers add up;
   - GET /api/factory/crew/{crew}/{station}/sessions pages through all of them, newest first, with no
-    session twice or missed (sessions that share a time stay on one page), the same on a cell that has
-    not caught up (the events scan);
+    session twice or missed (sessions that share a time stay on one page);
   - a project the caller is not on never appears, and a station that only worked in it answers 404;
   - GET /api/crew gives that caller no usage from a reply that counts for such a project and no
     status line cost of a session that holds one or is in it, as the Report counts (TR-1696). A
@@ -37,7 +36,7 @@ licensed.install_test_root()
 ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
 
-os.environ["TZ"] = "UTC"      # the events scan answers times in the machine's zone, the table in UTC
+os.environ["TZ"] = "UTC"
 time.tzset()
 _TMP = tempfile.mkdtemp(prefix="tares-crew-sessions-route-")
 os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
@@ -110,12 +109,7 @@ def sizes(crew_body, factory_body):
 
 
 async def main():
-    from tares import session_ingest
     from tares.daemon import make_app
-    from tares.store import Store
-    # The last part compares with a cell that has not caught up, which reads the events and writes
-    # every line there too. So the lines go to both stores here.
-    Store._lines_skip_duckdb = lambda self: False
     app = make_app()
     store = app.state.store
     root = {"Authorization": f"Bearer {TOKEN}"}
@@ -174,7 +168,6 @@ async def main():
         for k in range(3):
             store.set_session_station(f"vlt-{k:04d}", VAULTED, "builder", "crew-orchestrator", vault, at(k))
         await asyncio.sleep(0.5)
-        ck("the sessions table has caught up", session_ingest.caught_up(store))
 
         before_crew = (await read("kim", "/api/crew")).json()
         before_page = (await read("kim", "/api/factory/crew")).json()
@@ -264,28 +257,6 @@ async def main():
         ck("a station of 6 has 5 earlier sessions; a page of 2 has a next", len(b["sessions"]) == 2
            and b["earlier_count"] == 5 and b["next_before"], b)
 
-        # ── the same on a cell that has not caught up (the events scan) ───────────────────────
-        real = session_ingest.caught_up
-        session_ingest.caught_up = lambda s: False
-        try:
-            slow_crew = (await read("kim", "/api/crew")).json()
-            slow_seen, before = [], None
-            while True:
-                r = await read("kim", path, limit=50, **({"before": before} if before else {}))
-                body = r.json()
-                slow_seen += [s["session"] for s in body["sessions"]]
-                before = body["next_before"]
-                if not before:
-                    break
-        finally:
-            session_ingest.caught_up = real
-        srow = member(slow_crew, BIG)
-        ck("before the first catch-up the row is the same: count, five, totals",
-           srow["earlier_count"] == row["earlier_count"] and srow["earlier"] == row["earlier"]
-           and same_usage(srow["usage"], row["usage"]) and srow["coordination_calls"] == row["coordination_calls"]
-           and srow["projects"] == row["projects"], (srow["earlier_count"], srow["usage"]))
-        ck("and the route pages through the same sessions", slow_seen == seen, (len(slow_seen), len(seen)))
-
         # ── privacy: Vault is private and Kim is not on it ─────────────────────────────────────
         mixed = member(crew, MIXED)
         ck("a station that worked in Vault names only Atlas to Kim", mixed["projects"] == [atlas], mixed["projects"])
@@ -346,14 +317,14 @@ async def main():
             u = s.get("usage") or {}
             return u.get("replies"), u.get("output_tokens"), (s.get("context") or {}).get("cost_usd")
 
-        for path_name, caught in (("caught up", real), ("events scan", lambda s: False)):
-            session_ingest.caught_up = caught
+        for path_name, caught in (("the sessions table", None),):
+            pass
             try:
                 kim = (await read("kim", "/api/crew")).json()
                 lee = (await read("lee", "/api/crew")).json()
                 one = (await read("kim", f"/api/crew/{SPLIT}")).json()
             finally:
-                session_ingest.caught_up = real
+                pass
             for label, name, want in (
                     ("only the Atlas session of a station counts, and a Vault session's cost is not shown",
                      SPLIT, (1, 1, None)),

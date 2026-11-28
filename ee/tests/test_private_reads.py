@@ -1,10 +1,7 @@
 # Tares enterprise licence, see ee/LICENSE
 """A private project's events and cell-wide lists stay out of reach of anyone not on it (TR-629).
 
-Two parts:
-
-1. On the store alone: with no private project the event filter adds no SQL at all.
-2. A daemon with auth on: private project p1 has a desk item, a grant, a hand-over, a doc, a skill,
+A daemon with auth on: private project p1 has a desk item, a grant, a hand-over, a doc, a skill,
    a station, tickets in review and a rule proposal. Bob (not on p1) sees none of it in any list,
    and the desk routes that take an item by reference answer 404 for its item. Ann (leads p1) sees
    all of it.
@@ -22,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 from tares.envelope import now_utc
-from tares.store import Store, _exclude_sql
+from tares.store import Store
 
 P = F = 0
 def ck(l, c, d=""):
@@ -42,14 +39,6 @@ def free_port() -> str:
 
 def H(tok):
     return {"Authorization": f"Bearer {tok}"}
-
-
-# ── part 1: what the filter costs ───────────────────────────────────────────────
-
-def timing():
-    print("== the event filter ==")
-    ck("with no private project the filter adds no SQL", _exclude_sql(None) == ("", [])
-       and _exclude_sql({"ids": [], "names": []}) == ("", []), str(_exclude_sql(None)))
 
 
 # ── part 2 and 3: a daemon ──────────────────────────────────────────────────────
@@ -232,7 +221,6 @@ async def list_checks(B, ids):
         await listed("rule proposals", "/api/rule-proposals", "SECRET rule text", "OPEN rule text")
 
 async def main():
-    timing()
     ids = {}
     port = free_port()
     B = f"http://127.0.0.1:{port}"

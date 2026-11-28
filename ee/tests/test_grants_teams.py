@@ -51,10 +51,8 @@ def H(tok):
 
 
 def own_db(name: str) -> str:
-    """A cell of its own: the session store (`tares.sqlite`) sits next to the DuckDB file, so two
-    cells in one folder would share their grants."""
-    os.makedirs(os.path.join(TMP, name), exist_ok=True)
-    return os.path.join(TMP, name, name + ".duckdb")
+    """A data directory of its own: two cells in one would share their grants."""
+    return os.path.join(TMP, name)
 
 
 def start(db, auth):

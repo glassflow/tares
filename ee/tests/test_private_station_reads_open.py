@@ -14,8 +14,7 @@ caller, and the station's owner still reads every session of the station:
                 `coordination_calls`.
 
 What a deleted private project drops for everyone stays dropped: its name on the station, and the
-cost of a session that counted for it (TR-1696). Every read is checked on a cell whose sessions table
-has caught up and on the events scan. Auth on is test_private_station_reads.
+cost of a session that counted for it (TR-1696). Auth on is test_private_station_reads.
 
 Run: .venv/bin/python ee/tests/test_private_station_reads_open.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_private_station_reads_open.py
@@ -126,48 +125,31 @@ def check_whole(label, got):
 
 
 async def main():
-    from tares import session_ingest
     from tares.daemon import make_app
     app = make_app()
     store = app.state.store
     async with app.router.lifespan_context(app):
-        to_duckdb = reads.keep_held(store)
         ids = await seed(app)
         vault = ids["Zephyrvault"]
-        ck("same", "the sessions table has caught up", session_ingest.caught_up(store))
-        real = session_ingest.caught_up
-        paths = (("caught up", real), ("events scan", lambda s: False))
-        before = {}
-        for path_name, caught in paths:
-            if path_name == "events scan":
-                to_duckdb()
-            session_ingest.caught_up = caught
-            try:
-                before[path_name] = await owner_reads(app)
-            finally:
-                session_ingest.caught_up = real
-            check_whole(f"before the delete, {path_name}", before[path_name])
+        path_name = "the sessions table"
+        before = await owner_reads(app)
+        check_whole(f"before the delete, {path_name}", before)
 
         async with reads.client(app, {}) as cx:
             r = await cx.delete(f"/api/projects/{vault}")
         ck("same", "the private project is deleted through the API",
            r.status_code < 300 and store.get_project(vault) is None, (r.status_code, r.text))
 
-        for path_name, caught in paths:
-            session_ingest.caught_up = caught
-            try:
-                got = await owner_reads(app)
-            finally:
-                session_ingest.caught_up = real
-            for read in ("station", "tool", "sessions", "list"):
-                want = before[path_name][read]
-                if read == "list":   # nobody reads the cost of a hidden project's session (TR-1696)
-                    want = {**want, "context": {**want["context"], "cost_usd": None}}
-                ck(read, f"after the delete, {path_name}: the owner reads it as before",
-                   got[read] == want,
-                   {k: (want[k], got[read][k]) for k in want if got[read][k] != want[k]})
-            ck("same", f"after the delete, {path_name}: the deleted project is not named",
-               got["projects"] == [[ids["Atlas"]]] * 2, got["projects"])
+        got = await owner_reads(app)
+        for read in ("station", "tool", "sessions", "list"):
+            want = before[read]
+            if read == "list":   # nobody reads the cost of a hidden project's session (TR-1696)
+                want = {**want, "context": {**want["context"], "cost_usd": None}}
+            ck(read, f"after the delete, {path_name}: the owner reads it as before",
+               got[read] == want,
+               {k: (want[k], got[read][k]) for k in want if got[read][k] != want[k]})
+        ck("same", f"after the delete, {path_name}: the deleted project is not named",
+           got["projects"] == [[ids["Atlas"]]] * 2, got["projects"])
 
     for read in reads.READS:
         print(f"[{read}] {reads.TALLY[read][0]} passed, {reads.TALLY[read][1]} failed")

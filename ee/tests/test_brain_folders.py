@@ -119,7 +119,7 @@ def unit():
     many = [blob(f"s{i:03d}/0001-a.md") for i in range(40)] + [blob(f"s{i:03d}/0002-b.md") for i in range(40)]
     ck("a monorepo's suggestions are capped", len(folders_mod.suggest(many)) == folders_mod.MAX_SUGGESTED)
 
-    print("== the store: the same on DuckDB and Postgres ==")
+    print("== the store: the same on SQLite and Postgres ==")
     from tares.store import Store
     s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit"))   # its own folder: the daemon's session store is one file per data folder
     who = s.create_person("Kiran", "kiran@x.dev")

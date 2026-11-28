@@ -2,8 +2,7 @@
 """Session reads follow project visibility (TR-1710): the session routes of a project, the build
 hand-over and the crew's context requests.
 
-Each caller reads a session as their place on its projects allows, on a cell whose sessions table
-has caught up and on the events scan. Auth off is test_private_session_reads_open.
+Each caller reads a session as their place on its projects allows. Auth off is test_private_session_reads_open.
 
 Run: .venv/bin/python ee/tests/test_private_session_reads.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_private_session_reads.py
@@ -434,7 +433,6 @@ async def keys(app) -> dict:
 
 
 async def main():
-    from tares import session_ingest
     from tares.daemon import make_app
     app = make_app()
     store = app.state.store
@@ -448,15 +446,13 @@ async def main():
                 assert r.status_code < 300, r.text
                 world["who"][f"key-{case}"] = {"Authorization": f"Bearer {r.json()['secret']}"}
         await seed_local(app, world)
-        ck("same", "the sessions table has caught up", session_ingest.caught_up(store))
         every = [*HIDDEN, "open-local", *(f"open-{c}" for c in (*TIES, "open"))]
         tied = store.sessions_in(every, {world["vault"]})
         ck("same", "the sessions tied to the vault are the hidden ones", tied == set(HIDDEN),
            sorted(tied ^ set(HIDDEN)))
 
-        real = session_ingest.caught_up
-        for path_name, caught in (("caught up", real), ("events scan", lambda s: False)):
-            session_ingest.caught_up = caught
+        for path_name, caught in (("the sessions table", None),):
+            pass
             try:
                 for case in TIES:
                     for who in OUTSIDERS:
@@ -475,7 +471,7 @@ async def main():
                 await check_asks(app, world, path_name)
                 await check_ask(app, world, path_name)
             finally:
-                session_ingest.caught_up = real
+                pass
         await check_take_over(app, world)
         await check_deleted(app, world)
     return report()

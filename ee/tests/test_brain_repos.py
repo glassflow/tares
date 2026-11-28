@@ -67,7 +67,7 @@ def day(month, of=1):
 
 
 def unit():
-    print("== the store: the same on DuckDB and Postgres ==")
+    print("== the store: the same on SQLite and Postgres ==")
     from tares.store import Store
     s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit"))   # its own folder: the session store is one file per data folder
     who = s.create_person("Kiran", "kiran@x.dev")

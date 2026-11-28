@@ -1138,6 +1138,10 @@ class _Gen:
             p = self.session_project.get(s["id"]) or rng.choice(self.session_project_list)
             c = self.crews[p["crew"]]
             station = rng.choice(c["builders"]) if role == "builder" else c[role]
+            if c is self.crews[0] and station == self.out["station"]:
+                # the anchor station's sessions are the three whose lines went through Store.append:
+                # a planned session whose lines are not stored would be its current one
+                station = next(x for x in c["builders"] if x != station)
             proj = None
             if left[role] > 0:
                 left[role] -= 1
