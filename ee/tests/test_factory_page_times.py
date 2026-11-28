@@ -83,7 +83,8 @@ DB_PROBE_FLOOR = 0.010                                # seconds; below this a da
 # that brings it down). A route absent from here must meet TARGET.
 OVER = {
     "sqlite": {},
-    "postgres": {},     # TR-1819 brought the last ones (project, tickets, projects_list) under TARGET
+    "postgres": {},     # TR-1819 brought every Postgres route that was over under TARGET (project,
+                        # project_big, project_tickets, tickets, tickets_list, projects_list)
 }
 
 # What each route is, where the console asks for it, and what its answer must hold for the time to

@@ -384,9 +384,32 @@ def in_memory():
     s.close()
 
 
+def no_write_in_read():
+    print("== a write inside read() ==")
+    s = open_store()
+    if s.sessions_db.dialect != "postgresql":
+        print("  skip  only Postgres reads run without a transaction")
+        s.close()
+        return
+    from sqlalchemy import text
+    before = s.get_setting("tr1819_probe")
+    try:
+        with s.sessions_db.read() as conn:
+            conn.execute(text("SELECT 1"))
+            conn.execute(text("INSERT INTO settings (key, value) VALUES ('tr1819_probe', 'x')"))
+        ck("a write inside read() is refused", False, "it ran")
+    except Exception as e:
+        ck("a write inside read() is refused, naming begin()", "begin()" in str(e), e)
+    ck("and nothing was written", s.get_setting("tr1819_probe") == before, s.get_setting("tr1819_probe"))
+    with s.sessions_db.read() as conn:
+        ck("a read after it still answers", conn.execute(text("select 1")).scalar() == 1)
+    s.close()
+
+
 if __name__ == "__main__":
     held_reads()
     every_read_function()
     in_memory()
+    no_write_in_read()
     print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
     sys.exit(1 if FAILS else 0)
