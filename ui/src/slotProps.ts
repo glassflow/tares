@@ -1,6 +1,4 @@
-import type { ReactNode } from "react";
 
-import type { Ctx } from "./components/project/common";
 import type { FactoryPeopleData, PersonRow } from "./editions/factory/FactoryPeople.api";
 import type { FactoryProjectRow, FactoryProjectsData, HiddenProject, ProjectsView } from "./editions/factory/FactoryProjects.api";
 import type {
@@ -8,7 +6,7 @@ import type {
   HomeSample, HomeTeamActionsProps, HomeTeamCrewsProps, HomeWaitingOnProps, HomeWaitingProps,
 } from "./editions/factory/home.types";
 import type {
-  ApiKey, CrewGroup, CrewStation, DeskAllowed, DeskItem, Grant, GrantsView, Handover, Person, Whoami,
+  ApiKey, Person, Whoami,
 } from "./types";
 
 /*
@@ -21,26 +19,11 @@ import type {
 type NoProps = Record<never, never>;
 
 export interface SlotProps {
-  // projects
-  "project.access": { ctx: Ctx };
-  "page.project.members": { ctx: Ctx };
-  "projects.changeLead": { id: string; lead?: { id: string } | null; people: Person[]; onDone: () => void };
   // the Projects page on a cell with more than one person (TR-1277)
   "projects.switch": { view: ProjectsView; counts: Record<ProjectsView, number>; onView: (v: ProjectsView) => void };
   "projects.lock": NoProps;
   "projects.lead": { p: FactoryProjectRow; me?: string };
   "projects.hidden": { stubs: HiddenProject[]; summary?: string; view: ProjectsView };
-  // the overview of a project, and its Grants view
-  "project.teamQuestions": { project: string };
-  "project.signoffs": { handover?: Handover | null };
-  "grants.agreedBy": { part: "head" | "cell"; grant?: Grant };
-  "grants.waitingFor": { grant: Grant };
-  "grants.consent": {
-    grant: Grant; list?: GrantsView; busy: boolean;
-    onBusy: (id?: string) => void; reload: () => void; onError: (e: unknown) => void;
-  };
-  "grants.waitingElsewhere": { here: Grant[]; list?: GrantsView; row: (g: Grant) => ReactNode; head: ReactNode };
-  "grants.repos": { repos: string[]; onChange: (repos: string[]) => void };
   // settings
   "page.settings.areas": NoProps;
   "settings.people": { people?: Person[]; admin: boolean; err?: string; onChanged: () => void; me?: Whoami };
@@ -56,9 +39,6 @@ export interface SlotProps {
   "home.crewLimit": HomeCrewLimitProps;
   "home.teamCrews": HomeTeamCrewsProps;
   "home.reposYouOwn": HomeReposProps;
-  // crew
-  "crew.groups": { groups: CrewGroup[]; myId: string; now: string; stations: CrewStation[]; selected: string };
-  "desk.groups": { items: DeskItem[]; allowed: Record<string, DeskAllowed>; onAllowed: (a: DeskAllowed) => void; myId: string };
 }
 
 export type SlotName = keyof SlotProps;
