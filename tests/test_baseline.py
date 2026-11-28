@@ -139,9 +139,31 @@ def postgres():
             c.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
 
 
+def old_store():
+    print("== a Tares 1.x database is refused, not run against ==")
+    from tares.session_store import VERSION_TABLE as VT
+    from tares.store import Store, StoreUnavailable
+    home = tempfile.mkdtemp()
+    sdb = SessionStore(home)
+    with sdb.engine.begin() as conn:       # a 1.61.0 cell: its version table at its head
+        conn.execute(text(f"CREATE TABLE {VT} (version_num VARCHAR(64) NOT NULL PRIMARY KEY)"))
+        conn.execute(text(f"INSERT INTO {VT} VALUES ('0024_merge_ledger')"))
+    sdb.close()
+    try:
+        Store(home)
+        ck("the store does not open on it", False, "it opened")
+    except StoreUnavailable as e:
+        ck("the store does not open on it, and says to convert it first",
+           "Tares 1.x" in e.reason and "migration script" in e.reason, e.reason)
+    sdb = SessionStore(home)
+    ck("and the database is left as it was", versions(sdb) == ["0024_merge_ledger"], versions(sdb))
+    sdb.close()
+
+
 if __name__ == "__main__":
     one_revision()
     sqlite()
     postgres()
+    old_store()
     print("FAIL " + ", ".join(FAILS) if FAILS else "OK")
     sys.exit(1 if FAILS else 0)

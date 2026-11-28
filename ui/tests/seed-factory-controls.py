@@ -11,7 +11,7 @@ from tares.store import Store  # noqa: E402
 
 store = Store(sys.argv[1])
 uid = "uc_atlas"
-store.create_project(uid, "custom", "Atlas", {}, goal="Publish the answers library on the docs site.")
+store.create_project(uid, "Atlas", goal="Publish the answers library on the docs site.")
 store.set_project_kind(uid, "software_factory")
 store.update_project(uid, status="active")
 if not store.get_person("local"):
@@ -24,7 +24,7 @@ store.add_project_member(uid, kim, "local")
 store.create_ticket(uid, "tares", "Add the header")
 store.create_ticket(uid, "tares", "Add the footer")
 for other, name, scope in (("uc_borealis", "Borealis", "team"), ("uc_cobalt", "Cobalt", "private")):
-    store.create_project(other, "custom", name, {}, goal="Publish the search page.")
+    store.create_project(other, name, goal="Publish the search page.")
     store.set_project_kind(other, "software_factory")
     store.update_project(other, status="active")
     store.set_project_lead(other, sam)

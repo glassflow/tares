@@ -48,7 +48,7 @@ REPO = "example-org/service-a"
 
 def project(name, goal):
     uid = "uc_" + "".join(c for c in name.lower() if c.isalnum())[:14] + str(len(ids))
-    store.create_project(uid, "custom", name, {}, goal=goal)
+    store.create_project(uid, name, goal=goal)
     store.set_project_kind(uid, "software_factory")
     ids[name] = uid
     return uid

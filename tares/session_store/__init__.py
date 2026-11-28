@@ -32,6 +32,24 @@ def _seen(conn, cursor, statement, parameters, context, executemany) -> None:
     request_memo.statement(statement)      # a write ends what a page read has kept (TR-1631)
 
 
+# The revisions of the Tares 1.x session store, squashed into 0001_baseline for 2.0 (TR-1816). A
+# database at one of them holds the 1.x tables and is converted by the 2.0 migration script, never
+# upgraded here; at "0001_base" it is a 1.x one too (2.0's first revision is "0001_baseline").
+OLD_REVISIONS = frozenset((
+    "0001_base", "0002_session_tables", "0003_sessions", "0004_session_facts", "0005_session_turns",
+    "0006_session_lines", "0007_session_archive", "0008_report_weeks", "0009_report_texts",
+    "0010_session_command_outcome", "0011_session_station_runtime", "0012_core_settings",
+    "0013_session_origin", "0014_core_people", "0015_session_moves", "0016_session_usage_hourly",
+    "0017_project_tables", "0018_ticket_tables", "0019_ticket_pr_columns", "0020_review_tables",
+    "0021_crew_tables", "0022_integration_tables", "0023_brain_tables", "0024_merge_ledger",
+    "0025_integration_keys_pr_events", "0026_drop_catalog_sources", "0027_drop_move_bookkeeping"))
+
+
+class OldStore(RuntimeError):
+    """The database is a Tares 1.x one: the store refuses to start on it (the daemon serves its
+    degraded page with this reason) instead of running against tables it does not have."""
+
+
 class SessionStore:
     def __init__(self, data_dir: str, state_dsn: str | None = None):
         self.engine = make_engine(data_dir, state_dsn)
@@ -129,6 +147,11 @@ class SessionStore:
                 conn, opts={"version_table": VERSION_TABLE, "version_table_schema": None}
             ).get_current_revision()
             known = {r.revision for r in ScriptDirectory.from_config(cfg).walk_revisions()}
+            if current in OLD_REVISIONS:
+                raise OldStore(
+                    f"this database was written by Tares 1.x (revision {current}); Tares 2.0 starts "
+                    "only on a converted one. Run the 2.0 migration script on it first (TR-1821), or "
+                    "keep running Tares 1.61")
             if current is not None and current not in known:
                 log.warning("session store is at revision %s, which this version does not know; "
                             "leaving it as it is", current)
