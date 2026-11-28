@@ -122,7 +122,7 @@ async def team_database():
         return r.json()
 
     async with app.router.lifespan_context(app):
-        ck("no licence on this cell", app.state.host.licence_state()["valid"] is False)
+        ck("no licence on this cell", app.state.deps.licence_state()["valid"] is False)
         ck("the team interface is the single-person one", type(team_mod.get()) is team_mod.SingleTeam)
         ck("two people besides local: this is a team database", not store.only_local_person())
 

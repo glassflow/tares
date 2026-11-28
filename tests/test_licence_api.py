@@ -9,7 +9,7 @@ Three daemons that trust the test root (licence_testkit.daemon_argv), auth on:
   B  TARES_LICENSE not a valid key: it still wins over a valid stored key, with valid false and its reason.
   C  TARES_LICENSE a valid key: it wins over a stored key, and PUT says env_in_use.
 In this process: the desk warnings with a frozen clock (30, 7, 0 days, over seats, a renewal), the order
-of env and setting in resolve(), ee_allowed(), and Host.licence_required answering 402 with exactly
+of env and setting in resolve(), ee_allowed(), and Deps.licence_required answering 402 with exactly
 {code, message, url}.
 
 Run: python tests/test_licence_api.py
@@ -265,7 +265,7 @@ def in_process():
     L._set_root_keys_for_tests({kit.kid_of(root_pub): root_pub})
     app = make_app()
     store = app.state.store
-    h = app.state.host
+    h = app.state.deps
 
     print("== env and setting, in this process ==")
     L._cache = None

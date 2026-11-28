@@ -92,14 +92,14 @@ class Team(SingleTeam):
     def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting):
         return home.team_projects(c, request, open_ps, tickets, rows, which, now, waiting)
 
-    def register_routes(self, app, host):
-        areas.register_routes(app, host)
-        access.register_routes(app, host)
-        consent.register_routes(app, host)
-        questions.register_routes(app, host)
-        brain_repos.register_routes(app, host)
-        brain_ask.register_routes(app, host)
-        brain_decisions_hand.register_routes(app, host)
+    def register_routes(self, app, deps):
+        areas.register_routes(app, deps)
+        access.register_routes(app, deps)
+        consent.register_routes(app, deps)
+        questions.register_routes(app, deps)
+        brain_repos.register_routes(app, deps)
+        brain_ask.register_routes(app, deps)
+        brain_decisions_hand.register_routes(app, deps)
 
     def mcp_tools(self):
         return [*mcp_areas.TOOLS, *mcp_access.TOOLS, *mcp_grants.TOOLS, *mcp_questions.TOOLS,

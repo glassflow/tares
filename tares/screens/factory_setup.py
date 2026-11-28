@@ -53,6 +53,7 @@ from ..factory_api import caller
 from ..factory_store import PROJECT_SLOTS, FactoryStore
 from ..integrations import registry, resolve
 from ..integrations.registry import SLOTS
+from ..deps import Deps
 
 STEPS = {
     "tickets": ("Tickets", "Where the crew's tickets live and where their status is kept."),
@@ -256,7 +257,8 @@ def _plural(n: int, one: str, many: str) -> str:
     return one if n == 1 else many
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     def safe(fn, default):
         try:
             return fn()
@@ -691,7 +693,7 @@ def register(app, store, h, ctx):
         blocks: the crew's choices and GitHub (`onboarding`) and the terminal commands
         (`terminal`). The home itself is not built (TR-1634)."""
         from .. import factory_home
-        o, start = factory_home.setup_state(store, getattr(ctx, "fx", None), request)
+        o, start = factory_home.setup_state(store, getattr(h, "fx", None), request)
         terminal = [st for st in start if st.get("where") == "terminal"]
         return {"onboarding": o, "terminal": terminal,
                 "set": [bool((o.get("choices") or {}).get("chosen")),

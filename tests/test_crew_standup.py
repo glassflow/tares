@@ -142,7 +142,7 @@ async def main():
         ck("without a model provider the report still comes back, with the reason",
            r.status_code == 200 and s["summary"] is None
            and "no model provider" in (s["summary_error"] or "") and "## Shop" in s["markdown"], s)
-        import tares.daemon as daemon_mod
+        import tares.routes.standup as standup_routes
         from tares.models import ModelReply
         seen = {}
 
@@ -159,13 +159,13 @@ async def main():
                                          "cache_creation_input_tokens": 0,
                                          "cache_read_input_tokens": 0})
 
-        real = daemon_mod.resolve_provider
-        daemon_mod.resolve_provider = lambda store: (FakeProvider(), "test")
+        real = standup_routes.resolve_provider
+        standup_routes.resolve_provider = lambda store: (FakeProvider(), "test")
         try:
             async with mk() as cx:
                 r = await cx.post("/api/crew/standup/summary", json={})
         finally:
-            daemon_mod.resolve_provider = real
+            standup_routes.resolve_provider = real
         s = r.json()
         ck("with a model the summary sits in the markdown under the project",
            s["summary_error"] is None and s["summary"]["projects"] == {shop: "T1 merged; T3 waits on a key."}

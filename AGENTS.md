@@ -5,7 +5,11 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 
 ## Layout
 
-- `tares/` the package: `daemon.py` (HTTP API + console), `cli.py` (`tares up`, `tares mcp`),
+- `tares/` the package: `daemon.py` (`make_app()`, which builds the app from routers and adds the
+  console's catch-all last), `routes/` (one APIRouter per area: health, sessions, auth, settings,
+  slack, projects, docs, tickets, milestones, standup, home, console), `deps.py` (the `Deps` every
+  router and route module is given: the store, the projects and the caller helpers), `guard.py`
+  (the auth guard), `cli.py` (`tares up`, `tares mcp`),
   `store.py` (DuckDB), `providers.py` and `models.py` (the model provider layer the
   standup, milestone and report summaries call), `mcp*.py` (the MCP proxy),
   `factory_projects.py` (a project's row and its lifecycle).

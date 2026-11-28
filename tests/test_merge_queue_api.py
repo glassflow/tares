@@ -26,6 +26,7 @@ from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
+from _routes import flat_routes
 scrub_os_environ()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -891,7 +892,7 @@ async def main():
         same = {k: before[k] == after[k] for k in TABLES}
         ck("every table is the same after the reads", all(same.values()), same)
         ck("no write route exists for the page: only a GET", all(
-            rt.methods == {"GET"} for rt in app.routes
+            rt.methods == {"GET"} for rt in flat_routes(app.routes)
             if getattr(rt, "path", "") == "/api/projects/{uid}/merge-queue"))
 
     print(f"\n{P} passed, {F} failed")

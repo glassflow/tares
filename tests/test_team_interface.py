@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from _env import scrub_os_environ
+from _routes import flat_routes
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-team-")
@@ -94,11 +95,11 @@ class FakeEeTeam(SingleTeam):
     def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting): return {"team": True}
     def mcp_tools(self): return [print]
 
-    def register_routes(self, app, host):
+    def register_routes(self, app, deps):
         @app.post(PING[1])
         def ping():
             if not L.ee_allowed():
-                host.licence_required("Ping needs an enterprise licence (ee route).")
+                deps.licence_required("Ping needs an enterprise licence (ee route).")
             return {"pong": True}
 
         @app.get("/api/ee-info")
@@ -317,7 +318,7 @@ async def routes_with_ee():
     team_mod._set_ee_for_tests(FakeEeTeam())
     team_mod.FALLBACKS[:] = [PING, GONE]
     app = make_app()
-    paths = [getattr(r, "path", "") for r in app.routes]
+    paths = [getattr(r, "path", "") for r in flat_routes(app.routes)]
     ping_at = paths.index("/api/ee-ping")
     gone_at = paths.index("/api/ee-gone")
     catch_at = paths.index("/{path:path}")

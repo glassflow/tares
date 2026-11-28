@@ -51,6 +51,7 @@ from .factory_api import caller
 from .factory_store import FactoryStore, PROJECT_SLOTS
 from .integrations import registry, resolve
 from .integrations.registry import SLOTS
+from .deps import Deps
 
 TEST_SECONDS = 10
 MAX_VALUE = 4096
@@ -116,7 +117,8 @@ def _title(slot: str, name: str) -> str:
     return (cls.title or name) if cls else name
 
 
-def register(app, store, h):
+def register(app, h: Deps):
+    store = h.store
     def refuse(code: int, message: str):
         raise HTTPException(status_code=code, detail=message)
 

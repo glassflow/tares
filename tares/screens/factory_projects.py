@@ -22,6 +22,7 @@ from .. import factory_owners as owners_mod
 from .. import status_words
 from ..factory_home import (_STATE_ORDER, _caller, _count, _dt, _short, for_caller, plain_ago,
                             project_row, caller_owns, caller_waiting, team_of)
+from ..deps import Deps
 
 # the order of the list: what needs you first, kept for later and finished last
 ORDER = {**_STATE_ORDER, "later": 4, "done": 5}
@@ -116,7 +117,8 @@ def done_row_for(p: dict, facts: dict, handover: dict | None, now) -> dict | Non
             "repo_names": names}
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     @app.get("/api/factory/projects")
     @request_memo.page
     def factory_projects(request: Request):
@@ -125,7 +127,7 @@ def register(app, store, h, ctx):
         later, done),
         newest activity first within a state."""
         now = now_utc()
-        fx = ctx.fx
+        fx = h.fx
         stations = fx.stations() if fx else []
         hidden = h.hidden_ids()
         projects = store.list_projects(kind="software_factory", exclude_ids=hidden)

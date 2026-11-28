@@ -67,7 +67,7 @@ def main():
     L._set_root_keys_for_tests({kit.kid_of(root_pub): root_pub})
     app = make_app()
     store = app.state.store
-    h = app.state.host
+    h = app.state.deps
     H = {"Authorization": f"Bearer {ROOT}"}
 
     print("== the words ==")

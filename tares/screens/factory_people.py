@@ -25,6 +25,7 @@ from fastapi import Body, HTTPException, Request
 from .. import team as team_mod
 from ..envelope import now_utc
 from ..factory_home import clear_cache, plain_ago
+from ..deps import Deps
 
 
 def _cloud() -> bool:
@@ -36,7 +37,8 @@ def _workspace_url() -> str:
     return (os.getenv("TARES_WORKSPACE_URL") or "").strip()
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     def admin(request: Request) -> bool:
         scopes = getattr(request.state, "scopes", None)
         return scopes is None or "admin" in scopes

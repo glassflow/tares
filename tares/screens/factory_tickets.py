@@ -37,6 +37,7 @@ from ..envelope import now_utc
 from ..factory_home import _dt, for_caller, plain_ago, caller_waiting
 from .factory_project import Turns, _pr_out, _review_out, station_roles, ticket_state, who_words
 from .factory_projects import ORDER, row_for
+from ..deps import Deps
 
 # the states a person can pick, in the order the page lists them, with the key each counts under
 STATES = ("to do", "in progress", "in review", "changes asked", "blocked", "merged", "canceled")
@@ -66,7 +67,8 @@ def _ref_number(ref: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     @app.get("/api/factory/tickets")
     def factory_tickets(project: str | None = None, milestone: str | None = None,
                         state: str | None = None, q: str | None = None, sort: str = "new",
@@ -86,7 +88,7 @@ def register(app, store, h, ctx):
         if offset < 0:
             raise HTTPException(400, "offset is 0 or more")
         now = now_utc()
-        fx = ctx.fx
+        fx = h.fx
         hidden = h.hidden_ids()
         all_p = [p for p in store.list_projects()
                  if p.get("kind") == "software_factory" and p["id"] not in hidden]

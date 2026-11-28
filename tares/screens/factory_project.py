@@ -39,6 +39,7 @@ from .. import status_words
 from .. import team as team_mod
 from ..envelope import now_utc
 from ..factory_home import plain_ago
+from ..deps import Deps
 
 # ── words ─────────────────────────────────────────────────────────────────────
 
@@ -280,7 +281,8 @@ def _review_out(last: dict | None, t: dict) -> str | None:
     return f"round {v['round']}: {word}, then the pull request changed"
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     def read_roles() -> tuple[dict[str, str], list[dict]]:
         try:
             rows = store.station_sessions(h.cc_source())
@@ -387,7 +389,7 @@ def register(app, store, h, ctx):
         # admins; the caller answers them only when they are among them
         owners = fh.owners_mod.Owners(store)
         check_for = owners.who(owners.project(p))
-        yours = fh.caller_owns(store, fh.for_caller(ctx.fx, request), request, p, owners)
+        yours = fh.caller_owns(store, fh.for_caller(h.fx, request), request, p, owners)
         out_ms = []
         results = store.milestone_check_results([m["id"] for m in milestones])
         crew_with_it = fw.crew_has(store, p)
@@ -433,7 +435,7 @@ def register(app, store, h, ctx):
         # what waits for the caller here is what their home lists for this project; on a team
         # cell what waits for someone else is under "Waiting for others", named for them, with
         # nothing to press, and does not make the project "Waiting for you" (fh.project_waiting)
-        waiting, others = fh.project_waiting(store, fh.for_caller(ctx.fx, request), now, request, uid)
+        waiting, others = fh.project_waiting(store, fh.for_caller(h.fx, request), now, request, uid)
         for w in [*waiting, *others]:        # ids, links and what a button does stay as they are
             for k in ("label", "title", "detail", "meta"):
                 if isinstance(w.get(k), str):

@@ -46,6 +46,7 @@ from .. import status_words
 from ..envelope import now_utc
 from ..factory_home import _dt, plain_ago
 from ..integrations import registry
+from ..deps import Deps
 
 MERGED_SHOWN = 3               # merged pull requests listed under a group
 MERGED_WINDOW = 3 * 86400      # seconds a merged pull request stays in that list (the mock shows 2 days)
@@ -114,7 +115,8 @@ def _upper(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     def guard_name(name: str) -> str:
         """A guardrail as a person reads it: its title, else its key with spaces."""
         name = (name or "").strip()

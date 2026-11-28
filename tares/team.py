@@ -23,7 +23,7 @@ Three rules shape the interface:
   `team_reader()`. The move tickets add the fields they need to it.
 
 Route order in `make_app` (see the comment there): core routes, `factory_api.register`,
-`screens.register_all`, then `Team.register_routes` of the ee team (whatever the licence; each ee
+the screens, then `Team.register_routes` of the ee team (whatever the licence; each ee
 route answers `licence_required` itself), then `register_fallbacks`, then the console catch-all.
 """
 from __future__ import annotations
@@ -58,7 +58,7 @@ class Team:
     # ── people ──
     def can_add_person(self, store) -> tuple[bool, str | None]:
         """(True, None) when the cell may make one more person row, else (False, reason in plain
-        words). The caller turns False into `host.licence_required(reason)`. Called only before a
+        words). The caller turns False into `deps.licence_required(reason)`. Called only before a
         NEW row: finding an existing person (by id or email) and the system credential's
         `owner: true` claim of an unclaimed `local` never ask."""
         raise NotImplementedError
@@ -173,9 +173,11 @@ class Team:
         raise NotImplementedError
 
     # ── registration ──
-    def register_routes(self, app, host) -> None:
-        """Add the team's HTTP routes to `app`. `host` is `app.state.host`. Every route starts with
-        `if not licence.ee_allowed(): host.licence_required("...")`."""
+    def register_routes(self, app, deps) -> None:
+        """Add the team's HTTP routes to `app`. `deps` is the daemon's Deps (`app.state.deps`,
+        tares/deps.py). Every route starts with
+        `if not licence.ee_allowed(): deps.licence_required("...")`. It may wrap the app's lifespan
+        (`app.router.lifespan_context`) for the team's background tasks."""
         raise NotImplementedError
 
     def mcp_tools(self) -> list[Callable]:
@@ -276,7 +278,7 @@ class SingleTeam(Team):
     def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting):
         return {}
 
-    def register_routes(self, app, host):
+    def register_routes(self, app, deps):
         return None
 
     def mcp_tools(self):
@@ -329,7 +331,7 @@ def enabled() -> bool:
     return get() is not _SINGLE
 
 
-def register_ee(app, host) -> None:
+def register_ee(app, deps) -> None:
     """Add the ee team's routes to `app`. If registering raises, the cell runs as a single-person
     cell: the routes it added are taken out again, the ee team is dropped (so `get()` answers
     `SingleTeam` whatever the licence), and one log line says why. Never raises (TR-1057)."""
@@ -339,7 +341,7 @@ def register_ee(app, host) -> None:
         return
     before = len(app.router.routes)
     try:
-        ee.register_routes(app, host)
+        ee.register_routes(app, deps)
     except Exception as e:
         log.warning("tares.team: ee routes did not register, running without ee: %s: %s",
                     type(e).__name__, e)
@@ -383,11 +385,11 @@ FALLBACKS: list[tuple[str, str, str]] = [
 ]
 
 
-def register_fallbacks(app, host) -> None:
-    """Add one route per row of `FALLBACKS` that answers `host.licence_required(message)`."""
+def register_fallbacks(app, deps) -> None:
+    """Add one route per row of `FALLBACKS` that answers `deps.licence_required(message)`."""
     def answer(message: str) -> Callable:
         def handler():   # no parameters: FastAPI would read a default as a query value
-            host.licence_required(message)
+            deps.licence_required(message)
         return handler
 
     for method, path, message in list(FALLBACKS):

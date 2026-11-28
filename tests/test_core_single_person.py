@@ -106,7 +106,7 @@ async def one_person_cell():
         async def people():
             return (await cx.get("/api/people")).json()["people"]
 
-        ck("no licence on this cell", app.state.host.licence_state()["valid"] is False)
+        ck("no licence on this cell", app.state.deps.licence_state()["valid"] is False)
         ck("a cell of one: only local", store.only_local_person())
 
         print("== _body_person: a key naming a new person is refused, nothing written ==")

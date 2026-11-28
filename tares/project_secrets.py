@@ -34,6 +34,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Body, HTTPException, Request
 
 from .factory_api import caller
+from .deps import Deps
 
 KEY_ENV = "TARES_SECRETS_KEY"
 NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
@@ -156,7 +157,8 @@ def page_listing(store, h, p: dict, request) -> dict | None:
 # ---------- the routes ----------
 
 
-def register(app, store, h):
+def register(app, h: Deps):
+    store = h.store
     def refuse(code: int, message: str):
         raise HTTPException(status_code=code, detail=message)
 

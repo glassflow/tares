@@ -33,6 +33,7 @@ from ..factory_home import _iso, plain_ago
 from .factory_project import (_GONE, _ROLE_BY, _STAGE_WORD, _pr_out, _stamp, station_roles,
                               ticket_state, who_words)
 from .factory_tickets import KEYS
+from ..deps import Deps
 
 _VERDICT_TEXT = {"pass": "passed", "changes": "asked for changes", "block": status_words.VERDICT["block"]}
 _CALL_STATE = {"open": "waiting for you", "kept": "confirmed", "overturned": "you changed it"}
@@ -49,7 +50,8 @@ def _state_label(st: str) -> str:
     return st[:1].upper() + st[1:]
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     @app.get("/api/factory/projects/{uid}/tickets/{ref}")
     async def factory_ticket(uid: str, ref: str):
         """The whole ticket page in one read (404 for a project that is not a software factory

@@ -30,8 +30,10 @@ GOING = {
 GOING_PREFIXES = ("tares.sre_", "tares.agent_", "tares.session_move_", "tares.screens.sre_")
 
 # modules that stay but shrink: their platform parts go in the deletion tickets
-MIXED = {"tares.store", "tares.config", "tares.daemon", "tares.cli", "tares.mcp_server", "tares.host",
-         "tares.screens", "tares.mcp_outcomes", "tares.start_steps", "tares.slack"}
+# (tares.routes.projects holds the project timeline route that moved out of tares.daemon, TR-1814)
+MIXED = {"tares.store", "tares.config", "tares.daemon", "tares.cli", "tares.mcp_server",
+         "tares.routes.projects", "tares.screens", "tares.mcp_outcomes", "tares.start_steps",
+         "tares.slack"}
 
 
 # Imports of a going module that stay until the ticket that removes their feature: (file, module) ->

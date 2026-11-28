@@ -26,6 +26,7 @@ from ..factory_api import own_crew_ids, project_progress, readable_offers
 from ..factory_home import (_STALE_MINUTES, _caller, _count, _dt, _how_far, _minutes, _plan,
                             _resets, cached, crew_member, for_caller, heard_ago, plain_wait)
 from .factory_docs import ago
+from ..deps import Deps
 
 _SHOWN_ROLES = ("orchestrator", "reviewer", "releaser", "builder")
 _NO_PROJECT = {"id": None, "name": "Not on a project yet"}
@@ -98,8 +99,9 @@ def _pacing(pace: dict, now) -> str | None:
     return f"Pacing: {' and '.join(causes)}, so {do}" + (f" until {until}." if until else ".")
 
 
-def register(app, store, h, ctx):
-    fx = ctx.fx
+def register(app, h: Deps):
+    store = h.store
+    fx = h.fx
 
     def by_project(names: dict, week: list[dict]) -> list[dict]:
         out = []

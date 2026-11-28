@@ -65,6 +65,7 @@ from .factory_api import caller, crew_settings
 from .integrations import hooks, registry, resolve
 from .integrations.builtin import guardrails_tares as rules_mod
 from .integrations_api import may_write_project_of
+from .deps import Deps
 
 MAX_TEXT = 500
 _GRANT_ID = re.compile(r"^G\d+$", re.I)
@@ -79,7 +80,8 @@ def infer_role(station: str) -> str:
     return "builder" if "-build-" in n else ""
 
 
-def register(app, store, h):
+def register(app, h: Deps):
+    store = h.store
     def refuse(code: int, message: str):
         raise HTTPException(status_code=code, detail=message)
 

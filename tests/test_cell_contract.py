@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from _env import clean_env, scrub_os_environ
+from _routes import flat_routes
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-cell-contract-")
@@ -129,7 +130,7 @@ def check_routes():
     ck("make_app built the full app, not the degraded one", "degraded" not in (app.title or ""), app.title)
     catch_all = {"/{path:path}", "/{full_path:path}", "/api/{rest:path}", "/ingest/{rest:path}",
                  "/catalog/{rest:path}"}
-    routes = [r for r in app.routes if getattr(r, "path", "") not in catch_all]
+    routes = [r for r in flat_routes(app.routes) if getattr(r, "path", "") not in catch_all]
     for method, path, caller in FROZEN:
         want = _concrete(path)
         hit = False

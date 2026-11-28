@@ -27,6 +27,8 @@ os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 import httpx
 from fastapi.routing import APIRoute
 
+from _routes import flat_routes
+
 P = F = 0
 
 
@@ -109,7 +111,7 @@ async def main():
         scoped = {("GET", "/api/whoami"), ("GET", "/api/projects")}
         bad = []
         n = 0
-        for route in app.routes:
+        for route in flat_routes(app.routes):
             if not isinstance(route, APIRoute):
                 continue
             for method in sorted(route.methods):
@@ -149,7 +151,7 @@ async def main():
                   # the person's decisions on it (TR-451)
                   ("GET", "/api/projects/{uid}/decisions")}
         bad, n = [], 0
-        for route in app.routes:
+        for route in flat_routes(app.routes):
             if not isinstance(route, APIRoute) or "{uid}" not in route.path:
                 continue
             for method in sorted(route.methods):

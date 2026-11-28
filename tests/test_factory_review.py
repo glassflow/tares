@@ -101,8 +101,8 @@ FX = {}
 _register = factory_api.register
 
 
-def _register_keeping_fx(app, store, h):
-    FX["fx"] = _register(app, store, h)
+def _register_keeping_fx(app, h):
+    FX["fx"] = _register(app, h)
     FX["h"] = h
     return FX["fx"]
 

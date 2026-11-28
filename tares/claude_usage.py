@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from .claude_usage_store import PLAN_SETTING
 from .envelope import now_utc
+from .deps import Deps
 
 SESSION_WINDOW = timedelta(hours=5)
 MAX_SKILLS = 10
@@ -295,7 +296,8 @@ def usage(store, days: int = 7, hidden=frozenset()) -> dict:
             "now": now}
 
 
-def register(app, store, hidden_ids) -> None:
+def register(app, h: Deps) -> None:
+    store, hidden_ids = h.store, h.hidden_ids
     @app.get("/api/claude-code/usage")
     def get_claude_code_usage(days: int = 7):
         """What the Claude Code sessions reporting here spend: the plan's limits (as the crew's

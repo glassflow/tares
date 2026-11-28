@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from _env import scrub_os_environ
+from _routes import flat_routes
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-boot-guard-")
@@ -63,17 +64,17 @@ class _EP:
 
 class EeTeam(SingleTeam):
     """An ee team with one route that wants the licence."""
-    def register_routes(self, app, host):
+    def register_routes(self, app, deps):
         @app.post(PING[1])
         def ping():
             if not L.ee_allowed():
-                host.licence_required("Ping needs an enterprise licence (ee route).")
+                deps.licence_required("Ping needs an enterprise licence (ee route).")
             return {"pong": True}
 
 
 class HalfTeam(SingleTeam):
     """Adds one route, then raises."""
-    def register_routes(self, app, host):
+    def register_routes(self, app, deps):
         @app.get(HALF)
         def half():
             return {"half": True}
@@ -138,7 +139,7 @@ async def case_type():
     log = watch("tares.team")
     os.environ["TARES_LICENSE"] = LIC
     class NotATeam:
-        def register_routes(self, app, host):
+        def register_routes(self, app, deps):
             raise AssertionError("a wrong type must never get as far as registering")
     real_eps = importlib.metadata.entry_points
     # only the ee group is faked: pydantic and others ask for their own groups while the app builds
@@ -178,7 +179,7 @@ async def case_routes():
         ck("make_app returns", False, f"{type(e).__name__}: {e}")
         return
     ck("make_app returns", True)
-    paths = [getattr(r, "path", "") for r in app.routes]
+    paths = [getattr(r, "path", "") for r in flat_routes(app.routes)]
     ck("the half registered route is gone", HALF not in paths, paths[-6:])
     ck("... the fallback and the console catch-all are still there, catch-all last",
        PING[1] in paths and paths[-1] == "/{path:path}", paths[-4:])
