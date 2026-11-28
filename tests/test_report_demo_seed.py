@@ -83,18 +83,16 @@ def seed_here(mod, data_dir):
 
 @contextlib.contextmanager
 def opened(data_dir):
-    store = Store(os.path.join(data_dir, "tares"))
+    store = Store(data_dir)
     try:
         yield store
     finally:
-        store.close()
         store.close()
 
 
 def every_row(s):
     """{table: rows} for every state and session table."""
-    out = {t: [tuple(r) for r in s.sc.execute(f"SELECT * FROM {t}").fetchall()]
-           for t in s._state_tables() if t not in session_tables.metadata.tables}
+    out = {}
     with s.sessions_db.begin() as conn:
         for t in session_tables.metadata.sorted_tables:
             out[t.name] = [tuple(r) for r in conn.execute(select(t)).fetchall()]
@@ -451,7 +449,7 @@ def daemon(data_dir):
     """A daemon on the data dir, started as the seed's start hint says, and stopped afterwards.
     Yields its URL, or None when it did not come up."""
     port = free_port()
-    env = clean_env(TARES_HOME=os.path.join(data_dir, "tares"), TARES_PORT=port,
+    env = clean_env(TARES_HOME=data_dir, TARES_PORT=port,
                     TARES_PR_SYNC_SECONDS="off", TARES_OTLP_GRPC_PORT="off",
                     ANTHROPIC_API_KEY=None, ANTHROPIC_AUTH_TOKEN=None, OPENAI_API_KEY=None,
                     TARES_STATE_DSN=None, TARES_EDITION=None)
@@ -513,13 +511,6 @@ def daemon_checks(data_dir):
         answered = httpx.get(f"{base}/api/desk/answered", timeout=30).json()
         ck("the console counts the answered questions", answered.get("count", 0) > 20,
            str(answered))
-
-        for what, args in (("seeding", ()), ("refreshing", ("--refresh-crew",))):
-            again = run_seed(data_dir, *args)
-            ck(f"{what} while the daemon runs fails with a plain message",
-               again.returncode == 2 and "stop it and run the seed again" in again.stderr
-               and "Traceback" not in again.stdout + again.stderr,
-               f"{again.returncode} {again.stderr[:600]}")
 
         sources = "".join(open(f, encoding="utf-8").read() for f in glob.glob(
             os.path.join(ROOT, "tares", "**", "*.py"), recursive=True))

@@ -2,12 +2,11 @@
 arrives, and the readers read them (TR-1505).
 
 `FactoryStore.person_turns`, `Store.said_lately`, `Store.last_said` and `Store.files_touched` used to
-scan the events table on every call. They now read `session_turns`, `session_said` and
-`session_files`, which `session_ingest.record` writes as each line is stored and `fill_turns` writes
-for the lines a first start has not seen.
+scan the stored lines on every call. They now read `session_turns`, `session_said` and
+`session_files`, which `session_ingest.record_first` writes as each line is stored.
 
-The old readers are copied below as the reference. The same lines go through `Store.append`, and the
-new readers must return what the reference returns from the events: every filter of a person's turn,
+The old readers are copied below as the reference, over the lines the test sent. The same lines go
+through `Store.append`, and the new readers must return what the reference returns: every filter of a person's turn,
 the person label, the last three things said, the files in the order they were last touched.
 
 Plain:                python tests/test_session_turns.py
@@ -26,23 +25,20 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from alembic import command  # noqa: E402
-from sqlalchemy import delete, func, inspect, insert, select, text  # noqa: E402
+from sqlalchemy import func, inspect, select, text  # noqa: E402
 
 from tares import session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import (metadata, session_commands,  # noqa: E402
-                                        session_files, session_ingest_marks, session_said,
-                                        session_turns, sessions)
+                                        session_files, session_said, session_turns, sessions)
 from tares.store import Store  # noqa: E402
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _old_cell import append_duckdb_first  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
 SRC = "claude_code"
-HEAD = "0026_drop_catalog_sources"
+HEAD = "0027_drop_move_bookkeeping"
 
 
 def ck(name, ok, detail=""):
@@ -117,38 +113,54 @@ def resumed(lines, new):
     return out
 
 
-# ── the old readers, copied from before TR-1505, as the reference ────────────────────────────
+# ── the old readers, from before TR-1505, as the reference, over the lines the test sent ─────
+def _jx(obj, *path):
+    """SQL's json_extract_string for the values the old filters read: a JSON true or false as
+    'true' or 'false', a string as itself, a number as its text, a missing key or null as None."""
+    v = obj
+    for k in path:
+        if not isinstance(v, dict) or k not in v:
+            return None
+        v = v[k]
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        return v
+    return json.dumps(v)
+
+
+def _sent(store, source, session=None, etype=None):
+    """The lines sent, newest first: (session, time, type, text, payload, labels)."""
+    rows = [(e.key_value, e.event_time, e.event_type, e.text, e.payload if isinstance(e.payload, dict) else {},
+             e.labels or {}) for e in store.sent if e.source == source
+            and (session is None or e.key_value == session) and (etype is None or e.event_type == etype)]
+    return sorted(rows, key=lambda r: r[1], reverse=True)
+
+
 def ref_person_turns(store, source, sessions_, since, person=None):
-    q = ("SELECT key_value, event_time, text FROM events WHERE source = ? AND "
-         "event_type = 'user' AND event_time >= ? AND "
-         "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
-    q += (" AND coalesce(json_extract_string(labels, '$.meta'), 'false') <> 'true'"
-          " AND coalesce(json_extract_string(payload, '$.isMeta'), 'false') <> 'true'"
-          " AND coalesce(json_extract_string(payload, '$.isCompactSummary'), 'false') <> 'true'"
-          " AND coalesce(json_extract_string(payload, '$.origin.kind'), 'human') = 'human'")
-    vals = [source, since]
-    if person:
-        who = "json_extract_string(labels, '$.tares_person')"
-        q += f" AND ({who} = ?" + (f" OR {who} IS NULL" if person == "local" else "") + ")"
-        vals.append(person)
-    if sessions_ is not None:
-        if not sessions_:
-            return []
-        q += f" AND key_value IN ({', '.join('?' for _ in sessions_)})"
-        vals += sessions_
-    with store._lock:
-        rows = store.con.execute(q + " ORDER BY event_time DESC LIMIT 2000", vals).fetchall()
-    return [{"session": r[0], "at": r[1], "text": r[2] or ""} for r in rows]
+    if sessions_ is not None and not sessions_:
+        return []
+    out = []
+    for sid, t, _typ, text_, pay, lab in _sent(store, source, etype="user"):
+        if t < since or (sessions_ is not None and sid not in sessions_):
+            continue
+        if ((_jx(lab, "sidechain") or "false") == "true" or (_jx(lab, "meta") or "false") == "true"
+                or (_jx(pay, "isMeta") or "false") == "true"
+                or (_jx(pay, "isCompactSummary") or "false") == "true"
+                or (_jx(pay, "origin", "kind") or "human") != "human"):
+            continue
+        who = _jx(lab, "tares_person")
+        if person and not (who == person or (person == "local" and who is None)):
+            continue
+        out.append({"session": sid, "at": t, "text": text_ or ""})
+    return out[:2000]
 
 
 def ref_said_lately(store, source, session, n=3):
-    with store._lock:
-        rows = store.con.execute(
-            "SELECT text, event_time FROM events WHERE source = ? AND key_value = ? AND "
-            "event_type = 'assistant' ORDER BY event_time DESC LIMIT 60",
-            [source, session]).fetchall()
     out = []
-    for t, a in rows:
+    for _sid, a, _typ, t, _p, _l in _sent(store, source, session, "assistant")[:60]:
         t = (t or "").strip()
         if t and not t.startswith("→"):
             out.append({"text": t, "at": a})
@@ -158,16 +170,8 @@ def ref_said_lately(store, source, session, n=3):
 
 
 def ref_files_touched(store, source, session, limit=20):
-    with store._lock:
-        rows = store.con.execute(
-            "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = "
-            "'tool_use' ORDER BY event_time DESC LIMIT 400", [source, session]).fetchall()
     seen = []
-    for (pj,) in rows:
-        try:
-            o = json.loads(pj) if pj else {}
-        except (TypeError, ValueError):
-            continue
+    for _sid, _t, _typ, _text, o, _l in _sent(store, source, session, "tool_use")[:400]:
         msg = o.get("message") if isinstance(o.get("message"), dict) else {}
         for b in msg.get("content") or []:
             if not isinstance(b, dict) or b.get("type") != "tool_use":
@@ -184,11 +188,7 @@ def ref_files_touched(store, source, session, limit=20):
 
 
 def ref_last_said(store, source, session):
-    with store._lock:
-        rows = store.con.execute(
-            "SELECT text FROM events WHERE source = ? AND key_value = ? AND event_type = "
-            "'assistant' ORDER BY event_time DESC LIMIT 20", [source, session]).fetchall()
-    for (t,) in rows:
+    for _sid, _a, _typ, t, _p, _l in _sent(store, source, session, "assistant")[:20]:
         t = (t or "").strip()
         if t and not t.startswith("→"):
             return t
@@ -271,11 +271,16 @@ def batches():
                 line("sO", "user", "other source", {"uuid": "o1"}, source="other")]]
 
 
-def open_store(d, record=True):
-    """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: the old
-    reader this suite compares with reads DuckDB (tests/_old_cell.py)."""
+def open_store(d):
+    """A store that keeps the lines it was sent in `s.sent`, for the reference readers."""
     s = Store(os.path.join(d, "t"))
-    s.append = lambda envs: append_duckdb_first(s, envs, record=record)
+    s.sent = []
+    real = s.append
+
+    def append(envs):
+        real(envs)
+        s.sent.extend(envs)
+    s.append = append
     return s
 
 
@@ -460,23 +465,6 @@ def main():
     ck("the said rows are at most three a session", all(
         n <= 3 for n in [len([r for r in dump(s)[1] if r[0] == sid]) for sid in {r[0] for r in dump(s)[1]}]))
 
-    print("== the readers do not read events ==")
-    real = s.con
-
-    class Boom:
-        def __getattr__(self, n):
-            raise AssertionError("the readers touched DuckDB")
-    s.con = Boom()
-    try:
-        ok = (s.person_turns(SRC, None, at(0))
-              and s.said_lately(SRC, "sA") and s.last_said(SRC, "sA") and s.files_touched(SRC, "sF"))
-    except AssertionError as e:
-        ok = False
-        print("   ", e)
-    finally:
-        s.con = real
-    ck("all four answer without a DuckDB query", bool(ok))
-
     print("== a batch written twice ==")
     before = dump(s)
     for b in batches():
@@ -527,66 +515,11 @@ def main():
             session_commands.c.tool_use_id == "bx")).scalar()
     ck("the session's count and its command are kept, the turn is not written",
        (n_x, f_x) == (2, 1) and s.person_turns(SRC, ["sX"], at(0)) == [], (n_x, f_x))
-    session_ingest.fill_turns(s)
-    ck("the next fill writes it", [r["text"] for r in s.person_turns(SRC, ["sX"], at(0))] == ["lost for now"])
+    with s.sessions_db.begin() as c:
+        done = c.execute(select(sessions.c.lines_complete).where(sessions.c.session == "sX")).scalar()
+    ck("and the session says its lines are not all kept", done is False, done)
 
     s.close()
-
-    print("== the fill ==")
-    d2 = tempfile.mkdtemp()
-    s2 = open_store(d2)
-    real_record = session_ingest.record
-    session_ingest.record = lambda *a, **k: None         # the lines are stored and never written
-    try:
-        for b in batches():
-            s2.append(b)
-    finally:
-        session_ingest.record = real_record
-    ck("nothing was written as the lines arrived", dump(s2) == ([], [], []))
-    ck("so the readers show nothing", s2.person_turns(SRC, None, at(0)) == [] and s2.last_said(SRC, "sA") is None)
-    n = session_ingest.fill_turns(s2)
-    ck("a fill looks at every session with a user, assistant or editing line", n >= 12, n)
-    compare(s2, "filled")
-    ck("it set the watermark", session_ingest._turns_mark(s2) is not None)
-    got = dump(s2)
-    session_ingest.fill_turns(s2)
-    ck("a second fill changes nothing", dump(s2) == got)
-    with s2.sessions_db.begin() as c:
-        c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name == session_ingest.TURNS_MARK))
-    session_ingest.fill_turns(s2, chunk=1)
-    ck("a fill with a small chunk and no watermark changes nothing either", dump(s2) == got)
-    s3 = open_store(tempfile.mkdtemp())
-    for b in batches():
-        s3.append(b)
-    ck("the filled rows are the rows live ingest writes", dump(s3) == got)
-    s3.close()
-
-    print("== a later fill reads only what is new ==")
-    real_record = session_ingest.record
-    session_ingest.record = lambda *a, **k: None
-    try:
-        s2.append([user("sNew", "a later turn", labels=ALICE), said("sA", "said after the fill"),
-                   edit("sF", "/r/late.py")])
-    finally:
-        session_ingest.record = real_record
-    ck("not there before the fill", s2.person_turns(SRC, ["sNew"], at(0)) == [])
-    session_ingest.fill_turns(s2)
-    ck("there after it, and equal to the reference", s2.person_turns(SRC, ["sNew"], at(0)) == ref_person_turns(
-        s2, SRC, ["sNew"], at(0)) and s2.last_said(SRC, "sA") == "said after the fill"
-       and s2.files_touched(SRC, "sF")[0] == "/r/late.py"
-       and s2.files_touched(SRC, "sF") == ref_files_touched(s2, SRC, "sF"))
-    compare(s2, "after a later fill")
-
-    print("== a fill over rows live ingest already wrote ==")
-    s2.append([user("sLive", "live turn", uid="live-1", labels=ALICE), said("sLive", "live words", uid="lw-1"),
-               edit("sLive", "/r/live.py")])
-    before = dump(s2)
-    session_ingest.fill_turns(s2)
-    with s2.sessions_db.begin() as c:
-        c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name == session_ingest.TURNS_MARK))
-    session_ingest.fill_turns(s2)
-    ck("a fill after record changes nothing", dump(s2) == before)
-    s2.close()
 
     print("== the said rows are cut in the transaction that adds a newer one ==")
     s4 = open_store(tempfile.mkdtemp())

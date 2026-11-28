@@ -1,11 +1,10 @@
 """People on the cell (TR-618): a list of people, keys that belong to one, and a credential that
 names the person calling. Root token = the system, no person; a key = its person (an unbound key is
-`local` while `local` is alone on the cell); auth off = `local`. Also the upgrade of a database that
-has keys but no people. Everything that needs a second person is in ee/tests/test_people_team.py.
+`local` while `local` is alone on the cell); auth off = `local`. Everything that needs a second
+person is in ee/tests/test_people_team.py.
 """
 import asyncio, os, subprocess, sys, tempfile
 import shutil
-import duckdb
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -111,26 +110,6 @@ async def auth_off():
         proc.wait(timeout=10)
 
 
-def upgrade():
-    """A database from before people: its keys survive, `local` is made, person_id is added."""
-    from tares.store import Store
-    db = _db("people_old")
-    shutil.rmtree(db, ignore_errors=True)
-    con = duckdb.connect(db)
-    con.execute("CREATE TABLE api_keys (id TEXT PRIMARY KEY, name TEXT, prefix TEXT, hash TEXT, "
-                "scopes JSON, created_at TIMESTAMPTZ, last_used_at TIMESTAMPTZ, revoked_at TIMESTAMPTZ)")
-    con.execute("INSERT INTO api_keys VALUES ('k1', 'legacy', 'nvf_k1', 'h', '[\"read\"]', now(), NULL, NULL)")
-    con.close()
-    s = Store(db)
-    ck("upgrade: `local` is made", [p["id"] for p in s.list_people()] == ["local"])
-    k = s.get_api_key("k1")
-    ck("upgrade: the old key is kept, bound to nobody", k and k["person_id"] is None, str(k))
-    s.close()
-    s = Store(db)
-    ck("upgrade: reopening adds no second `local`", len(s.list_people()) == 1)
-    s.close()
-
-
 def threads():
     """Several threads create one person at once (the store, no HTTP): one row, no crash."""
     import threading
@@ -165,7 +144,6 @@ def threads():
 
 asyncio.run(auth_one_person())
 asyncio.run(auth_off())
-upgrade()
 threads()
 print(f"\n{P} passed, {F} failed")
 raise SystemExit(1 if F else 0)

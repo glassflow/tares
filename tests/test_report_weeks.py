@@ -683,7 +683,7 @@ def background():
     ck("a first build says so", "report weeks built (1 rows)" in said.getvalue(), said.getvalue())
 
 
-HEAD = "0026_drop_catalog_sources"  # the newest session store revision: an upgrade ends there
+HEAD = "0027_drop_move_bookkeeping"  # the newest session store revision: an upgrade ends there
 
 
 def migration():

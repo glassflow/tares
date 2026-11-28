@@ -78,8 +78,6 @@ class ClaudeUsageStore:
             touched = {p["b_session"] for p in priced}
             touched.update(r[0] for r in conn.execute(
                 select(u.c.session).where(u.c.model == SYNTHETIC).distinct()))
-            if not touched:
-                return
             covered = hourly.lock_covered(self, conn, touched)
             conn.execute(u.delete().where(u.c.model == SYNTHETIC))
             if priced:

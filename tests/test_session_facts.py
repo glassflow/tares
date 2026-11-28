@@ -1,13 +1,14 @@
 """The factory's session facts are written when a line arrives, and the readers read them (TR-1477).
 
-`protocol_messages` and `recorded_commands` used to parse the events table on every read. They now
-read `session_messages` and `session_commands`, which `session_ingest.record` writes as each line is
-stored and `fill_facts` writes for the lines a first start has not seen.
+`protocol_messages` and `recorded_commands` used to parse the stored lines on every read. They now
+read `session_messages` and `session_commands`, which `session_ingest.record_first` writes as each
+line is stored.
 
-The old readers are copied below as the reference. The same lines go through `Store.append`, and the
-new readers must return what the reference returns from the events: a result that arrives in a later
-batch (or before its call), a call with no result, a resumed session that repeats lines, a request
-copy (`api-request`), a long output, a long message, a tool named `mcp__x__SendMessage`.
+The old readers are copied below as the reference, over the lines the test sent. The same lines go
+through `Store.append`, and the new readers must return what the reference returns: a result that
+arrives in a later batch, a call with no result, a resumed session that repeats lines, a request
+copy (`api-request`), a long output, a long message, a tool named `mcp__x__SendMessage`. A result
+that arrives before its call stays unpaired: nothing reads the lines again to pair it (TR-1815).
 
 Plain:                python tests/test_session_facts.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -24,17 +25,14 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from alembic import command  # noqa: E402
-from sqlalchemy import delete, func, inspect, select, text  # noqa: E402
+from sqlalchemy import func, inspect, select, text  # noqa: E402
 
 from tares import session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import (metadata, session_commands,  # noqa: E402
-                                        session_ingest_marks, session_messages,
-                                        sessions)
+                                        session_messages, sessions)
 from tares.store import Store  # noqa: E402
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _old_cell import append_duckdb_first  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
@@ -115,23 +113,30 @@ RESUMED = [bash("sB", 1, "b1", "pytest -q"), send("sB", 2, "m1", "orch", "[TF:RE
 
 
 def open_store(d):
-    """A cell that writes its lines to DuckDB first, as a platform cell did before Tares 2.0: the old
-    readers this suite compares with read DuckDB (tests/_old_cell.py)."""
+    """A store that keeps the lines it was sent in `s.sent`, for the reference readers."""
     s = Store(os.path.join(d, "t"))
-    s.append = lambda envs: append_duckdb_first(s, envs)
+    s.sent = []
+    real = s.append
+
+    def append(envs):
+        real(envs)
+        s.sent.extend(envs)
+    s.append = append
     s.set_session_station("sA", "builder-1", "builder", "", "p1", at(0))
     s.set_session_station("sB", "builder-2", "builder", "", "p1", at(0))
     return s
 
 
 # ── the old readers, copied from before TR-1477, as the reference ─────────────────────────────
+def _lines(store, source):
+    """(time, type, text, payload as JSON text, session) of the lines sent, oldest first."""
+    return sorted(((e.event_time, e.event_type, e.text or "", json.dumps(e.payload), e.key_value)
+                   for e in store.sent if e.source == source), key=lambda r: r[0])
+
+
 def ref_protocol_messages(store, source, limit=3000):
-    with store._lock:
-        rows = store.con.execute(
-            "SELECT e.key_value, e.event_time, e.payload FROM events e "
-            "WHERE e.source = ? AND e.event_type = 'tool_use' AND e.text LIKE '%SendMessage%' "
-            "AND CAST(e.payload AS VARCHAR) LIKE '%[TF:%' "
-            "ORDER BY e.event_time DESC LIMIT ?", [source, limit]).fetchall()
+    rows = [(sid, t, pj) for t, typ, text_, pj, sid in _lines(store, source)
+            if typ == "tool_use" and "SendMessage" in text_ and "[TF:" in pj][-limit:][::-1]
     stations = store._station_of({r[0] for r in rows})
     out, seen = [], set()
     for sid, t, pj in reversed(rows):
@@ -164,20 +169,13 @@ def ref_protocol_messages(store, source, limit=3000):
 
 
 def ref_recorded_commands(store, source, sessions, limit=6000):
-    marks = ", ".join("?" for _ in sessions)
-    with store._lock:
-        uses = store.con.execute(
-            f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
-            f"AND key_value IN ({marks}) AND event_type = 'tool_use' "
-            "AND text LIKE '%Bash(%' ORDER BY event_time DESC LIMIT ?",
-            [source, *sessions, limit // 2]).fetchall()
-        oldest = min((u[0] for u in uses), default=None)
-        results = store.con.execute(
-            f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
-            f"AND key_value IN ({marks}) AND event_type = 'tool_result' AND event_time >= ? "
-            "ORDER BY event_time DESC LIMIT ?",
-            [source, *sessions, oldest, limit * 2]).fetchall() if uses else []
-        rows = uses + results
+    mine = [r for r in _lines(store, source) if r[4] in sessions]
+    uses = [(t, typ, pj, sid) for t, typ, text_, pj, sid in mine
+            if typ == "tool_use" and "Bash(" in text_][-(limit // 2):]
+    oldest = min((u[0] for u in uses), default=None)
+    results = [(t, typ, pj, sid) for t, typ, text_, pj, sid in mine
+               if typ == "tool_result" and oldest is not None and t >= oldest][-(limit * 2):]
+    rows = uses + results
     uses, results = {}, {}
     for t, typ, pj, sid in sorted(rows, key=lambda r: r[0]):
         o = json.loads(pj) if isinstance(pj, str) else (pj or {})
@@ -206,6 +204,12 @@ def dump(s):
         m = c.execute(select(session_messages).order_by(session_messages.c.tool_use_id)).fetchall()
         k = c.execute(select(session_commands).order_by(session_commands.c.tool_use_id)).fetchall()
     return [tuple(r) for r in m], [tuple(r) for r in k]
+
+
+def paired_live(rows):
+    """The reference's commands as ingest pairs them: a result that came before its call is not
+    paired (the reference pairs by id, whatever the order)."""
+    return [{**r, "output": "", "is_error": False} if r["command"] == "make build" else r for r in rows]
 
 
 def strip_session(rows):
@@ -265,7 +269,7 @@ def revision():
             kept = c.execute(select(session_commands.c.command).where(
                 session_commands.c.tool_use_id == "kept")).scalar()
         ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0026_drop_catalog_sources"] and kept == "x", (v, kept))
+           v == ["0027_drop_move_bookkeeping"] and kept == "x", (v, kept))
         sdb.close()
     finally:
         if PG:
@@ -320,10 +324,6 @@ def codex():
     before = dump(s)
     s.append(conn.map_payload(cell.session_lines(starts + ends)))     # the recorder's post, sent again
     ck("the same items again add nothing and change nothing", dump(s) == before)
-    with s.sessions_db.begin() as c:
-        c.execute(delete(session_commands))
-    session_ingest.fill_facts(s)
-    ck("a fill from the stored lines brings back the same rows", dump(s) == before, (dump(s)[1], before[1]))
     claude = [c for c in s.recorded_commands(SRC, ["cx1"]) if "outcome" not in c]
     ck("every Codex row says how it ended", claude == [])
     s.append([bash("sA", 1, "k1", "ls"), result("sA", 2, "k1", "a b")])
@@ -354,15 +354,16 @@ def main():
        [c for c in live_c if c["command"] != "make build"]
        == [c for c in ref_c if c["command"] != "make build"])
     ck("live, the messages equal the old reader's", s.protocol_messages(SRC) == ref_m)
-    session_ingest.fill_facts(s)           # the fill pairs the result that came first
     got_m, got_c = s.protocol_messages(SRC), s.recorded_commands(SRC, ["sA"])
+    ref_c = paired_live(ref_c)
     ck("the reference sees the seeded calls", len(ref_m) == 2 and len(ref_c) == 5,
        (len(ref_m), len(ref_c)))
     ck("protocol_messages equals the old reader", got_m == ref_m, (got_m, ref_m))
     ck("recorded_commands equals the old reader", got_c == ref_c, (got_c, ref_c))
     by = {c["command"]: c for c in got_c}
     ck("a result that came in a later batch is paired", by["pytest -q"]["output"] == "3 passed\nok")
-    ck("a result that came before its call is paired by the fill", by["make build"]["output"] == "ran after its call arrives")
+    ck("a result that came before its call stays unpaired: nothing reads the lines again",
+       by["make build"]["output"] == "" and by["make build"]["is_error"] is False)
     ck("a call with no result has no output and no failure",
        by["echo no result"]["output"] == "" and by["echo no result"]["is_error"] is False)
     ck("a long output keeps its last 20000 characters and the failure",
@@ -376,57 +377,26 @@ def main():
     ck("a request copy's Bash call is listed, as before", "echo in a copy" in by)
     ck("another source is read apart", s.protocol_messages("other") == [] and s.recorded_commands("other", ["sA"]) == [])
 
-    print("== the readers do not read events ==")
-    real = s.con
-
-    class Boom:
-        def __getattr__(self, n):
-            raise AssertionError("the readers touched DuckDB")
-    s.con = Boom()
-    try:
-        ok = s.protocol_messages(SRC) == ref_m and s.recorded_commands(SRC, ["sA"]) == ref_c
-    except AssertionError as e:
-        ok = False
-        print("   ", e)
-    finally:
-        s.con = real
-    ck("both answer without a DuckDB query", ok)
     ck("the two memos are gone", not hasattr(s, "_proto_cache") and not hasattr(s, "_coord_cache"))
 
-    print("== rows by tool_use id: a batch written twice adds nothing ==")
+    print("== rows by tool_use id: a batch written twice adds no row ==")
     before = dump(s)
     s.append(BATCH1)
     s.append(BATCH2)
-    ck("both tables are as they were", dump(s) == before)
-    ck("the readers still equal the reference", s.protocol_messages(SRC) == ref_m
-       and s.recorded_commands(SRC, ["sA"]) == ref_c)
+    ck("both tables hold the same rows", [len(t) for t in dump(s)] == [len(t) for t in before]
+       and [r[0] for r in dump(s)[1]] == [r[0] for r in before[1]])
+    ref_c = ref_recorded_commands(s, SRC, ["sA"])
+    ck("the readers equal the reference, the result sent again after its call now paired",
+       s.protocol_messages(SRC) == ref_m and s.recorded_commands(SRC, ["sA"]) == ref_c
+       and {c["command"]: c for c in ref_c}["make build"]["output"] == "ran after its call arrives")
 
-    print("== the fill ==")
-    with s.sessions_db.begin() as c:
-        c.execute(delete(session_messages))
-        c.execute(delete(session_commands))
-    ck("emptied", dump(s) == ([], []))
-    ck("so the readers show nothing", s.protocol_messages(SRC) == [] and s.recorded_commands(SRC, ["sA"]) == [])
-    n = session_ingest.fill_facts(s)
-    ck("a fill looks at the sessions that hold tool lines", n == 1, n)   # sA; the other source is not a claude_code source
-    ck("it brings back the same rows", dump(s) == before)
-    ck("and the readers return the reference again", s.protocol_messages(SRC) == ref_m
-       and s.recorded_commands(SRC, ["sA"]) == ref_c)
-    ck("it set the watermark", session_ingest._facts_mark(s) is not None)
-    session_ingest.fill_facts(s)
-    ck("a second fill changes nothing", dump(s) == before)
-    with s.sessions_db.begin() as c:
-        c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name == session_ingest.FACTS_MARK))
-    session_ingest.fill_facts(s, chunk=1)
-    ck("a fill with a small chunk and no watermark changes nothing either", dump(s) == before)
-
-    print("== a fill over rows live ingest already wrote ==")
+    print("== a call sent again over a row that has its result ==")
     live = [bash("sC", 20, "c1", "live one")]
-    s.append(live)                                  # record() writes the call
-    with s.sessions_db.begin() as c:                # a result row from a fill that ran in between
+    s.append(live)                                  # the call's row
+    with s.sessions_db.begin() as c:                # its result, as a result line sets it
         c.execute(session_commands.update().where(session_commands.c.tool_use_id == "c1").values(
             exit_code=1, output_tail="kept", result_at=at(21)))
-    session_ingest.fill_facts(s)                    # the fill sees the call (no result line): it must keep the result
+    s.append(live)                                  # the call again: it must keep the result
     with s.sessions_db.begin() as c:
         r = c.execute(select(session_commands.c.command, session_commands.c.exit_code,
                              session_commands.c.output_tail).where(session_commands.c.tool_use_id == "c1")).one()
@@ -478,8 +448,9 @@ def main():
             session_commands.c.tool_use_id == "f1")).scalar()
     ck("the session's count is kept and the fact row is not written", (before_n, n_f, f_rows) == (None, 1, 0),
        (before_n, n_f, f_rows))
-    session_ingest.fill_facts(s)
-    ck("the next fill writes it", [c["command"] for c in s.recorded_commands(SRC, ["sF"])] == ["echo f"])
+    with s.sessions_db.begin() as c:
+        done = c.execute(select(sessions.c.lines_complete).where(sessions.c.session == "sF")).scalar()
+    ck("and the session says its lines are not all kept", done is False, done)
 
     s.close()
 
@@ -489,8 +460,7 @@ def main():
     s2.append(BATCH1)
     s2.append(BATCH2)
     s2.append(RESUMED)
-    session_ingest.fill_facts(s2)           # a result that came before its call waits for the fill
-    ref_m, ref_c = ref_protocol_messages(s2, SRC), ref_recorded_commands(s2, SRC, ["sA", "sB"])
+    ref_m, ref_c = ref_protocol_messages(s2, SRC), paired_live(ref_recorded_commands(s2, SRC, ["sA", "sB"]))
     got_m, got_c = s2.protocol_messages(SRC), s2.recorded_commands(SRC, ["sA", "sB"])
     ck("each call is listed once", len(got_m) == 2 and len(got_c) == 5, (len(got_m), len(got_c)))
     ck("the messages equal the old reader's, apart from which copy's session names the call",
@@ -498,13 +468,6 @@ def main():
     ck("the commands equal the old reader's, apart from the same",
        strip_session(got_c) == strip_session(ref_c), (got_c, ref_c))
     ck("only sessions asked for are listed", {c["session"] for c in s2.recorded_commands(SRC, ["sB"])} <= {"sB"})
-    before2 = dump(s2)
-    with s2.sessions_db.begin() as c:
-        c.execute(delete(session_messages))
-        c.execute(delete(session_commands))
-    session_ingest.fill_facts(s2)
-    ck("a fill over the repeated lines gives the same rows", strip_session(s2.protocol_messages(SRC)) == strip_session(ref_m)
-       and len(dump(s2)[0]) == len(before2[0]) and len(dump(s2)[1]) == len(before2[1]))
     s2.close()
 
     print("== nulls and empties ==")

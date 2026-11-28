@@ -270,7 +270,7 @@ async def main():
            and d["context_at"] and d["context_asked_at"], d.get("context_detail"))
 
         print("== the replies, one row each, recorded as they came in ==")
-        store._claude_usage_fill()     # the start's pass, which prices; DuckDB holds none of the lines
+        store._claude_usage_reprice()     # the start's pass, which prices
         got_rows = {r["message"]: r for r in session_rows(store, "session_usage")}
         n = (len(got_rows), got_rows["m1"]["output_tokens"], got_rows["m3"]["project"],
              sum(r["cost_usd"] is not None for r in got_rows.values()), got_rows["m2"]["cost_usd"])
@@ -281,7 +281,7 @@ async def main():
         from datetime import datetime, timezone
         store.record_reply_usage("b1", "mx", datetime.now(timezone.utc), "claude-opus-5-6", None, None,
                                  {"input_tokens": 5, "output_tokens": 5})
-        store._claude_usage_fill()
+        store._claude_usage_reprice()
         unlisted = session_rows(store, "session_usage", su.c.message == "mx")[0]["cost_usd"]
         delete_rows(store, "session_usage", su.c.message == "mx")
         ck("a model version the table does not list stays unpriced through the fill", unlisted is None, unlisted)
@@ -290,7 +290,7 @@ async def main():
             store.record_reply_usage("b1", msg, datetime.now(timezone.utc), model, None, None,
                                      {"input_tokens": 1_000_000, "output_tokens": 0})
         set_cols(store, "session_usage", [su.c.message.in_(["md", "mr"])], cost_usd=None)
-        store._claude_usage_fill()
+        store._claude_usage_reprice()
         got = {r["message"]: r["cost_usd"] for r in session_rows(store, "session_usage",
                                                                   su.c.message.in_(["md", "mr"]))}
         delete_rows(store, "session_usage", su.c.message.in_(["md", "mr"]))

@@ -265,7 +265,7 @@ async def tares(shipped):
         ck("a session born in the table but not marked complete answers from the table (TR-1613)",
            r.json().get("lines_from") == "table", r.json().get("lines_from"))
         from tares import session_ingest
-        session_ingest.reconcile_sessions(store)
+        session_ingest.repair_table_sessions(store)
         r2 = await cx.get(f"/api/projects/{uid}/sessions/{SID}")
         ck("once the lines are complete the same session reads from the table, with the same text",
            r2.json().get("lines_from") == "table" and [x["text"] for x in r2.json()["lines"]] == texts,

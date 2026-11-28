@@ -176,7 +176,7 @@ async def main():
             r = await cx.get(f"/api/crew/{ST}/tool/t-log")
             ck("the tool answer says table too", r.json().get("lines_from") == "table", r.text[:200])
         from tares import session_ingest
-        session_ingest.reconcile_sessions(app.state.store)       # the lines are now complete in the table
+        session_ingest.repair_table_sessions(app.state.store)    # the lines are now complete in the table
         async with mk() as cx:
             t = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200})).json()
             ck("once complete, lines_from says table, and the conversation and the recent lines are the same",

@@ -20,10 +20,9 @@ FROZEN = "tares.session_store.migrations.frozen"
 LIVE = ("tares", "tares_ee")
 
 # (file under migrations/, the module it imports): why it may
-ALLOWED = {
-    ("versions/0012_core_settings.py", "tares.session_store.takeover"):
-        "0012 is older than the rule: TR-1700 froze revisions 0014 onward and left earlier ones alone",
-}
+# 0012 imported the live takeover until that module went with DuckDB (TR-1815): it calls the frozen
+# copy now, so nothing is allowed
+ALLOWED: dict = {}
 
 FAILS = []
 
