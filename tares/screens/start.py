@@ -2,7 +2,7 @@
 
 On the factory home each credential hides only its own checklist (the setting
 `start_hidden:<its name>`; one cell with no auth has one person, "console"). Any signed-in
-credential may do it, a read key too: it changes nothing but what the caller's own home shows (tares/daemon.py lets this path through as "any"). The answer is the caller's new start block.
+credential may do it, a read key too: it changes nothing but what the caller's own home shows (tares/guard.py lets this path through as "any"). The answer is the caller's new start block.
 """
 import asyncio
 

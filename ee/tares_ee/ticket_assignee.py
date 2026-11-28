@@ -8,7 +8,7 @@ ticket's `owner` column, which says where it lives (tares, linear or github), an
 
 Linear and GitHub name the assignee; the sync maps it to a person here. Tares tickets take an
 assignee from the ticket routes and write_ticket. Showing a stored assignee (`view`, `note`) is a
-read and stays in core, in `daemon.py` and `mcp_server.py`.
+read and stays in core, in `tares/routes/tickets.py` and `mcp_server.py`.
 """
 from __future__ import annotations
 

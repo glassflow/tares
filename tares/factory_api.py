@@ -1727,7 +1727,7 @@ def register(app, h: Deps) -> SimpleNamespace:
 
     def team_home(request: Request, now=None, stations=None) -> dict:
         """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
-        one person: see the team interface. It reads what this module holds; the route stays in daemon.py."""
+        one person: see the team interface. It reads what this module holds; the route is in tares/routes/home.py."""
         return team_mod.get().team_home(team_reader(), request, now or now_utc(), stations)
 
     def project_waiting(request: Request, uid: str, now=None) -> dict | None:
