@@ -150,6 +150,7 @@ CHALLENGE_TYPES = ("challenge_commit", "challenge_waived", "challenge_plan")
 SYNTHETIC = "<synthetic>"
 PR_EVENTS_DAYS = 30
 CHUNK = 2000
+DUCKDB_MEMORY = os.environ.get("MIGRATE_DUCKDB_MEMORY", "2GB")   # DuckDB's memory limit while it is read
 ARCHIVE_SAMPLE = 25
 FACT_TABLES = ("session_messages", "session_commands", "session_turns", "session_said", "session_files")
 # Checksums: (table, key columns in order, timestamp column)
@@ -289,6 +290,12 @@ class Cell:
             raise Refused(f"{duck_path} does not exist (a 1.61.0 cell keeps its events there)")
         self.duck = duckdb.connect(duck_path, read_only=True)
         self.duck.execute("SET TimeZone = 'UTC'")
+        # bounded, spilling into the work folder: the volume may be read-only, the pod small
+        self.duck.execute(f"SET memory_limit = '{DUCKDB_MEMORY}'")
+        self.duck.execute("SET threads = 2")
+        self.duck.execute("SET preserve_insertion_order = false")
+        os.makedirs(os.path.join(work, "duckdb-tmp"), exist_ok=True)
+        self.duck.execute(f"SET temp_directory = '{os.path.join(work, 'duckdb-tmp')}'")
         self.duck_tables = {r[0] for r in self.duck.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()")
             .fetchall()}
@@ -567,14 +574,59 @@ def inspect_cell(cell: Cell, args) -> Plan:
     return plan
 
 
+def schema_2() -> MetaData:
+    """The 2.0 tables as this checkout's revision makes them, in an in-memory SQLite."""
+    from alembic import command
+    from alembic.config import Config
+    engine = sa.create_engine("sqlite://")
+    cfg = Config()
+    cfg.set_main_option("script_location", str(MIGRATIONS).replace("%", "%%"))
+    with engine.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "head")
+    md = MetaData()
+    md.reflect(engine)
+    engine.dispose()
+    return md
+
+
+def column_notes(src_table, dst_table, rename: dict | None = None) -> tuple[str, list[str]]:
+    """What changes column by column, and the 2.0 NOT NULL columns with no source and no default
+    (a copy cannot fill them)."""
+    rename = rename or {}
+    have = {c.name for c in src_table.columns}
+    used = {rename.get(c.name, c.name) for c in dst_table.columns}
+    dropped = [c.name for c in src_table.columns if c.name not in used]
+    new, blocked = [], []
+    for c in dst_table.columns:
+        if rename.get(c.name, c.name) in have:
+            continue
+        if not c.nullable and c.server_default is None:
+            blocked.append(c.name)
+        else:
+            new.append(f"{c.name} ({'its default' if c.server_default is not None else 'NULL'})")
+    parts = []
+    if rename:
+        parts.append(", ".join(f"{v} becomes {k}" for k, v in rename.items()))
+    if dropped:
+        parts.append("columns dropped: " + ", ".join(dropped))
+    if new:
+        parts.append("new columns: " + ", ".join(new))
+    return "; ".join(parts), blocked
+
+
 def plan_tables(cell: Cell, plan: Plan, sources: dict, moves: dict, mk: dict, args) -> None:
     out_tables = TABLES_2
+    md2 = schema_2()
     drop_ids = {r[0] for r in non_factory_projects(cell)} if args.drop_non_factory else set()
     for name in out_tables:
         if name in RENAMED:
             src = RENAMED[name]
-            note = ("columns dropped: recipe, params, setup, last_error" if name == "projects" else
-                    "usecase_id becomes project")
+            note, blocked = column_notes(cell.t(src), md2.tables[name],
+                                         {"project": "usecase_id"} if name == "project_log" else None)
+            if blocked:
+                plan.refusals.append(f"{name}: the 2.0 columns {', '.join(blocked)} are NOT NULL with "
+                                     f"no source in {src} and no default")
             k = cell.count(src)
             if name == "projects" and drop_ids:
                 k -= len(drop_ids)
@@ -598,6 +650,10 @@ def plan_tables(cell: Cell, plan: Plan, sources: dict, moves: dict, mk: dict, ar
             plan.rows.append((name, "rebuild", "session_usage", cell.count(name),
                               "built again from session_usage (rows not copied)"))
         elif name in cell.tables:
+            cols, blocked = column_notes(cell.t(name), md2.tables[name])
+            if blocked:
+                plan.refusals.append(f"{name}: the 2.0 columns {', '.join(blocked)} are NOT NULL with "
+                                     f"no source in 1.61.0's {name} and no default")
             note = ""
             if name == "sessions":
                 srcs = Counter(r[1] for r in session_rows(cell))
@@ -610,6 +666,7 @@ def plan_tables(cell: Cell, plan: Plan, sources: dict, moves: dict, mk: dict, ar
                 note = "skills_shared is not set: the old skills are merged here"
             elif name in ("challenges", "session_usage"):
                 note = "plus what DuckDB holds and the table does not"
+            note = "; ".join(x for x in (note, cols) if x)
             plan.rows.append((name, "copy", name, cell.count(name), note))
         else:
             plan.rows.append((name, "new", "-", 0, "empty"))
@@ -856,20 +913,6 @@ class Copier:
             out[k] = v
         return out
 
-    def columns(self, src_table, dst_table) -> list[str]:
-        """The columns both have; a 2.0 NOT NULL column with no source and no default fails."""
-        have = {c.name for c in src_table.columns}
-        cols = []
-        for c in dst_table.columns:
-            if c.name in have:
-                cols.append(c.name)
-            elif not c.nullable and c.server_default is None and not c.primary_key:
-                raise Mismatch(f"{dst_table.name}: the 2.0 column {c.name} is NOT NULL and has no "
-                               f"source in {src_table.name} and no default")
-            elif not c.nullable and c.server_default is None:
-                raise Mismatch(f"{dst_table.name}: the key column {c.name} has no source in {src_table.name}")
-        return cols
-
     def insert(self, conn, table: str, rows: list[dict]) -> int:
         if not rows:
             return 0
@@ -1014,10 +1057,6 @@ class Copier:
             f"pr_events {n(self.expected['pr_events'])}")
 
     # ── sessions ──
-    def src(self, v):
-        """A session's source in 2.0: every one is claude_code."""
-        return SESSION_SOURCE
-
     def sessions(self) -> None:
         cell = self.cell
         moved = Counter()
@@ -1484,7 +1523,10 @@ def main(argv=None) -> int:
     data_dir = args.check or args.apply or args.verify
     if (args.apply or args.verify) and not args.to:
         ap.error("--apply and --verify need --to")
-    work = tempfile.mkdtemp(prefix="migrate-to-2-")
+    # the work folder (the copy of tares.sqlite, DuckDB's spill) goes beside a folder output, whose
+    # disk is the one the output needs anyway; else in the temp folder (TMPDIR)
+    near = os.path.dirname(os.path.abspath(args.to)) if args.to and not is_dsn(args.to) else None
+    work = tempfile.mkdtemp(prefix="migrate-to-2-", dir=near if near and os.path.isdir(near) else None)
     try:
         try:
             cell = Cell(data_dir, args.state_dsn, args.archive_url, work)
