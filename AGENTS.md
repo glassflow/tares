@@ -123,8 +123,10 @@ from `ui/src/pages`, whose inline styles predate the kit.
   it in embedded mode too.
 - **Before you push** a console change:
   `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
-  npm run test:time && npm run design-contract && npm run motion-contract && npm run build`,
-  and the gallery suite when you touched `components/edition`. `design-contract` runs through
+  npm run test:time && npm run design-contract && npm run motion-contract && npm run test:closure &&
+  npm run build`, and the gallery suite when you touched `components/edition`. `test:closure`
+  (`ui/tests/factory-closure.cjs`) walks the imports from `ui/src/main.tsx` and fails when the
+  console reaches a platform page (`ui/src/pages`, except `pages/dev`) or an AI SRE screen. `design-contract` runs through
   `ui/eslint-design-contract.config.mjs`. An exception goes in the register with a reason, never in
   an `eslint-disable` comment (inline config is off).
 - A change to one of these conventions changes this section in the same PR, and the check that
