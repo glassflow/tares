@@ -100,7 +100,7 @@ async def routes():
         ck("... and is refused the cell's area list, as before", r.status_code == 403, f"{r.status_code}")
         r = await cx.get("/api/people")
         ck("people still answer", r.status_code == 200, f"{r.status_code} {r.text[:100]}")
-        h = app.state.host
+        h = app.state.deps
         ck("area_owner answers None on this cell", h.area_owner("acme/web") is None)
         ck("the team has no areas", team_mod.get().areas(h.store) == [])
 

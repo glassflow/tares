@@ -143,15 +143,15 @@ def pdf_text(data: bytes) -> str:
     return text
 
 
-def register_routes(app, host) -> None:
-    store = host.store
+def register_routes(app, deps) -> None:
+    store = deps.store
 
     def need_brain():
         if not licence.ee_allowed() or not LoreClient.configured():
             raise HTTPException(status_code=404, detail="Not Found")   # as if never mounted
 
     def lore_fail(e: LoreError):
-        host.err(ValueError(str(e)), 502)
+        deps.err(ValueError(str(e)), 502)
 
     # -- people -----------------------------------------------------------------------------
 
@@ -170,11 +170,11 @@ def register_routes(app, host) -> None:
             found = [p for p in people if " ".join(str(p.get("name") or "").split()) == ref] \
                 or [p for p in people if " ".join(str(p.get("name") or "").split()).lower() == ref.lower()]
         if not found:
-            host.err(ValueError(f"decided_by: nobody on this cell is {ref!r}. Name a person by their name, email or id."))
+            deps.err(ValueError(f"decided_by: nobody on this cell is {ref!r}. Name a person by their name, email or id."))
         if len(found) > 1:
-            host.err(ValueError(f"decided_by: more than one person is called {ref!r}. Use their email or id."))
+            deps.err(ValueError(f"decided_by: more than one person is called {ref!r}. Use their email or id."))
         if not display_name(found[0]):
-            host.err(ValueError("decided_by: that person has no name on this cell yet."))
+            deps.err(ValueError("decided_by: that person has no name on this cell yet."))
         return found[0]
 
     # -- walking lore -----------------------------------------------------------------------
@@ -213,10 +213,10 @@ def register_routes(app, host) -> None:
         they are an admin (with auth off, everyone is) and whether the credential may write at all
         (the guard refuses DELETE for a read-only key before this route runs; auth off sets no
         scopes and lets everyone through)."""
-        person = host.current_person(request)
+        person = deps.current_person(request)
         scopes = getattr(request.state, "scopes", None)
         writes = scopes is None or "ingest" in scopes or "admin" in scopes
-        return (person["id"] if person else None), bool(host.is_admin(request)), writes
+        return (person["id"] if person else None), bool(deps.is_admin(request)), writes
 
     def row_of(d: dict, viewer: tuple[str | None, bool, bool] = (None, False, False), pnames: dict[str, str] | None = None) -> dict:
         m = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
@@ -256,48 +256,48 @@ def register_routes(app, host) -> None:
         need_brain()
         extra = sorted(set(body) - {"title", "text", "file", "decided_by"})
         if extra:
-            host.err(ValueError(f"unknown field {extra[0]!r}: send title, text or file, and decided_by"))
+            deps.err(ValueError(f"unknown field {extra[0]!r}: send title, text or file, and decided_by"))
         title = body.get("title")
         if not isinstance(title, str) or not title.strip():
-            host.err(ValueError("title: give the decision a title."))
+            deps.err(ValueError("title: give the decision a title."))
         title = title.replace("\x00", "").strip()
         if not title:
-            host.err(ValueError("title: give the decision a title."))
+            deps.err(ValueError("title: give the decision a title."))
         if len(title) > TITLE_MAX:
-            host.err(ValueError(f"title: at most {TITLE_MAX} characters (this one has {len(title)})."))
+            deps.err(ValueError(f"title: at most {TITLE_MAX} characters (this one has {len(title)})."))
         text, file = body.get("text"), body.get("file")
         if text is not None and not isinstance(text, str):
-            host.err(ValueError("text: must be text."))
+            deps.err(ValueError("text: must be text."))
         if file is not None and not isinstance(file, (dict, str)):
-            host.err(ValueError('file: send {"name": "adr.pdf", "content_base64": "..."}.'))
+            deps.err(ValueError('file: send {"name": "adr.pdf", "content_base64": "..."}.'))
         has_text = bool(text and text.strip())
         has_file = bool(file) and not (isinstance(file, str) and not file.strip())
         if has_text and has_file:
-            host.err(ValueError("Send the text or a file, not both."))
+            deps.err(ValueError("Send the text or a file, not both."))
         if not has_text and not has_file:
-            host.err(ValueError("Paste the text of the decision or upload a file."))
+            deps.err(ValueError("Paste the text of the decision or upload a file."))
         said = body.get("decided_by")
         if said is not None and not isinstance(said, str):
-            host.err(ValueError("decided_by: must be a person's name, email or id."))
-        adder = host.current_person(request)
+            deps.err(ValueError("decided_by: must be a person's name, email or id."))
+        adder = deps.current_person(request)
         if said and said.strip():
             decider = resolve_person(said)
         elif adder is not None and store.get_person(adder["id"]) is not None:
             decider = resolve_person(adder["id"])
         else:
-            host.err(ValueError("decided_by: say who decided, by name, email or id."))
+            deps.err(ValueError("decided_by: say who decided, by name, email or id."))
         if has_file:
             text = await file_text(file)
         else:
             text = text.replace("\x00", "").strip()
         if not text:
-            host.err(ValueError("text: the text has nothing in it."))
+            deps.err(ValueError("text: the text has nothing in it."))
         size = len(text.encode("utf-8"))
         if size > TEXT_MAX:
-            host.err(ValueError(f"The text of a decision is at most 1 MB and this one is {size / 1048576:.1f} MB. "
+            deps.err(ValueError(f"The text of a decision is at most 1 MB and this one is {size / 1048576:.1f} MB. "
                                 "Paste or upload the part that records the decision."), 413)
         added_by = _clip(" ".join(str(adder.get("name") or "").split())) if adder else ""
-        added_by = added_by or _clip(" ".join(host.by(request).split())) or "Cell admin"
+        added_by = added_by or _clip(" ".join(deps.by(request).split())) or "Cell admin"
         now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         ext = PREFIX + str(uuid.uuid4())
         meta: dict[str, Any] = {"where": "by_hand", "decided_by": [display_name(decider)], "decided_at": now,
@@ -316,42 +316,42 @@ def register_routes(app, host) -> None:
     async def file_text(file) -> str:
         """The text of an uploaded file, or a 400 (413 when it is too big, 501 for a PDF without pypdf)."""
         if not isinstance(file, dict):
-            host.err(ValueError('file: send {"name": "adr.pdf", "content_base64": "..."}.'))
+            deps.err(ValueError('file: send {"name": "adr.pdf", "content_base64": "..."}.'))
         name, b64 = file.get("name"), file.get("content_base64")
         if not isinstance(name, str) or not name.strip():
-            host.err(ValueError("file: name the file, like adr.md or adr.pdf."))
+            deps.err(ValueError("file: name the file, like adr.md or adr.pdf."))
         if not isinstance(b64, str) or not b64.strip():
-            host.err(ValueError("file: content_base64 is empty."))
+            deps.err(ValueError("file: content_base64 is empty."))
         name = name.strip().lower()
         pdf = name.endswith(".pdf")
         if not pdf and not name.endswith(TEXT_FILES):
-            host.err(ValueError("file: upload a Markdown (.md), text (.txt) or PDF (.pdf) file."))
+            deps.err(ValueError("file: upload a Markdown (.md), text (.txt) or PDF (.pdf) file."))
         b64 = "".join(b64.split())
         if len(b64) > (MAX_BYTES // 3 + 1) * 4:   # too big even before decoding: do not decode it
-            host.err(ValueError("file: at most 5 MB."), 413)
+            deps.err(ValueError("file: at most 5 MB."), 413)
         try:
             data = base64.b64decode(b64, validate=True)
         except (binascii.Error, ValueError):
-            host.err(ValueError("file: content_base64 is not valid base64."))
+            deps.err(ValueError("file: content_base64 is not valid base64."))
         if len(data) > MAX_BYTES:
-            host.err(ValueError("file: at most 5 MB."), 413)
+            deps.err(ValueError("file: at most 5 MB."), 413)
         if not data:
-            host.err(ValueError("file: the file is empty."))
+            deps.err(ValueError("file: the file is empty."))
         if pdf:
             try:
                 text = await asyncio.to_thread(pdf_text, data)
             except LookupError:
-                host.err(RuntimeError("Reading PDF files is not set up on this cell (the pypdf package is missing). Paste the text instead."), 501)
+                deps.err(RuntimeError("Reading PDF files is not set up on this cell (the pypdf package is missing). Paste the text instead."), 501)
             except ValueError as e:
-                host.err(e)
+                deps.err(e)
             return text
         try:
             text = data.decode("utf-8-sig")
         except UnicodeDecodeError:
-            host.err(ValueError("file: a text file must be UTF-8."))
+            deps.err(ValueError("file: a text file must be UTF-8."))
         text = text.replace("\x00", "").strip()
         if not text:
-            host.err(ValueError("file: the file has no text in it."))
+            deps.err(ValueError("file: the file has no text in it."))
         return text
 
     # -- delete -----------------------------------------------------------------------------
@@ -362,9 +362,9 @@ def register_routes(app, host) -> None:
         that starts with `hand:` (any other is a 400 and nothing is deleted)."""
         need_brain()
         if not decision_id.startswith(PREFIX):
-            host.err(ValueError("Only a decision added by hand can be deleted here. Decisions from a repo or a project are changed where they live."))
+            deps.err(ValueError("Only a decision added by hand can be deleted here. Decisions from a repo or a project are changed where they live."))
         if not _ID.fullmatch(decision_id):
-            host.err(KeyError("There is no such decision."), 404)
+            deps.err(KeyError("There is no such decision."), 404)
         try:
             async with repos_mod.lore_client() as lore:
                 found = None
@@ -373,16 +373,16 @@ def register_routes(app, host) -> None:
                         found = d
                         break
                 if found is None:
-                    host.err(KeyError("There is no such decision."), 404)
-                person = host.current_person(request)
+                    deps.err(KeyError("There is no such decision."), 404)
+                person = deps.current_person(request)
                 added_by = (found.get("metadata") or {}).get("added_by_id")
                 mine = bool(person and isinstance(added_by, str) and added_by == person["id"])
-                if not (mine or host.is_admin(request)):
-                    host.err(PermissionError("Only the person who added this decision, or an admin, can delete it."), 403)
+                if not (mine or deps.is_admin(request)):
+                    deps.err(PermissionError("Only the person who added this decision, or an admin, can delete it."), 403)
                 await lore.delete_document(SOURCE, decision_id)
         except LoreError as e:
             if e.status == 404:
-                host.err(KeyError("There is no such decision."), 404)
+                deps.err(KeyError("There is no such decision."), 404)
             lore_fail(e)
         return {"ok": True, "removed": decision_id}
 
@@ -399,11 +399,11 @@ def register_routes(app, host) -> None:
         if where in ("all",):
             where = ""
         if where and where not in WHERE:
-            host.err(ValueError(f"where: one of {', '.join(WHERE)}."))
+            deps.err(ValueError(f"where: one of {', '.join(WHERE)}."))
         repo = (repo or "").strip().lower()
         project = (project or "").strip()
         if not 1 <= limit <= 200:
-            host.err(ValueError("limit: a whole number from 1 to 200."))
+            deps.err(ValueError("limit: a whole number from 1 to 200."))
         private, known = privacy()
         viewer, pnames = viewer_of(request), project_names()
 
@@ -442,7 +442,7 @@ def register_routes(app, host) -> None:
                             projects_seen.add(r["project"])
         except LoreError as e:
             if e.status == 400 and cursor:
-                host.err(ValueError("cursor: not a cursor the brain gave out."))
+                deps.err(ValueError("cursor: not a cursor the brain gave out."))
             lore_fail(e)
         filters = {"repos": sorted(repos_seen),
                    "projects": sorted(({"id": p, "name": pnames.get(p) or p} for p in projects_seen),

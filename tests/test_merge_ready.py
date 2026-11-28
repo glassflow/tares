@@ -507,14 +507,13 @@ async def main():
 
         print("== a project the caller cannot see ==")
         from fastapi import HTTPException
-        helpers = app.state.host._helpers
-        real_404 = helpers["project_or_404"]
+        deps = app.state.deps
         seen_404 = []
 
         def hidden(uid):
             seen_404.append(uid)
             raise HTTPException(404, "no such project")
-        helpers["project_or_404"] = hidden
+        deps.project_or_404 = hidden   # the instance's own, over the method
         try:
             GH["calls"].clear()
             async with mk() as cx:
@@ -529,7 +528,7 @@ async def main():
                    and hid["project"] is None and hid["reasons"][0].startswith("No ticket has acme/shop#")
                    and set(hid) == set(r.json()), (hid, r.json()))
         finally:
-            helpers["project_or_404"] = real_404
+            del deps.project_or_404
 
         print("== the tool ==")
         reset()

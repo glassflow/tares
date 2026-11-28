@@ -9,17 +9,19 @@ import asyncio
 from fastapi import Request
 
 from .. import factory_home, start_steps
+from ..deps import Deps
 
 PATH = "/api/home/start/hide"
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     def change(request: Request, hide: bool):
         # the same key the factory home reads: the credential's own name, "console" with no auth
         who = (getattr(request.state, "credential", None) or {}).get("name") or "console"
         (start_steps.hide if hide else start_steps.unhide)(store, who)
         factory_home.drop_cache(store, request)
-        return factory_home.build(store, ctx.fx, request)["start"]
+        return factory_home.build(store, h.fx, request)["start"]
 
     @app.post(PATH)
     async def hide_start(request: Request):

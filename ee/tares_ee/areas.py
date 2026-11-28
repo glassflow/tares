@@ -81,16 +81,16 @@ def view(store) -> list[dict]:
 owner_of = owner   # the route handlers below have a path parameter called `owner`
 
 
-def register_routes(app, host) -> None:
+def register_routes(app, deps) -> None:
     """The `/api/areas` routes. Each one answers `licence_required` unless the licence allows ee,
     before it does anything with the request (a body FastAPI cannot parse is a 422 first). Without
     ee at all the same paths answer from `tares.team.FALLBACKS`."""
-    store = host.store
+    store = deps.store
     lock = threading.Lock()
 
     def need_licence():
         if not licence.ee_allowed():
-            host.licence_required(NEEDS_LICENCE)
+            deps.licence_required(NEEDS_LICENCE)
 
     @app.get("/api/areas")
     def list_areas():
@@ -107,7 +107,7 @@ def register_routes(app, host) -> None:
             with lock:
                 save(store, body)
         except ValueError as e:
-            host.err(e, 400)
+            deps.err(e, 400)
         return view(store)
 
     @app.put("/api/areas/{owner}/{name}")
@@ -118,14 +118,14 @@ def register_routes(app, host) -> None:
         try:
             repo = norm_repo(f"{owner}/{name}")
         except ValueError as e:
-            host.err(e, 400)
+            deps.err(e, 400)
         pid = str(body.get("person_id") or "").strip()
         if not pid or store.get_person(pid) is None:
-            host.err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 400)
-        admin = host.is_admin(request)
+            deps.err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 400)
+        admin = deps.is_admin(request)
         me = None
         if not admin:
-            me = host.current_person(request)
+            me = deps.current_person(request)
             if not me:
                 raise HTTPException(status_code=403, detail="this key belongs to no person, so it "
                                     "cannot claim a repo; ask an admin to set the owner")
@@ -149,7 +149,7 @@ def register_routes(app, host) -> None:
             try:
                 save(store, entries)
             except ValueError as e:
-                host.err(e, 400)
+                deps.err(e, 400)
             # the answer is built before the lock is let go: a delete in between would leave
             # nothing to find
             out = next(a for a in view(store) if a["repo"] == repo)
@@ -162,7 +162,7 @@ def register_routes(app, host) -> None:
         try:
             repo = norm_repo(f"{owner}/{name}")
         except ValueError as e:
-            host.err(e, 400)
+            deps.err(e, 400)
         with lock:
             current = load(store)
             left = [e for e in current if e["repo"] != repo]

@@ -8,7 +8,7 @@ the crew has next, and the ones nobody is on (TR-1009). Whose merge it is comes 
 project's autonomy is L3-review and the reviewer passed it on its current commit), the same
 function the home page's "PRs to review" reads, so the two always agree.
 
-The rows come from the review queue (`ctx.fx.queue()`), read once. The strings are the cell's own
+The rows come from the review queue (`h.fx.queue()`), read once. The strings are the cell's own
 words around the person's own text (project, ticket and pull request titles); the page escapes
 every one of them, the API sends them raw.
 """
@@ -23,6 +23,7 @@ from .. import factory_home as fh
 from .. import factory_waiting as fw
 from .. import status_words
 from ..envelope import now_utc
+from ..deps import Deps
 
 AUTONOMY_TEXT = {
     "L3-review": "You merge every pull request after the crew's review.",
@@ -90,7 +91,8 @@ def _row(q: dict, now, milestones: dict[str, list[dict]]) -> dict:
     }
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     @app.get("/api/factory/reviews")
     def factory_reviews(request: Request, project: str = Query("")):
         """{waiting_for_you: [row], waiting_for_others: [row], with_the_crew: [row], nobody_on_it:
@@ -102,7 +104,7 @@ def register(app, store, h, ctx):
         the cell does not know gives three empty lists. `project` is {id, name} of the filter, or
         null."""
         now = now_utc()
-        fx = fh.for_caller(ctx.fx, request)
+        fx = fh.for_caller(h.fx, request)
         shown = None
         if project:
             hidden = h.hidden_ids()

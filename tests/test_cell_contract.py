@@ -122,6 +122,16 @@ def _concrete(path: str) -> str:
     return path.replace("{x}", "contract-x")
 
 
+def flat_routes(routes):
+    """Every route of the app in matching order. A router the app includes is one entry of
+    app.routes in newer FastAPI (its routes stay on the router), and its routes copied in older."""
+    for r in routes:
+        if hasattr(r, "original_router"):
+            yield from flat_routes(r.original_router.routes)
+        else:
+            yield r
+
+
 def check_routes():
     from starlette.routing import Match
     from tares.daemon import make_app
@@ -129,7 +139,7 @@ def check_routes():
     ck("make_app built the full app, not the degraded one", "degraded" not in (app.title or ""), app.title)
     catch_all = {"/{path:path}", "/{full_path:path}", "/api/{rest:path}", "/ingest/{rest:path}",
                  "/catalog/{rest:path}"}
-    routes = [r for r in app.routes if getattr(r, "path", "") not in catch_all]
+    routes = [r for r in flat_routes(app.routes) if getattr(r, "path", "") not in catch_all]
     for method, path, caller in FROZEN:
         want = _concrete(path)
         hit = False

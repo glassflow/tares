@@ -52,7 +52,7 @@ def _goal(goal) -> str | None:
 
 
 class Projects:
-    """The cell's projects, over the session store. One per daemon (`Host.projects()`)."""
+    """The cell's projects, over the session store. One per daemon (`Deps.projects`)."""
 
     def __init__(self, store):
         self.store = store

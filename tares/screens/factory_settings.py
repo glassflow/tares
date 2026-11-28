@@ -26,6 +26,7 @@ from .. import factory_tools
 from ..envelope import now_utc
 from ..factory_home import _count, _dt, _how_far, for_caller, plain_ago
 from .factory_docs import ago
+from ..deps import Deps
 
 GRANT_LINE = re.compile(r'^\s*-\s+"(.*)"\s+\((\d{4}-\d{2}-\d{2})\)\s*$')
 DESK_ANSWER = re.compile(r"^(D\d+)(?:\s+\S{1,20})?$")
@@ -57,7 +58,8 @@ def pace_text(p: dict) -> str:
     return f"Pacing is on, and {' and '.join(causes)}, so {do}."
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     def safe(fn, default):
         try:
             return fn()
@@ -125,7 +127,7 @@ def register(app, store, h, ctx):
         now = now_utc()
         scopes = getattr(request.state, "scopes", None)
         can_change = scopes is None or "admin" in scopes
-        fx = for_caller(ctx.fx, request)
+        fx = for_caller(h.fx, request)
         s = safe(fx.settings, {}) or {}
         how = _how_far(s)
         builders = s.get("builders_max")
@@ -138,7 +140,7 @@ def register(app, store, h, ctx):
         team = _text(os.getenv("TARES_WORKSPACE_URL"))
         return {
             "can_change": can_change,
-            "morning": safe(ctx.morning.page, None),
+            "morning": safe(h.morning.page, None),
             "tools": factory_tools.tools(store, now, h.hidden_ids()),
             "crew": {
                 "how_far": {"value": how["autonomy"], "releases": how["releases"],
@@ -171,7 +173,7 @@ def register(app, store, h, ctx):
         here. 400 with what is wrong when the time, the zone or the destinations do not hold."""
         h.require_admin(request)
         try:
-            return ctx.morning.save(body)
+            return h.morning.save(body)
         except ValueError as e:
             h.err(e)
 
@@ -180,6 +182,6 @@ def register(app, store, h, ctx):
         """One report now, on the saved settings; today's scheduled one still goes."""
         h.require_admin(request)
         try:
-            return await ctx.morning.send_now()
+            return await h.morning.send_now()
         except ValueError as e:
             h.err(e)

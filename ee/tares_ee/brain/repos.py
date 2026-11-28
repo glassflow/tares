@@ -112,8 +112,8 @@ def row_view(r: dict, removing: bool = False, remove_error: str | None = None,
             "folders": list(folders or []), "decisions": decisions, "last_update": last_update}
 
 
-def register_routes(app, host) -> None:
-    store = host.store
+def register_routes(app, deps) -> None:
+    store = deps.store
     lock = threading.Lock()
     indexer = indexing.Indexer(store, lambda: lore_client())   # looked up per call: a test swaps lore_client
     indexer.attach(app)
@@ -145,7 +145,7 @@ def register_routes(app, host) -> None:
         try:
             return check_repo(f"{owner}/{name}")
         except ValueError as e:
-            host.err(e, 400)
+            deps.err(e, 400)
 
     @app.get("/api/brain")
     def brain_state():
@@ -197,7 +197,7 @@ def register_routes(app, host) -> None:
         need_brain()
         creds, seen, failures, answered = await visible_repos()
         if failures and not answered:
-            host.err(ValueError(failures[0]), 502)
+            deps.err(ValueError(failures[0]), 502)
         return {"github": bool(creds), "repos": sorted(seen.values(), key=lambda r: r["repo"])}
 
     @app.post("/api/brain/repos", status_code=201)
@@ -209,30 +209,30 @@ def register_routes(app, host) -> None:
         index could not be started (no GitHub connection reaches it, the control plane refused or
         is not set up) is still connected, `failed` with the reason in `error`; Retry starts it again."""
         need_brain()
-        host.require_admin(request)
+        deps.require_admin(request)
         extra = sorted(set(body) - {"repos", "folders"})
         if extra:
-            host.err(ValueError(f"unknown field {extra[0]!r}: send {{\"repos\": [\"owner/name\"]}}"))
+            deps.err(ValueError(f"unknown field {extra[0]!r}: send {{\"repos\": [\"owner/name\"]}}"))
         given = body.get("repos")
         if not isinstance(given, list) or not given:
-            host.err(ValueError("repos: a list of the repos to connect, like [\"glassflow/tares\"]"))
+            deps.err(ValueError("repos: a list of the repos to connect, like [\"glassflow/tares\"]"))
         if len(given) > MAX_CONNECT:
-            host.err(ValueError(f"connect at most {MAX_CONNECT} repos at a time"))
+            deps.err(ValueError(f"connect at most {MAX_CONNECT} repos at a time"))
         repos: list[str] = []
         for value in given:
             try:
                 repo = check_repo(value)
             except ValueError as e:
-                host.err(e)
+                deps.err(e)
             if repo in repos:
-                host.err(ValueError(f"{repo} is in the list twice"))
+                deps.err(ValueError(f"{repo} is in the list twice"))
             repos.append(repo)
         chosen = parse_connect_folders(body.get("folders"), repos)
         have = {r["repo"] for r in store.list_brain_repos()}
         already = [r for r in repos if r in have]
         if already:
-            host.err(ValueError(f"already connected: {', '.join(already)}"), 409)
-        person = host.current_person(request)
+            deps.err(ValueError(f"already connected: {', '.join(already)}"), 409)
+        person = deps.current_person(request)
         by = person["id"] if person else None
         done: list[str] = []
         current = repos[0]
@@ -254,7 +254,7 @@ def register_routes(app, host) -> None:
                         decisions.wake()   # its linked projects' docs go in now, not at the next interval
         except LoreError as e:
             kept = f" Connected before it failed: {', '.join(done)}." if done else ""
-            host.err(ValueError(f"Could not connect {current}: {e}{kept}"), 502)
+            deps.err(ValueError(f"Could not connect {current}: {e}{kept}"), 502)
         finally:
             await asyncio.gather(*(indexer.start(r) for r in done))   # never raises: a failure is the row's error
             for repo in done:
@@ -285,7 +285,7 @@ def register_routes(app, host) -> None:
                 out[repo] = folders_mod.check_folders(paths)
             return out
         except ValueError as e:
-            host.err(e)
+            deps.err(e)
 
     @app.delete("/api/brain/repos/{owner}/{name}")
     async def remove_repo(owner: str, name: str, request: Request):
@@ -302,12 +302,12 @@ def register_routes(app, host) -> None:
         the row then says `removing`, and `remove_error` when the run gives up later. Asking again while a
         removal runs joins it; asking again after it gave up starts a new one."""
         need_brain()
-        host.require_admin(request)
+        deps.require_admin(request)
         repo = repo_from(owner, name)
         task = removals.get(repo)
         if task is None or task.done():
             if store.get_brain_repo(repo) is None:
-                host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+                deps.err(KeyError(f"{repo} is not connected to the brain"), 404)
             remove_errors.pop(repo, None)
             task = removals[repo] = asyncio.ensure_future(run_remove(repo))
         done, _ = await asyncio.wait({task}, timeout=INLINE_WAIT)
@@ -315,7 +315,7 @@ def register_routes(app, host) -> None:
             return JSONResponse({"ok": True, "removing": True}, status_code=202)
         failure = task.result()
         if failure:
-            host.err(ValueError(failure[1]), failure[0])
+            deps.err(ValueError(failure[1]), failure[0])
         return {"ok": True, "removed": True}
 
     async def run_remove(repo: str) -> tuple[int, str] | None:
@@ -333,7 +333,7 @@ def register_routes(app, host) -> None:
                     await repo_decisions.forget_repo(repo)   # its decision folder files leave the brain too (TR-1453)
             remove_errors.pop(repo, None)
             return None
-        except Exception as e:   # host.err raises an HTTPException; anything else is a bug we still report
+        except Exception as e:   # deps.err raises an HTTPException; anything else is a bug we still report
             if hasattr(e, "status_code"):   # ours: the words are plain and carry no secret
                 status, words = e.status_code, str(getattr(e, "detail", None) or e)
             else:   # unknown: its text may hold a token, so say it plainly and log only the type
@@ -356,7 +356,7 @@ def register_routes(app, host) -> None:
             except CpError as e:
                 if e.status != 502 or time.monotonic() + step > deadline:
                     again = "" if "Try again" in str(e) else " Try again in a minute."
-                    host.err(ValueError(f"Could not stop the index of {repo}: {e}{again}"), 502)
+                    deps.err(ValueError(f"Could not stop the index of {repo}: {e}{again}"), 502)
             await asyncio.sleep(step)
             step = min(step * 1.5, REMOVE_STEP_MAX)
 
@@ -373,9 +373,9 @@ def register_routes(app, host) -> None:
                 if e.status == 404:   # lore does not have it any more
                     return
                 if e.status != 409:
-                    host.err(ValueError(f"Could not remove {repo} from the brain: {e}"), 502)
+                    deps.err(ValueError(f"Could not remove {repo} from the brain: {e}"), 502)
             if time.monotonic() + step > deadline:
-                host.err(ValueError("Still indexing. Try again in a minute."), 409)
+                deps.err(ValueError("Still indexing. Try again in a minute."), 409)
             await asyncio.sleep(step)
             step = min(step * 1.5, REMOVE_STEP_MAX)
 
@@ -384,23 +384,23 @@ def register_routes(app, host) -> None:
         """Admin only. A repo whose index failed goes back to queued with its error cleared and
         its index is asked for again. A repo in any other state is refused."""
         need_brain()
-        host.require_admin(request)
+        deps.require_admin(request)
         repo = repo_from(owner, name)
         row = store.get_brain_repo(repo)
         if row is None:
-            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+            deps.err(KeyError(f"{repo} is not connected to the brain"), 404)
         if indexer.is_removing(repo) or repo in removals:
-            host.err(ValueError(f"{repo} is being removed"), 409)
+            deps.err(ValueError(f"{repo} is being removed"), 409)
         async with indexer.lock(repo):
             requeued = store.requeue_brain_repo(repo, "failed")
         if not requeued:
             now = (store.get_brain_repo(repo) or row)["state"]
-            host.err(ValueError(f"{repo} is {now}: only a repo whose index failed can be retried"), 409)
+            deps.err(ValueError(f"{repo} is {now}: only a repo whose index failed can be retried"), 409)
         remove_errors.pop(repo, None)
         await indexer.start(repo)
         fresh = store.get_brain_repo(repo)
         if fresh is None:   # a removal finished while the start ran
-            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+            deps.err(KeyError(f"{repo} is not connected to the brain"), 404)
         return view(fresh)
 
     async def scan_tree(repo: str) -> dict:
@@ -424,7 +424,7 @@ def register_routes(app, host) -> None:
         need_brain()
         repo = repo_from(owner, name)
         if store.get_brain_repo(repo) is None:
-            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+            deps.err(KeyError(f"{repo} is not connected to the brain"), 404)
         return {"repo": repo, "updates": store.list_brain_repo_updates(repo, 20)}
 
     @app.get("/api/brain/repos/{owner}/{name}/folders")
@@ -441,7 +441,7 @@ def register_routes(app, host) -> None:
         need_brain()
         repo = repo_from(owner, name)
         if store.get_brain_repo(repo) is None:
-            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+            deps.err(KeyError(f"{repo} is not connected to the brain"), 404)
         chosen = store.list_brain_folders(repo)
         entries, partial, scanned, scan_error, suggested = [], False, False, None, []
         try:
@@ -469,11 +469,11 @@ def register_routes(app, host) -> None:
         scan and time limit. When GitHub cannot be asked (the list of repos or the scan failed) it answers
         200 with `scanned: false` and `scan_error` saying why."""
         need_brain()
-        host.require_admin(request)
+        deps.require_admin(request)
         repo = repo_from(owner, name)
         _, seen, failures, answered = await visible_repos()
         if repo not in seen and not (failures and not answered):
-            host.err(KeyError(f"{repo} is not a repo this cell's GitHub connection can read"), 404)
+            deps.err(KeyError(f"{repo} is not a repo this cell's GitHub connection can read"), 404)
         chosen = store.list_brain_folders(repo)
         entries, partial, scanned, scan_error, suggested = [], False, False, None, []
         if repo not in seen:   # GitHub did not answer the list, so the repo cannot be told apart from another
@@ -501,21 +501,21 @@ def register_routes(app, host) -> None:
         added, removed}`; the added folders are imported and the removed ones' documents dropped by the hooks
         in `folders.HOOKS` (TR-1210, TR-1219). A repo that is being removed answers 409."""
         need_brain()
-        host.require_admin(request)
+        deps.require_admin(request)
         repo = repo_from(owner, name)
         extra = sorted(set(body) - {"folders"})
         if extra:
-            host.err(ValueError(f"unknown field {extra[0]!r}: send {{\"folders\": [\"docs/adr\"]}}"))
+            deps.err(ValueError(f"unknown field {extra[0]!r}: send {{\"folders\": [\"docs/adr\"]}}"))
         try:
             paths = folders_mod.check_folders(body.get("folders"))
         except ValueError as e:
-            host.err(e)
+            deps.err(e)
         if indexer.is_removing(repo) or repo in removals:
-            host.err(ValueError(f"{repo} is being removed"), 409)
-        person = host.current_person(request)
+            deps.err(ValueError(f"{repo} is being removed"), 409)
+        person = deps.current_person(request)
         with lock:
             if store.get_brain_repo(repo) is None:
-                host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+                deps.err(KeyError(f"{repo} is not connected to the brain"), 404)
             added, removed = store.set_brain_folders(repo, paths, person["id"] if person else None, now_utc())
         await folders_mod.notify(repo, added, removed)
         return {"repo": repo, "folders": store.list_brain_folders(repo), "added": added, "removed": removed}

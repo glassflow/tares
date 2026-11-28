@@ -32,6 +32,7 @@ from . import answers as answers_mod
 from . import factory_owners as owners_mod
 from . import slack as slack_mod
 from .envelope import now_utc
+from .deps import Deps
 
 log = logging.getLogger("tares.waiting_slack")
 
@@ -442,9 +443,12 @@ class WaitingSlack:
                 "problem": (self.problem or (self.send_failed.get(pid) if pid else None)) if connected else None}
 
 
-def register(app, store, h, reader: WaitingSlack) -> None:
+def register(app, h: Deps) -> None:
     """GET and PUT /api/me/slack: the caller's own switch for these messages, and what Settings
-    says about it. A credential with no person has nothing to switch."""
+    says about it. A credential with no person has nothing to switch. The reader is
+    `h.waiting_slack`."""
+    store, reader = h.store, h.waiting_slack
+
     def person_of(request: Request) -> dict:
         person = h.current_person(request)
         if not person or not person.get("id"):

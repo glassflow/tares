@@ -83,7 +83,7 @@ async def main():
             body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
             return r.status_code == 402 and body.get("code") == "licence_required"
 
-        ck("no licence on this cell", app.state.host.licence_state()["valid"] is False)
+        ck("no licence on this cell", app.state.deps.licence_state()["valid"] is False)
         eq("two people on the cell: local and Pat", len(await people()), 2)
 
         print("== the owner claims local ==")

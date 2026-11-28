@@ -22,12 +22,12 @@ __all__ = ["NEEDS_LICENCE", "register_routes"]
 NEEDS_LICENCE = "Changing a project's lead, privacy or members needs an enterprise licence."
 
 
-def register_routes(app, host) -> None:
-    store = host.store
+def register_routes(app, deps) -> None:
+    store = deps.store
 
     def need_licence():
         if not licence.ee_allowed():
-            host.licence_required(NEEDS_LICENCE)
+            deps.licence_required(NEEDS_LICENCE)
 
     @app.patch("/api/projects/{uid}")
     def set_project_access(uid: str, request: Request, body: dict = Body(...)):
@@ -40,24 +40,24 @@ def register_routes(app, host) -> None:
         need_licence()
         p = store.get_project(uid)
         body = body or {}
-        hand_over_only = host.is_admin(request) and "lead_person_id" in body and "scope" not in body
-        if p is None or not (host.can_see(p) or hand_over_only):
-            host.err(KeyError(f"unknown project {uid!r}"), 404)
+        hand_over_only = deps.is_admin(request) and "lead_person_id" in body and "scope" not in body
+        if p is None or not (deps.can_see(p) or hand_over_only):
+            deps.err(KeyError(f"unknown project {uid!r}"), 404)
         want_lead, want_scope = "lead_person_id" in body, "scope" in body
         if not (want_lead or want_scope):
-            host.err(ValueError("say lead_person_id, scope or both"))
-        person = host.current_person(request)
+            deps.err(ValueError("say lead_person_id, scope or both"))
+        person = deps.current_person(request)
         is_lead = bool(person and p["lead_person_id"] == person["id"])
-        if not is_lead and (want_scope or not host.is_admin(request)):
+        if not is_lead and (want_scope or not deps.is_admin(request)):
             raise HTTPException(status_code=403, detail="only the project lead can change this")
         if want_scope and body["scope"] not in ("team", "private"):
-            host.err(ValueError("scope is team or private"))
+            deps.err(ValueError("scope is team or private"))
         if want_lead:
             lead = str(body["lead_person_id"] or "").strip()
             if not lead:
-                host.err(ValueError("lead_person_id must be a person id"))
+                deps.err(ValueError("lead_person_id must be a person id"))
             if store.get_person(lead) is None:
-                host.err(KeyError(f"no person {lead!r}; GET /api/people lists them"), 404)
+                deps.err(KeyError(f"no person {lead!r}; GET /api/people lists them"), 404)
             old_lead = p["lead_person_id"]
             store.set_project_lead(uid, lead)
             if old_lead and old_lead != lead:   # the one who handed it over stays on it
@@ -65,15 +65,15 @@ def register_routes(app, host) -> None:
         if want_scope:
             store.set_project_scope(uid, body["scope"])
         factory_home.clear_cache()   # who sees what just changed
-        out = host.projects().get(uid)
-        return out if host.can_see(store.get_project(uid)) else host.hidden_project(out)
+        out = deps.projects.get(uid)
+        return out if deps.can_see(store.get_project(uid)) else deps.hidden_project(out)
 
     def _lead_or_system(request, uid: str) -> dict:
         """The project, when this caller may change who is on it: its lead, or the system
         credential (an admin who is not the lead may not)."""
-        p = host.project_or_404(uid)
-        person = host.current_person(request)
-        if not (person and p["lead_person_id"] == person["id"]) and not host.is_system(request):
+        p = deps.project_or_404(uid)
+        person = deps.current_person(request)
+        if not (person and p["lead_person_id"] == person["id"]) and not deps.is_system(request):
             raise HTTPException(status_code=403, detail="only the project lead can change this")
         return p
 
@@ -85,14 +85,14 @@ def register_routes(app, host) -> None:
         p = _lead_or_system(request, uid)
         pid = str((body or {}).get("person_id") or "").strip()
         if not pid:
-            host.err(ValueError("person_id is required"))
+            deps.err(ValueError("person_id is required"))
         if store.get_person(pid) is None:
-            host.err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 404)
+            deps.err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 404)
         if pid != p["lead_person_id"]:   # the lead is a member already
-            by = host.current_person(request)
+            by = deps.current_person(request)
             store.add_project_member(uid, pid, by["id"] if by else "system")
             factory_home.clear_cache()
-        return host.projects().get(uid)
+        return deps.projects.get(uid)
 
     @app.delete("/api/projects/{uid}/members/{person_id}")
     def remove_project_member(uid: str, person_id: str, request: Request):
@@ -101,10 +101,10 @@ def register_routes(app, host) -> None:
         need_licence()
         p = _lead_or_system(request, uid)
         if person_id == p["lead_person_id"]:
-            host.err(ValueError("the lead is always a member; make someone else the lead first"), 409)
+            deps.err(ValueError("the lead is always a member; make someone else the lead first"), 409)
         store.remove_project_member(uid, person_id)
         factory_home.clear_cache()
-        return host.projects().get(uid)
+        return deps.projects.get(uid)
 
     @app.post("/api/projects/{uid}/join")
     def join_project(uid: str, request: Request):
@@ -115,12 +115,12 @@ def register_routes(app, host) -> None:
         Joining is recorded as `self`: a member for everything but the project's secrets, until the
         lead adds the person, and no member once the project is private."""
         need_licence()
-        person = host.current_person(request)
+        person = deps.current_person(request)
         if caller(request)["station"] or not person:
             raise HTTPException(status_code=403, detail="only a person can join a project, with their own key")
         p = store.get_project(uid)
         if p is None:
-            host.err(KeyError(f"unknown project {uid!r}"), 404)
+            deps.err(KeyError(f"unknown project {uid!r}"), 404)
         if not store.is_project_member(uid, person["id"]):
             if p["scope"] == "private":
                 # the one answer under /api/projects/{uid} that tells someone who is not on a private
@@ -132,4 +132,4 @@ def register_routes(app, host) -> None:
                     "code": "ask_lead", "detail": f"This project is private. {ask}"})
             store.add_project_member(uid, person["id"], person["id"], reason="self")
             factory_home.clear_cache()   # Home keeps its answer for a few seconds
-        return host.projects().get(uid)
+        return deps.projects.get(uid)

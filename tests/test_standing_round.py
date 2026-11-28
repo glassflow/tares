@@ -138,26 +138,6 @@ async def main():
     return F
 
 
-def closure_fn(app, name):
-    """A function the daemon keeps inside make_app, reached through the routes that close over it."""
-    seen, stack = set(), [r.endpoint for r in app.routes if hasattr(r, "endpoint")]
-    while stack:
-        f = stack.pop()
-        if id(f) in seen:
-            continue
-        seen.add(id(f))
-        if getattr(f, "__name__", "") == name:
-            return f
-        for cell in getattr(f, "__closure__", None) or ():
-            try:
-                v = cell.cell_contents
-            except ValueError:
-                continue
-            if callable(v):
-                stack.append(v)
-    raise LookupError(name)
-
-
 def short(v):
     """(round, verdict, current) of a verdict the server answers, or None."""
     return (v["round"], v["verdict"], v["current"]) if v else None
@@ -215,7 +195,7 @@ async def readers(app, store, project, ticket, round_on):
             listed = (await get(f"/api/projects/{uid}/tickets"))["tickets"][0]
             same("list tickets: verdict", short(listed["verdict"]))
 
-            one = closure_fn(app, "_ticket_out")(uid, store.get_ticket(uid, tid))
+            one = app.state.deps.ticket_out(uid, store.get_ticket(uid, tid))
             same("a ticket's view outside a list: verdict", short(one["verdict"]))
 
             row = (await get("/api/review-queue", project=uid))["queue"]

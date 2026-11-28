@@ -13,7 +13,7 @@ Against the daemon in process:
     icon and goal, and drops it once deleted;
   * the routes that went answer 404 or 405: the template list, the legacy /api/usecases routes;
   * with tares_ee installed and a licence, the access routes (PATCH, members) still answer with the
-    project as Host.projects().get gives it.
+    project as Deps.projects.get gives it.
 
 Run: .venv/bin/python tests/test_factory_projects.py (TARES_TEST_PG and PYTHONPATH=tests/pg_harness
 for Postgres)

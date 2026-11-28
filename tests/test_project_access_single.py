@@ -88,7 +88,7 @@ async def routes():
         ck("nothing changed: same lead", (lead2.get("id") if isinstance(lead2, dict) else lead2) == mine, str(lead2))
         r = await cx.get("/api/projects")
         ck("the project list still answers", r.status_code == 200, f"{r.status_code}")
-        h = app.state.host
+        h = app.state.deps
         h.store.set_project_scope(uid, "private")   # the store write stays in core
         p3 = (await cx.get(f"/api/projects/{uid}")).json()
         ck("a private project the owner leads still shows in full", p3.get("scope") == "private"

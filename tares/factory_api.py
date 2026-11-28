@@ -42,7 +42,7 @@ from .integrations.review import CREW_REVIEWED_GATES
 from .integrations.types import PRRef, Status
 from .envelope import now_utc
 from .factory_store import MapChanged
-from .host import Host
+from .deps import Deps
 
 CREW_SETTING = "crew_settings"
 CLAUDE_RETRY_SETTING = "crew_claude_retry"   # stations the watch is retrying onto a new Claude Code
@@ -618,7 +618,7 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     return commands, since
 
 
-def review_state(h: Host, uid: str, t: dict, source: str) -> dict:
+def review_state(h: Deps, uid: str, t: dict, source: str) -> dict:
     """What a ticket's full view adds for review (TR-440..444): its checks matched against the
     recording, the challenger's layer, the review rounds, and whether the last verdict counts.
 
@@ -690,7 +690,7 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None,
             "milestone": current, "progress": factory_mod.progress(tickets)}
 
 
-def own_crew_ids(h: Host, crews) -> set[str]:
+def own_crew_ids(h: Deps, crews) -> set[str]:
     """The ids of those of `crews` (rows of store.list_crews) that are the caller's own (TR-1704):
     a station's owner reads every session of it. They are the crews of the caller's person; a
     credential with no person owns none, not even those filed under `local`. With auth off there
@@ -704,7 +704,7 @@ def own_crew_ids(h: Host, crews) -> set[str]:
     return {c["id"] for c in crews if me and c["person_id"] == me}
 
 
-def unread_sessions(h: Host, sessions: list[str]) -> set[str]:
+def unread_sessions(h: Deps, sessions: list[str]) -> set[str]:
     """Those of `sessions` the caller must not read (TR-1710): they worked in a project the
     caller cannot see and belong to no crew of theirs (store.unread_among)."""
     hidden = h.hidden_ids()
@@ -713,7 +713,7 @@ def unread_sessions(h: Host, sessions: list[str]) -> set[str]:
     return h.store.unread_among(sessions, hidden, own_crew_ids(h, h.store.list_crews()))
 
 
-def readable_layer(h: Host, layer: dict, events: list[dict]) -> dict:
+def readable_layer(h: Deps, layer: dict, events: list[dict]) -> dict:
     """The challenger's layer `layer`, made from all of `events`, with the findings the caller may
     read (TR-1724): an open or fixed finding whose title a review in a session they can open
     carries, and the waivers such sessions recorded. Rounds, verdict, clean and sha stay as all
@@ -756,7 +756,7 @@ def tickets_of(tickets: list, projects: list[dict], shut) -> list:
     return [t for t in tickets if str(t).rsplit(" ", 1)[0] in names]
 
 
-def root_offers(h: Host, offers: list[dict], hidden, projects: list[dict]) -> list[dict]:
+def root_offers(h: Deps, offers: list[dict], hidden, projects: list[dict]) -> list[dict]:
     """`offers` as the root caller reads them (TR-1713): every one, its text as stored. A ticket
     is left out when its name is that of a project in `hidden`, or of a deleted private project
     while no project has the name (TR-1708)."""
@@ -773,7 +773,7 @@ def root_offers(h: Host, offers: list[dict], hidden, projects: list[dict]) -> li
     return [{**o, "tickets": [t for t in o.get("tickets") or [] if kept(t)]} for o in offers]
 
 
-def readable_offers(h: Host, offers: list[dict], hidden, projects=None) -> list[dict]:
+def readable_offers(h: Deps, offers: list[dict], hidden, projects=None) -> list[dict]:
     """The rule offers `offers` for a caller who cannot see the projects in `hidden` (TR-1713),
     from those of the other projects. The root caller (the cell's root token, or auth off) reads
     them as root_offers says. Anyone else gets each with the tickets whose recorded name is a
@@ -815,10 +815,11 @@ def blank_session(row: dict) -> None:
         row["model"] = None
 
 
-def register(app, store, h: Host) -> SimpleNamespace:
-    """Add the crew's routes. `h` is the daemon's Host (tares/host.py), which documents the helpers
+def register(app, h: Deps) -> SimpleNamespace:
+    """Add the crew's routes. `h` is the daemon's Deps (tares/deps.py), which documents the helpers
     it carries: err, project_or_404, by, current_person, is_admin, area_owner and the rest. Returns
     the crew readers the home page shares."""
+    store = h.store
 
     def deny(request: Request, action: str) -> None:
         why = factory_mod.may(caller(request), action)

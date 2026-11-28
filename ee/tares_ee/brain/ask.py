@@ -93,8 +93,8 @@ def _names(row: dict) -> set[str]:
     return {brain_repos.lore_name(row["repo"]), row.get("repo_source_id") or ""} - {""}
 
 
-def register_routes(app, host) -> None:
-    store = host.store
+def register_routes(app, deps) -> None:
+    store = deps.store
     lock = threading.Lock()
 
     def need_brain():
@@ -115,7 +115,7 @@ def register_routes(app, host) -> None:
         return {"ready": False, "message": message if connected else NO_REPOS, "notes": notes}
 
     def who(request: Request) -> tuple[str | None, str | None, str]:
-        person = host.current_person(request)
+        person = deps.current_person(request)
         station = (request.headers.get("x-tares-station") or "").strip() or None
         via = "mcp" if (request.headers.get("x-tares-via") or "").strip() == "mcp" else "console"
         return station, (person["id"] if person else None), via
@@ -125,10 +125,10 @@ def register_routes(app, host) -> None:
         try:
             repo = brain_repos.check_repo(value)
         except ValueError as e:
-            host.err(e, 400)
+            deps.err(e, 400)
         row = next((r for r in [*ready, *rest] if r["repo"] == repo), None)
         if row is None:
-            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+            deps.err(KeyError(f"{repo} is not connected to the brain"), 404)
         return row
 
     def begin(request: Request, tool: str, question: str | None, repos: list[str], deep: bool = False,
@@ -145,12 +145,12 @@ def register_routes(app, host) -> None:
             what = "deep answers" if deep else "answers"
             tip = " Ask without looking deeper, or try again after midnight UTC." if deep else \
                 " Search instead, or try again after midnight UTC."
-            host.err(ValueError(f"This cell has used its {cap} {what} for today.{tip}"), 429)
+            deps.err(ValueError(f"This cell has used its {cap} {what} for today.{tip}"), 429)
         return call["id"]
 
     def lore_error(e: LoreError):
         status = 400 if e.status == 400 else 404 if e.status == 404 else 429 if e.status == 429 else 502
-        host.err(ValueError(str(e)), status)
+        deps.err(ValueError(str(e)), status)
 
     async def forward(call_id: str, started: float, coro, usage=None):
         """Await one lore call and keep how it went. `usage` picks (input, output) tokens from the reply."""
@@ -178,16 +178,16 @@ def register_routes(app, host) -> None:
         need_brain()
         extra = sorted(set(body) - {"question", "deep"})
         if extra:
-            host.err(ValueError(f"unknown field {extra[0]!r}: send {{\"question\": \"...\", \"deep\": false}}"))
+            deps.err(ValueError(f"unknown field {extra[0]!r}: send {{\"question\": \"...\", \"deep\": false}}"))
         question = body.get("question")
         if not isinstance(question, str) or not question.strip():
-            host.err(ValueError("question: what to ask the brain, as text"))
+            deps.err(ValueError("question: what to ask the brain, as text"))
         question = question.strip()
         if len(question) > MAX_QUESTION:
-            host.err(ValueError(f"question: at most {MAX_QUESTION:,} characters"))
+            deps.err(ValueError(f"question: at most {MAX_QUESTION:,} characters"))
         deep = body.get("deep", False)
         if not isinstance(deep, bool):
-            host.err(ValueError("deep: true or false"))
+            deps.err(ValueError("deep: true or false"))
         ready, notes, rest = split()
         if not ready:
             return nothing_ready(notes, bool(rest))
@@ -212,9 +212,9 @@ def register_routes(app, host) -> None:
         `q` (`repo` narrows it to one, owner/name). With no Ready repo: `{ready: false, message, notes}`."""
         need_brain()
         if not q.strip():
-            host.err(ValueError("q: what to search for, as text"))
+            deps.err(ValueError("q: what to search for, as text"))
         if len(q.strip()) > MAX_QUESTION:
-            host.err(ValueError(f"q: at most {MAX_QUESTION:,} characters"))
+            deps.err(ValueError(f"q: at most {MAX_QUESTION:,} characters"))
         ready, notes, rest = split()
         source = None
         if repo.strip():
@@ -244,7 +244,7 @@ def register_routes(app, host) -> None:
         """One document from lore: `{kind, title, uri, metadata, text}`. The id is a hit's `document_id`."""
         need_brain()
         if not doc_id.strip():
-            host.err(ValueError("id: the document id a search hit names"))
+            deps.err(ValueError("id: the document id a search hit names"))
         call_id = begin(request, "get_brain_doc", doc_id.strip()[:KEPT_QUESTION], [])
         started = time.monotonic()
 

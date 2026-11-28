@@ -1,17 +1,22 @@
-"""The daemon's route helpers as one importable class, tares.host.Host (TR-910).
+"""The daemon's route helpers as one object, tares.deps.Deps (TR-910, TR-1814).
 
-A daemon with auth on. Code that only has the host (app.state.host) adds a route that uses
-h.current_person, h.is_admin, h.require_admin and h.err. A person key (ingest scope, no admin)
-gets 403 from require_admin, an admin key 200, and a call with no key 401 from the guard. The class
-lists every member of the contract, Host(...) keeps its store, licence_state() is the
-cell's licence check (TR-912) with `used` counting the people on the cell, and licence_required()
-raises the error the daemon answers with 402.
+A daemon with auth on. Code that only has the Deps (app.state.deps) adds a route that uses
+deps.current_person, deps.is_admin, deps.require_admin and deps.err. A person key (ingest scope, no
+admin) gets 403 from require_admin, an admin key 200, and a call with no key 401 from the guard.
+The class has every member of the contract, the Deps keeps the daemon's store and projects,
+licence_state() is the cell's licence check (TR-912) with `used` counting the people on the cell,
+and licence_required() raises the error the daemon answers with 402.
 
-Run: .venv/bin/python tests/test_host.py
+The app is built from routers (TR-1814): tares/daemon.py defines no route, tares/host.py and the
+screens registry are gone, every module under tares/routes/ has router(deps), and the console's
+catch-all is the last route, once.
+
+Run: .venv/bin/python tests/test_deps.py
 """
 import asyncio
 import inspect
 import os
+import re
 import sys
 import tempfile
 
@@ -22,10 +27,10 @@ scrub_os_environ()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-_TMP = tempfile.mkdtemp(prefix="tares-host-")
+_TMP = tempfile.mkdtemp(prefix="tares-deps-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
-os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-host"
+os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-deps"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
@@ -33,7 +38,7 @@ from fastapi import Request
 
 import _people
 
-from tares.host import Host
+from tares.deps import Deps
 from tares.licence import LicenceRequired
 
 P = F = 0
@@ -50,16 +55,26 @@ MEMBERS = [
     "err", "caller", "current_person", "is_admin", "is_system", "project_key", "by",
     "require_admin", "can_see", "hidden_ids", "read_exclude", "project_or_404",
     "resolve_project", "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out",
-    "area_owner", "hidden_project", "projects", "licence_state", "licence_required", "team_reader",
-    "auth_off",
+    "area_owner", "hidden_project", "licence_state", "licence_required", "auth_off",
+    "record_model_usage",
 ]
 
 STATE_KEYS = {"valid", "source", "kid", "org", "seats", "used", "features", "expires", "days_left",
               "expired", "over_seats", "ee_allowed", "reason", "stored", "env_set"}
 
 
+def flat_routes(routes):
+    """Every route of the app in matching order. A router the app includes is one entry of
+    app.routes in newer FastAPI (its routes stay on the router), and its routes copied in older."""
+    for r in routes:
+        if hasattr(r, "original_router"):
+            yield from flat_routes(r.original_router.routes)
+        else:
+            yield r
+
+
 def add_route(h, app):
-    """A module that gets only the host: one POST route that checks the caller through it. The
+    """A module that gets only the Deps: one POST route that checks the caller through it. The
     path has two segments after /ingest, so the guard asks for the ingest scope and no more."""
     @app.post("/ingest/host-check/who")
     def who(request: Request):
@@ -74,19 +89,38 @@ def add_route(h, app):
         h.err(KeyError("nothing here"), 404)
 
 
+def the_wiring():
+    daemon_src = open(os.path.join(ROOT, "tares", "daemon.py"), encoding="utf-8").read()
+    ck("tares/daemon.py defines no route", "@app." not in daemon_src
+       and not re.search(r"\bapp\.(add_api_route|add_route|api_route|get|post|put|delete|patch)\(", daemon_src))
+    ck("tares/host.py is gone", not os.path.exists(os.path.join(ROOT, "tares", "host.py")))
+    screens = open(os.path.join(ROOT, "tares", "screens", "__init__.py"), encoding="utf-8").read()
+    ck("the screens registry is gone", "register_all" not in screens and "import" not in screens)
+    import importlib
+    names = sorted(f[:-3] for f in os.listdir(os.path.join(ROOT, "tares", "routes"))
+                   if f.endswith(".py") and f != "__init__.py")
+    missing = [n for n in names
+               if not callable(getattr(importlib.import_module(f"tares.routes.{n}"), "router", None))]
+    ck("every module under tares/routes/ has router(deps)", names and not missing, missing)
+
+
 async def main():
-    missing = [m for m in MEMBERS if m not in set(dir(Host))]
-    ck("Host lists every member of the contract", not missing, ", ".join(missing))
+    the_wiring()
+    missing = [m for m in MEMBERS if m not in set(dir(Deps))]
+    ck("Deps has every member of the contract", not missing, ", ".join(missing))
     from tares.daemon import make_app
     # the two people the keys below act as are on the cell before it starts: adding a second
     # person over HTTP needs a licence and is tested under ee/tests
     _people.seed(os.environ["TARES_DB"], [("Pat", "pat@example.com"), ("Ada", "ada@example.com")])
     app = make_app()
     store = app.state.store
-    h = getattr(app.state, "host", None)
-    ck("app.state.host is a Host", isinstance(h, Host))
-    ck("the host carries the daemon's store",
-       h is not None and h.store is store and not hasattr(h, "runtime"))
+    h = getattr(app.state, "deps", None)
+    ck("app.state.deps is a Deps", isinstance(h, Deps))
+    ck("the Deps carries the daemon's store", h is not None and h.store is store)
+    flat = list(flat_routes(app.routes))
+    ui = [r for r in flat if getattr(r, "path", None) == "/{path:path}"]
+    ck("the console's catch-all is the last route, once", len(ui) == 1 and flat[-1] is ui[0],
+       [getattr(r, "path", None) for r in flat[-3:]])
     add_route(h, app)
 
     async def post(path, token=None):
@@ -127,9 +161,9 @@ async def main():
         ck("err raises the HTTP status it is given", r.status_code == 404
            and "nothing here" in r.text, f"{r.status_code} {r.text}")
 
-        # the daemon's real helpers, called straight through the host
+        # the daemon's real helpers, called straight through the Deps
         ck("hidden_ids is a set", h.hidden_ids() == set())
-        ck("projects() is the daemon's engine", hasattr(h.projects(), "list"))
+        ck("projects is the daemon's engine", hasattr(h.projects, "list"))
         ck("resolve_project keeps an unknown ref", h.resolve_project("no-such-project") == "no-such-project")
         from types import SimpleNamespace
         ck("project_key is the request's project key",
@@ -155,55 +189,39 @@ async def main():
 
     # the class itself
     ck("every member is a method with a docstring",
-       all(callable(getattr(Host, m)) and (getattr(Host, m).__doc__ or "").strip() for m in MEMBERS))
+       all(callable(getattr(Deps, m)) and (getattr(Deps, m).__doc__ or "").strip() for m in MEMBERS))
     ck("every member is type hinted", all(
-        getattr(Host, m).__annotations__ for m in MEMBERS if m != "require_admin") and
-       inspect.signature(Host.err).return_annotation is not inspect.Signature.empty)
+        getattr(Deps, m).__annotations__ for m in MEMBERS) and
+       inspect.signature(Deps.err).return_annotation is not inspect.Signature.empty)
 
     class FakeStore:
         def list_people(self):
             return [{"id": "a"}, {"id": "b"}]
 
-    fake = Host(FakeStore())
-    ck("Host(...) exposes the store", fake.store.list_people()[0]["id"] == "a")
-    ck("licence_state is the daemon's helper, passed through",
-       Host(FakeStore(), licence_state=lambda: {"used": 2}).licence_state() == {"used": 2})
+    fake = Deps(FakeStore(), None)
+    ck("Deps(...) exposes the store", fake.store.list_people()[0]["id"] == "a")
+    ck("auth is off without a token: everyone is the admin and the system",
+       fake.auth_off() and fake.is_admin(object()) and fake.is_system(object()))
     try:
-        fake.licence_state()
-        ck("licence_state without its helper is named", False, "no error")
-    except RuntimeError as e:
-        ck("licence_state without its helper is named", "licence_state" in str(e), str(e))
-    try:
-        Host(FakeStore(), licence_required=lambda m: (_ for _ in ()).throw(LicenceRequired(m))
-             ).licence_required("no")
-        ck("licence_required through the helper raises", False, "no error")
+        fake.licence_required("no")
+        ck("licence_required raises", False, "no error")
     except LicenceRequired as e:
-        ck("licence_required through the helper raises", e.message == "no")
+        ck("licence_required raises", e.message == "no")
     try:
-        Host(FakeStore(), licence_required=lambda m: None).licence_required("still")
-        ck("licence_required never returns, even if the helper does", False, "returned")
-    except LicenceRequired as e:
-        ck("licence_required never returns, even if the helper does", e.message == "still")
-    try:
-        fake.is_admin(None)
-        ck("a missing helper is named", False, "no error")
+        fake.team_reader()
+        ck("the team reader before factory_api.register is named", False, "no error")
     except RuntimeError as e:
-        ck("a missing helper is named", "is_admin" in str(e), str(e))
+        ck("the team reader before factory_api.register is named", "factory_api.register" in str(e), str(e))
+    from types import SimpleNamespace
+    no = Deps(FakeStore(), None, auth_token="x")
     try:
-        Host(FakeStore(), nope=lambda: 1)
-        ck("an unknown helper is refused", False, "no error")
-    except TypeError as e:
-        ck("an unknown helper is refused", "nope" in str(e), str(e))
-    calls = []
-    admin_no = Host(FakeStore(), is_admin=lambda r: False,
-                    err=lambda e, code=400: calls.append((str(e), code)))
-    try:
-        admin_no.require_admin(object())
-    except Exception:
-        pass
-    ck("require_admin asks err for a 403", calls == [("this needs an admin", 403)], calls)
-    yes = Host(FakeStore(), is_admin=lambda r: True)
-    ck("require_admin passes an admin", yes.require_admin(object()) is None)
+        no.require_admin(SimpleNamespace(state=SimpleNamespace(scopes=["read"])))
+        ck("require_admin refuses a non-admin with a 403", False, "no error")
+    except Exception as e:
+        ck("require_admin refuses a non-admin with a 403", getattr(e, "status_code", None) == 403
+           and getattr(e, "detail", "") == "this needs an admin", repr(e))
+    ck("require_admin passes an admin",
+       no.require_admin(SimpleNamespace(state=SimpleNamespace(scopes=["admin"]))) is None)
 
 
 asyncio.run(main())

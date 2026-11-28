@@ -28,6 +28,7 @@ from .. import docs as docs_mod
 from .. import factory as factory_mod
 from ..envelope import now_utc
 from ..factory_home import _dt, plain_ago
+from ..deps import Deps
 
 # the documents the page shows, in reading order, and the word for each
 SHOWN = ("spec", "plan", "agents", "memory")
@@ -97,7 +98,8 @@ def blocks(body: str) -> list[dict]:
     return out
 
 
-def register(app, store, h, ctx):
+def register(app, h: Deps):
+    store = h.store
     def roles() -> dict[str, str]:
         """{station name: role} of the crew's sessions."""
         try:

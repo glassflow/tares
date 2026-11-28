@@ -14,7 +14,7 @@ ee at all the same paths answer from `tares.team.FALLBACKS`. The MCP tool is in 
 Without ee a grant that is already waiting stays waiting: nothing here runs, so nothing settles it,
 it is not copied into the grants docs, and it can only be revoked (core).
 
-`c` is the namespace `factory_api.team_reader()` builds: `store`, `h` (the host helpers),
+`c` is the namespace `factory_api.team_reader()` builds: `store`, `h` (the daemon's Deps),
 `mirror_in`, `mirror_out`, `visible_grant` and `grants_view`.
 """
 from __future__ import annotations
@@ -136,17 +136,17 @@ def grant_or_404(c, gid: str, request: Request) -> dict:
     return g
 
 
-def register_routes(app, host) -> None:
-    store = host.store
+def register_routes(app, deps) -> None:
+    store = deps.store
 
     def need_licence():
         if not licence.ee_allowed():
-            host.licence_required(NEEDS_LICENCE)
+            deps.licence_required(NEEDS_LICENCE)
 
     def deny(request: Request, action: str) -> None:
         why = factory_mod.may(caller(request), action)
         if why:
-            host.err(PermissionError(why), 403)
+            deps.err(PermissionError(why), 403)
 
     def console_via(request: Request) -> str | None:
         """"console" for a person acting on the page (no station header), else None."""
@@ -155,11 +155,11 @@ def register_routes(app, host) -> None:
     def answered(request: Request, g: dict, yes: bool, said: str) -> None:
         """The record of the answer (TR-1451). A grant over a project hidden from the person who
         answers keeps its words out of the record, as Home keeps them off its row."""
-        hidden = bool(g.get("project") and g["project"] in host.hidden_ids())
-        person = host.current_person(request)
+        hidden = bool(g.get("project") and g["project"] in deps.hidden_ids())
+        person = deps.current_person(request)
         answers_mod.record(
             store, request, item=f"grant:{g['id']}", kind="grant", project=g.get("project"),
-            ask=grant_ask(g, hidden, owned_by(host.area_owner, g, person["id"] if person else None)),
+            ask=grant_ask(g, hidden, owned_by(deps.area_owner, g, person["id"] if person else None)),
             choice="yes" if yes else "no", said=said,
             via=None if console_via(request) else "session",
             person_id=person["id"] if person else None)
@@ -170,16 +170,16 @@ def register_routes(app, host) -> None:
         when the giver is neither, says yes. Only someone it is waiting for may, even on a private
         project they are not in; the grant takes effect when the last of them has."""
         need_licence()
-        c = host.team_reader()
+        c = deps.team_reader()
         deny(request, "grants")
         g = grant_or_404(c, gid, request)
-        person = host.current_person(request)
+        person = deps.current_person(request)
         if g["state"] != "waiting":
-            host.err(ValueError(f"{g['id']} is {g['state']}; there is nothing to consent to"), 409)
+            deps.err(ValueError(f"{g['id']} is {g['state']}; there is nothing to consent to"), 409)
         how = waits_for_me(c, g, request)
         if how is None:
             names = ", ".join(w["name"] or w["id"] for w in waiting_for(c, g))
-            host.err(PermissionError(f"{g['id']} waits for {names or 'no one'}; this key is not "
+            deps.err(PermissionError(f"{g['id']} waits for {names or 'no one'}; this key is not "
                                      "one of them"), 403)
         entry = {"person_id": person["id"] if person else "system", "at": now_utc().isoformat()}
         if how == "admin":
@@ -189,9 +189,9 @@ def register_routes(app, host) -> None:
         consents = g["consents"] + [entry]
         # only while it still waits: a decline that came since the read must stay a decline
         if not store.consent_waiting_grant(g["id"], consents):
-            host.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to consent to"), 409)
+            deps.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to consent to"), 409)
         answered(request, g, True, "Agree")
-        g = settle(c, {**g, "consents": consents}, host.by(request, None))
+        g = settle(c, {**g, "consents": consents}, deps.by(request, None))
         if g["state"] == "waiting":
             g = store.get_grant_row(g["id"])
         return {"grant": c.grants_view([g])[0]}
@@ -203,20 +203,20 @@ def register_routes(app, host) -> None:
         from where and why. Only someone it is waiting for may; a grant that is not waiting
         answers 409."""
         need_licence()
-        c = host.team_reader()
+        c = deps.team_reader()
         deny(request, "grants")
         g = grant_or_404(c, gid, request)
-        person = host.current_person(request)
+        person = deps.current_person(request)
         if g["state"] != "waiting":
-            host.err(ValueError(f"{g['id']} is {g['state']}; there is nothing to decline"), 409)
+            deps.err(ValueError(f"{g['id']} is {g['state']}; there is nothing to decline"), 409)
         how = waits_for_me(c, g, request)
         if how is None:
             names = ", ".join(w["name"] or w["id"] for w in waiting_for(c, g))
-            host.err(PermissionError(f"{g['id']} waits for {names or 'no one'}; this key is not "
+            deps.err(PermissionError(f"{g['id']} waits for {names or 'no one'}; this key is not "
                                      "one of them"), 403)
         reason = str(body.get("reason") or "").strip()
         if len(reason) > 1000:
-            host.err(ValueError("keep the reason to 1000 characters"))
+            deps.err(ValueError("keep the reason to 1000 characters"))
         entry = {"person_id": person["id"] if person else "system", "at": now_utc().isoformat(),
                  "declined": True}
         if reason:
@@ -227,6 +227,6 @@ def register_routes(app, host) -> None:
             entry["via"] = "console"
         # a waiting grant was never in effect, so there is nothing to take out of the grants doc
         if not store.decline_waiting_grant(g["id"], g["consents"] + [entry]):
-            host.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to decline"), 409)
+            deps.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to decline"), 409)
         answered(request, g, False, reason or "Decline")
         return {"grant": c.grants_view([store.get_grant_row(g["id"])])[0]}
