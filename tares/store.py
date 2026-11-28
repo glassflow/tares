@@ -1963,10 +1963,13 @@ class Store(FactoryStore, ClaudeUsageStore):
         # one transaction: the guard above answers False once removed_at is set, so a crash must
         # not leave it set with the tickets still theirs
         with self._swrite, self.sessions_db.begin() as conn:
-            # open tickets only: a finished one keeps the name of who did it
+            # open tickets only: a finished one keeps the name of who did it. A NULL status or
+            # stage is open (NOT IN is not true for NULL, TR-1692)
             conn.execute(update(t).where(
-                t.c.assignee_person_id == pid, t.c.status.not_in(("done", "canceled")),
-                t.c.stage.not_in(("merged", "shipped"))).values(assignee_person_id=None))
+                t.c.assignee_person_id == pid,
+                or_(t.c.status.is_(None), t.c.status.not_in(("done", "canceled"))),
+                or_(t.c.stage.is_(None), t.c.stage.not_in(("merged", "shipped"))))
+                .values(assignee_person_id=None))
             # what they led or held is nobody's now: it falls to the next owner in line
             # (factory_owners), and the project says it has no lead
             conn.execute(update(projects_table).where(
