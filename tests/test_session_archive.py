@@ -42,7 +42,7 @@ PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 1, 8, 0, 0, tzinfo=timezone.utc)
 NOW = T0 + timedelta(days=30)               # a month on: every session of the test is over a week old
-HEAD = "0025_integration_keys_pr_events"
+HEAD = "0026_drop_catalog_sources"
 SRC = "claude_code"
 _N = [0]
 os.environ.pop("TARES_ARCHIVE_URL", None)
@@ -441,19 +441,6 @@ def failures():
        and parts_of(s, "gone") == [] and out.getvalue() == "" and counter("ARCHIVE_FAILURES") == fails0,
        (moved, parts_of(s, "gone"), out.getvalue()))
     s.close()
-
-    print("== purging a source takes its parts too ==")
-    s = open_store()
-    b = FileBackend(tempfile.mkdtemp())
-    s.upsert_catalog_source("claude_code", "claude_code", "claude_code", "", {})
-    ready(s, "p", n=2)
-    session_archive.archive_pass(s, b, NOW)
-    ck("a part exists", len(parts_of(s, "p")) == 1)
-    s.purge_events(SRC)
-    ck("the purge deleted the part rows with the session", parts_of(s, "p") == [] and flags(s, "p") is None,
-       (parts_of(s, "p"), flags(s, "p")))
-    s.close()
-
 
 def backends():
     print("== FileBackend ==")

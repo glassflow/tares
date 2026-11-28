@@ -4,7 +4,7 @@ Each tool is a row: {key, name, connected, detail, short, covers, href}. `detail
 connected ("Connected as the GitHub App on glassflow"), `short` is the part the home's chip shows
 after the name ("glassflow"), and `covers` says what it is used for here, from what the cell
 already stores: the repos the open factory projects build in (GitHub), the projects that sync with
-Linear, the channels the cell's agents post to (Slack), the last session (Claude Code). A private
+Linear, where the standup posts (Slack), the last session (Claude Code). A private
 project the caller is not on is left out of every `covers`. Every string is worded for people;
 account, repo, project and channel names are the person's own text.
 """
@@ -96,13 +96,8 @@ def slack(store) -> dict:
     except ValueError:
         team = {}
     who = _text(team.get("name")) if isinstance(team, dict) else ""
-    channels = []
-    for a in _safe(store.list_catalog_agents, []) or []:
-        ch = _text(a.get("slack_channel")).lstrip("#")
-        if ch and f"#{ch}" not in channels:
-            channels.append(f"#{ch}")
-    covers = (f"Agents post to {_list(channels)}" if channels
-              else "No agent posts to a channel yet; the standup asks where to post each time")
+    # nothing posts to a fixed channel since agents went (TR-1810): the standup asks each time
+    covers = "No agent posts to a channel yet; the standup asks where to post each time"
     return {**row, "connected": True, "short": who or None, "covers": covers,
             "detail": f"Connected to the {who} workspace" if who else "Connected"}
 

@@ -1,7 +1,7 @@
 """Recording a Codex station's session (TR-1595): the crew's recorder and the cell's /ingest/codex.
 
 The recorder (`tares.crew.codex_record`) builds facts from what a visit reads of a station (the conversation
-as `thread/read` gives it) and from the guard's record; the cell (`tares.connectors.codex`) turns them into
+as `thread/read` gives it) and from the guard's record; the cell (`tares.session_codex`) turns them into
 session lines. The conversations here are shaped as Codex 0.171.0 gave them to
 tests/factory/codex_probe/probe_record.py (the item ids are the guard's call ids, a running command is in
 no listing, a killed app-server leaves a turn `interrupted` with no item for the command it cut off).
@@ -26,8 +26,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from tares.connectors import codex as cell  # noqa: E402
-from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
+from tares import session_codex as cell  # noqa: E402
+from tares.session_map import ClaudeCodeLines  # noqa: E402
 from tares.crew import codex_guard  # noqa: E402
 from tares.crew import codex_record as rec  # noqa: E402
 from tares.crew.client import TaresHTTPError  # noqa: E402
@@ -450,7 +450,7 @@ print("f. through a store")
 from tares.store import Store  # noqa: E402
 
 store = Store(str(tmp / "t.duckdb"))
-conn = ClaudeCodeConnector(SimpleNamespace(name="claude_code", type="agent_session", config={}), store)
+conn = ClaudeCodeLines(store, source="claude_code", source_type="agent_session")
 everything = facts1 + facts2 + usage
 envelopes = conn.map_payload(cell.session_lines(everything))
 store.append(envelopes)

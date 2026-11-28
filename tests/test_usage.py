@@ -1,9 +1,9 @@
-"""Instance metering — GET /api/usage. Real daemon: file sizes match the db on disk, per-source
-counts agree with /api/sources, the TARES_MAX_DB_SIZE denominator drives max_bytes/pct_used
-(null when unset), the endpoint is a read scope (ingest-only keys are refused), and the response
-stays fast as the event count grows (no table scan).
+"""Instance metering, GET /api/usage. Real daemon: file sizes match the db on disk, the event count is
+the stored lines (no per source counts since the source catalog went, TR-1811), the TARES_MAX_DB_SIZE
+denominator drives max_bytes/pct_used (null when unset), the endpoint is a read scope (ingest-only
+keys are refused), and the response stays fast as the event count grows (no table scan).
 """
-import asyncio, os, subprocess, sys, time
+import asyncio, json, os, subprocess, sys, time
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,18 +16,6 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-SEED = "/tmp/usage_catalog.yaml"
-with open(SEED, "w") as fh:
-    fh.write("""sources:
-  - name: evt
-    connector: webhook
-    poll: 5s
-    config: {}
-  - name: evt2
-    connector: webhook
-    poll: 5s
-    config: {}
-""")
 DB, PORT = "/tmp/usage.duckdb", "8809"
 AUTH = "root-token"
 BLOCK = 1 << 18   # DuckDB writes in 256KiB blocks; sizes are compared to that tolerance
@@ -52,10 +40,23 @@ def H(tok):
 def _boot(**extra):
     env = {k: v for k, v in clean_env().items()
            if k not in ("TARES_AUTH_TOKEN", "TARES_MAX_DB_SIZE")}
-    env |= {"TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
-            "TARES_OTLP_GRPC_PORT": "off", **extra}
+    env |= {"TARES_DB": DB, "TARES_PORT": PORT, **extra}
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def lines(session, n, size=0):
+    """`n` Claude Code lines of `session`, as the plugin posts them."""
+    return "\n".join(json.dumps({
+        "sessionId": session, "type": "assistant", "cwd": "/w", "uuid": f"{session}-{size}-{i}",
+        "timestamp": "2026-11-27T10:00:00Z",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": f"m{i} " + "x" * size}]}})
+        for i in range(n)) + "\n"
+
+
+async def ingest(cx, B, body, headers=None, **kw):
+    return await cx.post(f"{B}/ingest/claude_code", content=body,
+                         headers={"content-type": "application/x-ndjson", **(headers or {})}, **kw)
 
 
 def _units():
@@ -80,8 +81,8 @@ async def main():
         if not await _wait(f"{B}/health"):
             ck("daemon up", False); return
         async with httpx.AsyncClient() as cx:
-            await cx.post(f"{B}/ingest/evt", json=[{"m": i} for i in range(20)])
-            await cx.post(f"{B}/ingest/evt2", json=[{"m": i} for i in range(5)])
+            await ingest(cx, B, lines("a", 20))
+            await ingest(cx, B, lines("b", 5))
             u = (await cx.get(f"{B}/api/usage")).json()
 
             db, wal = os.path.getsize(DB), (os.path.getsize(DB + ".wal") if os.path.exists(DB + ".wal") else 0)
@@ -96,30 +97,23 @@ async def main():
                u["pct_used"] is not None and 0 <= u["pct_used"] < 100, str(u["pct_used"]))
             ck("ingest not paused on a roomy volume", u["ingest_paused"] is False, str(u))
             ck("events total", u["events"] == 25, str(u["events"]))
-            ck("per-source counts", {s["name"]: s["events"] for s in u["sources"]} == {"evt": 20, "evt2": 5},
-               str(u["sources"]))
-            ck("sources sum to events", sum(s["events"] for s in u["sources"]) == u["events"])
+            ck("no per source counts", u["sources"] == [], str(u["sources"]))
             ck("agent_runs / dispatch_deliveries present",
                u["agent_runs"] == 0 and u["dispatch_deliveries"] == 0, str(u))
 
-            srcs = (await cx.get(f"{B}/api/sources")).json()
-            from_sources = {s["name"]: (s["health"] or {}).get("events_total") for s in srcs}
-            ck("per-source counts agree with /api/sources",
-               all(from_sources.get(s["name"]) == s["events"] for s in u["sources"]), str(from_sources))
-
             # ── cost must not grow with the event count (counter read, not a scan) ──
             t0 = time.perf_counter(); await cx.get(f"{B}/api/usage"); small = time.perf_counter() - t0
-            for _ in range(5):
-                await cx.post(f"{B}/ingest/evt", json=[{"m": i, "text": "x" * 200} for i in range(2000)])
+            for k in range(5):
+                await ingest(cx, B, lines(f"big{k}", 1000, size=300), timeout=120)
             t0 = time.perf_counter(); u2 = (await cx.get(f"{B}/api/usage")).json()
             big = time.perf_counter() - t0
-            ck("counted the new events", u2["events"] == 10025, str(u2["events"]))
-            ck("response time flat at 10k events (no scan)", big < max(0.25, small * 5),
-               f"{small*1000:.1f}ms at 25 events -> {big*1000:.1f}ms at 10k")
+            ck("counted the new events", u2["events"] == 5025, str(u2["events"]))
+            ck("response time flat at 5k events (no scan)", big < max(0.25, small * 5),
+               f"{small*1000:.1f}ms at 25 events -> {big*1000:.1f}ms at 5k")
     finally:
         proc.terminate(); proc.wait(timeout=10)
 
-    # ── a limit the data already exceeds: ingest refused, polls paused, health says why ──
+    # ── a limit the data already exceeds: ingest refused, health says why ──
     proc = _boot(TARES_MAX_DB_SIZE="1Mi")
     try:
         if not await _wait(f"{B}/health"):
@@ -130,13 +124,13 @@ async def main():
                and "ingest paused" in (h.get("detail") or ""), str(h))
             u = (await cx.get(f"{B}/api/usage")).json()
             ck("usage reports ingest paused", u["ingest_paused"] is True and u["max_bytes_source"] == "env", str(u))
-            r = await cx.post(f"{B}/ingest/evt", json=[{"m": "one more"}])
+            r = await ingest(cx, B, lines("late", 1))
             ck("push ingest refused with 507", r.status_code == 507 and "ingest paused" in r.text, f"{r.status_code} {r.text[:120]}")
-            r = await cx.post(f"{B}/v1/logs", json={"resourceLogs": []}, headers={"x-tares-source": "evt"})
-            ck("OTLP ingest refused with 507 too", r.status_code == 507, str(r.status_code))
-            ck("reads still work", (await cx.get(f"{B}/api/sources")).status_code == 200)
+            r = await cx.post(f"{B}/ingest/github_app-0000000000000000", json={})
+            ck("a webhook delivery is refused with 507 too", r.status_code == 507, str(r.status_code))
+            ck("reads still work", (await cx.get(f"{B}/api/projects")).status_code == 200)
             u2 = (await cx.get(f"{B}/api/usage")).json()
-            ck("nothing was stored while paused", u2["events"] == 10025, str(u2["events"]))
+            ck("nothing was stored while paused", u2["events"] == 5025, str(u2["events"]))
     finally:
         proc.terminate(); proc.wait(timeout=10)
 
@@ -159,9 +153,9 @@ async def main():
             expect = round(100 * (u["db_bytes"] + u["wal_bytes"]) / (1 << 30), 2)
             ck("pct_used = (db+wal)/max as a percentage", u["pct_used"] == expect and u["pct_used"] > 0,
                f"{u['pct_used']} vs {expect}")
-            ck("counts survived the restart", u["events"] == 10025, str(u["events"]))
+            ck("counts survived the restart", u["events"] == 5025, str(u["events"]))
             ck("ingest resumes under a roomier limit", u["ingest_paused"] is False
-               and (await cx.post(f"{B}/ingest/evt", json=[{"m": "after"}], headers=H(ing_key))).status_code == 202)
+               and (await ingest(cx, B, lines("after", 1), headers=H(ing_key))).status_code == 202)
     finally:
         proc.terminate(); proc.wait(timeout=10)
 

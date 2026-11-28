@@ -34,7 +34,6 @@ replaced or dropped entry takes its shares with it. Not counted: what a read hol
 from __future__ import annotations
 
 import itertools
-import json
 import sys
 import threading
 import time
@@ -300,22 +299,8 @@ def of(store) -> Digest:
 
 # ── keeping it bounded ───────────────────────────────────────────────────────
 def _horizon(store) -> timedelta:
-    """`HORIZON_DAYS`, or the longest window a trigger over a claude_code source asks for."""
-    longest = timedelta(days=HORIZON_DAYS)
-    try:
-        from .config import parse_duration
-        from .session_ingest import claude_code_sources
-        ours = claude_code_sources(store)
-        for trig in store.list_catalog_triggers():
-            sources, cond = trig.get("sources") or [], trig.get("condition") or {}
-            sources = json.loads(sources) if isinstance(sources, str) else sources
-            cond = json.loads(cond) if isinstance(cond, str) else cond
-            window = cond.get("window") or cond.get("every")
-            if window and ours & set(sources):
-                longest = max(longest, timedelta(seconds=parse_duration(window)) + timedelta(days=1))
-    except Exception:
-        pass                                     # a longer window is then read again each time
-    return longest
+    """`HORIZON_DAYS` (triggers, whose windows could ask for longer, went in TR-1810)."""
+    return timedelta(days=HORIZON_DAYS)
 
 
 def _old(digest: Digest, entry: Entry) -> bool:

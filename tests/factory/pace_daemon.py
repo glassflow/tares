@@ -68,9 +68,6 @@ async def main() -> int:
 
     async with app.router.lifespan_context(app):
         async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            assert r.status_code < 300, r.text
             show(settings=(await cx.get("/api/crew/settings")).json().get("pace", "missing"),
                  pace=(await cx.get("/api/crew/pace")).json())
             await cx.put("/api/crew/settings", json={"pace": True})

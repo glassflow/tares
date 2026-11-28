@@ -48,7 +48,7 @@ async def fake_ee_on():
 
 def surface(edition):
     async def _s():
-        return (edition, False)
+        return edition
     return _s
 
 
@@ -103,8 +103,8 @@ after = names()
 ck("the tool list is what it was", after == base, str(set(after) ^ set(base)))
 ck("_ee_on is never awaited", ASKED == 0, str(ASKED))
 ck("_visible keeps its answer with the default ee_on",
-   ms._visible("read", "factory", False, False) is False and ms._visible("read", "", True, False) is True
-   and ms._visible("answer_question", "factory", False, False) is True)
+   ms._visible("what_needs_me", "platform", False) is False and ms._visible("what_needs_me", "", False) is True
+   and ms._visible("answer_question", "factory", False) is True)
 
 print("== a team that raises, a name clash ==")
 team_mod._set_ee_for_tests(Boom())
@@ -149,7 +149,7 @@ print("== an ee team with one tool ==")
 team_mod._set_ee_for_tests(FakeTeam([ee_ping]))
 ms._register_ee_tools()
 ck("EE_TOOLS is {ee_ping}", ms.EE_TOOLS == {"ee_ping"}, str(ms.EE_TOOLS))
-ck("ee_ping is in no core set", not ({"ee_ping"} & (ms.FACTORY_TOOLS | ms.FACTORY_ONLY | ms.OBJECT_TOOLS)))
+ck("ee_ping is in no core set", not ({"ee_ping"} & (ms.FACTORY_TOOLS | ms.FACTORY_ONLY)))
 
 ALLOWED = False
 n = names()

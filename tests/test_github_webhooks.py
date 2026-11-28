@@ -5,11 +5,13 @@ with the App credential's webhook secret, keeps a `pull_request` event in `pr_ev
 GitHub hub. `factory_branch_prs` reads `pr_events`, so a ticket in the work gets its pull request by
 its factory/<ref> branch from a delivery alone. Run against a real daemon:
 
-  * connecting an App credential writes its key to integration_keys, the key the answer names;
+  * connecting an App credential writes its key to integration_keys, the key the answer names, its
+    events under `github` (a second App's under `github_<credential>`);
   * a signed pull_request delivery answers 202, lands in pr_events and is told to the hub;
   * a redelivery (same delivery id) adds no row; an unsigned or wrongly signed one answers 401 and
     adds nothing;
   * factory_branch_prs names the pull request for the ticket ref of its branch;
+  * the settings row shows the key and the deliveries; a key that is no App's answers 404;
   * rows older than 30 days go when new ones are kept.
 
 Run: python tests/test_github_webhooks.py
@@ -25,8 +27,8 @@ scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-gh-hooks-")
 AUTH = "root-token-gh-hooks"
-os.environ.update({"TARES_DB": os.path.join(TMP, "gh.duckdb"), "TARES_CATALOG": os.path.join(TMP, "none.yaml"),
-                   "TARES_AUTH_TOKEN": AUTH, "TARES_OTLP_GRPC_PORT": "off", "TARES_EDITION": "factory"})
+os.environ.update({"TARES_DB": os.path.join(TMP, "gh.duckdb"), "TARES_AUTH_TOKEN": AUTH,
+                   "TARES_EDITION": "factory"})
 
 import httpx
 
@@ -73,6 +75,9 @@ async def main():
         row = store.integration_key(key or "")
         ck("the key is in integration_keys, the ci_github integration's, for the credential",
            bool(row) and row["integration"] == "ci_github" and row["credential"] == "cloud", str(row))
+        ck("its events go under `github`, as the answer says", r.json().get("source") == "github"
+           and (row or {}).get("source") == "github" and key.startswith("github_app-")
+           and len(key) == len("github_app-") + 16, r.text[:200])
 
         async def deliver(payload, delivery, secret=SECRET, event="pull_request"):
             raw = json.dumps(payload).encode()
@@ -105,33 +110,29 @@ async def main():
         ck("factory_branch_prs names the pull request of a factory/<ref> branch, and no other",
            seen == {("acme/app", "T12"): ("acme/app", 7)}, str(seen))
 
-        print("== the source and the credential ==")
-        src = row["source"]
-        r = await cx.post(f"/api/sources/{src}/pause")
-        r2 = await deliver(pr_payload(10, "factory/T14"), "d-5")
-        ck("a paused GitHub source refuses its deliveries again", r.status_code in (200, 204) and r2.status_code == 400,
-           f"{r.status_code} {r2.status_code} {r2.text[:120]}")
-        await cx.post(f"/api/sources/{src}/resume")
-        store.put_integration_key("github_app-new", "ci_github", "cloud", src)
+        print("== the settings row, a second App, an unknown key ==")
+        r = await cx.get("/api/integrations/github")
+        cred = next((c for c in r.json()["credentials"] if c["name"] == "cloud"), {})
+        d = cred.get("deliveries") or {}
+        ck("the settings row names the key, the source and the deliveries", cred.get("ingest_key") == key
+           and cred.get("source") == "github" and d.get("received") == 3 and d.get("stored") == 2 and d.get("rejected_signature") == 2
+           and cred.get("sources") == [] and cred.get("mcp_servers") == [], str({k: cred.get(k) for k in ("ingest_key", "source", "deliveries", "sources", "mcp_servers")}))
+        r = await cx.post("/api/integrations/github", json={
+            "name": "second", "kind": "app_broker", "token_url": "https://broker.test/t",
+            "broker_secret": "broker-secret", "installation_id": 102, "account": "beta",
+            "webhook_secret": SECRET})
+        ck("a second App's events go under github_<credential>", r.status_code == 201
+           and r.json().get("source") == "github_second" and r.json().get("ingest_key") != key, r.text[:200])
+        r = await cx.post("/ingest/github_app-0000000000000000", json={})
+        ck("a key that is no App's answers 404", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
+        r = await anon.post("/ingest/github_app-0000000000000000", json={})
+        ck("and with no credential, 401", r.status_code == 401, f"{r.status_code} {r.text[:120]}")
+        store.put_integration_key("github_app-new", "ci_github", "cloud", "github")
         ck("a new key for the same credential replaces its old one",
            store.integration_key(key) is None and store.integration_key("github_app-new") is not None)
         r = await cx.delete("/api/integrations/github/cloud")
         ck("deleting the credential removes its webhook key", r.status_code == 200
            and store.integration_key("github_app-new") is None, r.text[:200])
-
-        print("== a token's poll ==")
-        from tares.config import SourceCfg
-        from tares.envelope import Envelope
-        runtime = app.state.runtime
-        runtime.catalog.sources["gh_poll"] = SourceCfg(name="gh_poll", type="event_stream", connector="github",
-                                                       poll_seconds=0)
-        polled = Envelope(source="gh_poll", source_type="event_stream", key_value="acme/app#21",
-                          event_type="pull_request", text="PR 21", event_time=now_utc(),
-                          labels={"repo": "acme/app", "number": "21", "branch": "factory/T21", "action": "opened"},
-                          payload={"_github_delivery": "poll-21"})
-        await runtime._store_envelopes("gh_poll", [polled])
-        seen = store.factory_branch_prs({"acme/app"})
-        ck("a pull request a token's poll stores is kept in pr_events too", ("acme/app", "T21") in seen, str(seen))
 
         print("== 30 days ==")
         old = now_utc() - timedelta(days=40)

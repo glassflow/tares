@@ -17,9 +17,6 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-SEED = "/tmp/degraded_catalog.yaml"
-with open(SEED, "w") as fh:
-    fh.write("sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n    config: {}\n")
 OK_DB, BAD_DB, LOCK_DB = "/tmp/degraded_ok.duckdb", "/tmp/degraded_bad.duckdb", "/tmp/degraded_lock.duckdb"
 STATE_DB = "/tmp/degraded_state.duckdb"
 PORT, PORT2 = "8811", "8812"
@@ -28,7 +25,7 @@ PORT, PORT2 = "8811", "8812"
 def _boot(db, port, **extra):
     env = {k: v for k, v in clean_env().items()
            if k not in ("TARES_AUTH_TOKEN", "TARES_MAX_DB_SIZE")}
-    env |= {"TARES_DB": db, "TARES_CATALOG": SEED, "TARES_PORT": port,
+    env |= {"TARES_DB": db, "TARES_PORT": port,
             "TARES_OTLP_GRPC_PORT": "off", **extra}
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -100,13 +97,11 @@ async def main():
         ck("a daemon that could not start lists no capabilities", h and h.get("capabilities") == [], h)
         ck("names the problem", h and BAD_DB in (h.get("detail") or ""), h)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{PORT}") as cx:
-            r = await cx.get("/api/sources", timeout=5)
-            ck("/api/sources is 503, not a bare 500", r.status_code == 503, r.status_code)
+            r = await cx.get("/api/projects", timeout=5)
+            ck("/api/projects is 503, not a bare 500", r.status_code == 503, r.status_code)
             ck("…with a reason the console can render",
                "unavailable" in (r.json().get("detail") or ""), r.text)
-            r = await cx.post("/read", json={"selector": {"service": "y"}}, timeout=5)
-            ck("/read is 503", r.status_code == 503, r.status_code)
-            r = await cx.post("/ingest/evt", json={}, timeout=5)
+            r = await cx.post("/ingest/claude_code", json={}, timeout=5)
             ck("ingest is 503 (a producer learns the write was refused)", r.status_code == 503,
                r.status_code)
             r = await cx.get("/", timeout=5)
@@ -128,7 +123,7 @@ async def main():
         ck("second daemon starts instead of crashing", h2 is not None)
         ck("second daemon is not ok", h2 and h2["status"] != "ok", h2)
         async with httpx.AsyncClient() as cx:
-            r = await cx.get(f"http://127.0.0.1:{PORT2}/api/sources", timeout=5)
+            r = await cx.get(f"http://127.0.0.1:{PORT2}/api/projects", timeout=5)
             ck("second daemon 503s its API", r.status_code == 503, r.status_code)
         h = await _health(PORT)
         ck("first daemon still ok", h and h["status"] == "ok", h)
@@ -168,7 +163,7 @@ async def main():
             ck("…and still says why", r is not None and r.json().get("status") == "down"
                and "database" in (r.json().get("detail") or ""), r and r.text)
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{PORT}") as cx:
-                r = await cx.get("/api/sources", timeout=5)
+                r = await cx.get("/api/projects", timeout=5)
                 ck("its API is 503", r.status_code == 503, r.status_code)
         finally:
             proc.terminate(); proc.wait(timeout=10)

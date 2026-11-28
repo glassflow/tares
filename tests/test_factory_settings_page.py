@@ -182,8 +182,6 @@ async def main():
             t = (await cx.get("/api/factory/settings")).json()["tools"]
             ck("GitHub connected with a token says as whom",
                t[0]["connected"] is True and t[0]["detail"] == "Connected as example-org", t[0])
-            r = await cx.post("/api/sources", json={"name": "claude-code", "type": "ingest",
-                                                    "connector": "claude_code", "config": {}})
             ts = datetime.now(timezone.utc) - timedelta(minutes=2)
             await cx.post("/ingest/claude_code", headers={"Content-Type": "application/x-ndjson"},
                           content=json.dumps({"type": "user", "sessionId": "s1", "cwd": "/w",

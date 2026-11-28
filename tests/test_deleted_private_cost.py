@@ -163,9 +163,6 @@ async def main():
             return got
 
         store._append_session_first = remember
-        r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}})
-        assert r.status_code < 300, r.text
         for uid, name in ((SECRET, "project-secret"), (OPEN, "project-open"), (OTHER, "project-other")):
             store.create_project(uid, "custom", name, {}, goal="A project with a cost")
             store.set_project_kind(uid, "software_factory")

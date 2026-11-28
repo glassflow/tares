@@ -12,9 +12,6 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-SEED = "/tmp/auth_catalog.yaml"
-with open(SEED, "w") as fh:
-    fh.write("sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n    config: {}\n")
 DB, PORT, TOKEN = "/tmp/auth.duckdb", "8804", "sekret-123"
 LOGIN = "https://app.tares-glassflow.com/login"   # cloud login handoff (TARES_LOGIN_URL)
 
@@ -33,7 +30,7 @@ async def _wait(url):
 
 async def main():
     remove_db(DB)
-    env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
+    env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": PORT,
            "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": TOKEN, "TARES_LOGIN_URL": LOGIN}
     proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -50,20 +47,18 @@ async def main():
             ck("console SPA shell public (GET /)", (await cx.get(f"{B}/")).status_code != 401)
             ck("static assets public (GET /assets/x)", (await cx.get(f"{B}/assets/whatever.js")).status_code != 401)
 
-            ck("API without token -> 401", (await cx.get(f"{B}/api/connectors")).status_code == 401)
-            ck("API with bearer token -> 200", (await cx.get(f"{B}/api/connectors", headers=auth)).status_code == 200)
-            ck("API with X-Tares-Token -> 200", (await cx.get(f"{B}/api/sources", headers={"X-Tares-Token": TOKEN})).status_code == 200)
-            ck("API with wrong token -> 401", (await cx.get(f"{B}/api/connectors", headers={"Authorization": "Bearer nope"})).status_code == 401)
+            ck("API without token -> 401", (await cx.get(f"{B}/api/projects")).status_code == 401)
+            ck("API with bearer token -> 200", (await cx.get(f"{B}/api/projects", headers=auth)).status_code == 200)
+            ck("API with X-Tares-Token -> 200", (await cx.get(f"{B}/api/projects", headers={"X-Tares-Token": TOKEN})).status_code == 200)
+            ck("API with wrong token -> 401", (await cx.get(f"{B}/api/projects", headers={"Authorization": "Bearer nope"})).status_code == 401)
 
-            ck("POST /read without token -> 401", (await cx.post(f"{B}/read", json={"selector": {"a": "b"}})).status_code == 401)
-            ck("POST /read with token -> not 401", (await cx.post(f"{B}/read", json={"selector": {"a": "b"}}, headers=auth)).status_code != 401)
-            ck("catalog export protected", (await cx.get(f"{B}/api/catalog/export")).status_code == 401)
+            ck("a write without token -> 401", (await cx.post(f"{B}/api/projects", json={})).status_code == 401)
 
             # a secured instance gates ingest too: with any root token configured, anonymous
             # events would poison the timelines agents trust. The auth token itself ingests.
-            ig = await cx.post(f"{B}/ingest/evt", json={"app": "a", "msg": "hi"})
+            ig = await cx.post(f"{B}/ingest/claude_code", json=[])
             ck("anonymous ingest denied when auth is on (401)", ig.status_code == 401, str(ig.status_code))
-            ig2 = await cx.post(f"{B}/ingest/evt", json={"app": "a", "msg": "hi"}, headers=auth)
+            ig2 = await cx.post(f"{B}/ingest/claude_code", json=[], headers=auth)
             ck("auth token ingests (202)", ig2.status_code == 202, str(ig2.status_code))
     finally:
         proc.send_signal(signal.SIGTERM)

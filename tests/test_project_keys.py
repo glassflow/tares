@@ -2,10 +2,10 @@
 
 A project key reads ONE project; every other route answers 403. The sweep walks every route the
 daemon serves, so a route added later without a decision for project keys shows up here as a
-failure rather than as a hole. Then: reads, stats, catalog and project listings narrowed to the
-project; its timeline only; revoking the key; the MCP tools; and the same tools on an open
-instance, where they pick the project by name. (Skills, findings and subscribing to a project
-went with Tares agents and triggers, TR-1810.)
+failure rather than as a hole. Then: project listings narrowed to the project; its timeline only;
+revoking the key; the MCP tools; and the same tools on an open instance, where they pick the project
+by name. (Skills, findings and subscribing to a project went with Tares agents and triggers, TR-1810;
+reads, stats and the catalog with the source catalog, TR-1811.)
 
 Run: .venv/bin/python tests/test_project_keys.py
 """
@@ -21,15 +21,11 @@ DB = os.path.join(TMP, "keys.duckdb")
 OPEN_DB = os.path.join(TMP, "keys-open.duckdb")
 ROOT = "root-token-project-keys"
 os.environ["TARES_DB"] = DB
-os.environ["TARES_CATALOG"] = os.path.join(TMP, "catalog.yaml")
-os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
 import httpx
 from fastapi.routing import APIRoute
-
-from tares.config import FINDINGS_SOURCE
 
 P = F = 0
 
@@ -39,15 +35,6 @@ def ck(label, cond, detail=""):
     P += 1 if cond else 0
     F += 0 if cond else 1
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
-
-
-def source(name):
-    return {"name": name, "connector": "webhook", "poll": "5s",
-            "config": {"event_type": "log", "text_template": "{msg}",
-                       "labels": [{"name": "service", "field": "service", "primary": True}]}}
-
-
-COND = {"aggregate": "count", "predicate": "> 0", "window": "5m"}
 
 
 def H(tok):
@@ -66,7 +53,6 @@ async def main():
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                headers=H(ROOT))
-        store = app.state.store
 
         async def mk(kind, body, code=201):
             r = await cx.post(f"/api/{kind}", json=body)
@@ -75,14 +61,6 @@ async def main():
 
         a = (await mk("projects", {"template": "custom", "name": "Alpha", "objects": []}))["id"]
         b = (await mk("projects", {"template": "custom", "name": "Beta", "objects": []}))["id"]
-        await mk("sources", {**source("evt_a"), "project": a})
-        await mk("sources", {**source("evt_b"), "project": b})
-        # the triggers are catalog rows only now (no route makes one, nothing evaluates them)
-        for name, src, proj in (("watch_a", "evt_a", a), ("watch_b", "evt_b", b)):
-            store.upsert_catalog_trigger(name, [src], COND, {}, "1h", key_field="service")
-            store.put_in_project("trigger", name, proj)
-        app.state.runtime.reload_catalog()
-
         print("== creating project keys ==")
         r = await cx.post(f"/api/projects/{a}/keys", json={"name": "claude-code"})
         ck("POST /api/projects/{uid}/keys makes a project key",
@@ -117,24 +95,18 @@ async def main():
         ck("whoami names the key's project", who.get("project") == a
            and who.get("project_name") == "Alpha", str(who))
 
-        # something to read: events in both projects' sources
-        await cx.post("/ingest/evt_a", json={"service": "checkout", "msg": "alpha 500"})
-        await cx.post("/ingest/evt_b", json={"service": "checkout", "msg": "beta 500"})
-
         print("== every route, as a project key ==")
-        vals = {"uid": b, "name": "evt_b", "handle": "source:evt_b", "token": "evt_b",
+        vals = {"uid": b, "name": "evt_b", "token": "github_app-0000000000000000",
                 "kid": kid_a2, "sid": "s", "dispatch_id": "d", "run_id": "r",
                 "provider_id": "anthropic", "key": "custom", "path": "x"}
         # reachable without any credential: their own authentication or nothing to protect
-        public = {("GET", "/health"), ("GET", "/metrics"), ("GET", "/ingest/{token}"),
+        public = {("GET", "/health"), ("GET", "/metrics"),
                   ("POST", "/api/slack/events"), ("GET", "/{path:path}"),
-                  ("GET", "/derive"),   # a GET outside /api is the console's; this one says views are gone
                   # GitHub sends the browser back here: gated by a signed state / proof of ownership
                   ("GET", "/api/integrations/github/apps/callback"),
                   ("GET", "/api/integrations/github/apps/installed")}
         # allowed, and narrowed to the key's project by the handler
-        scoped = {("GET", "/api/whoami"), ("POST", "/read"), ("GET", "/catalog"),
-                  ("GET", "/catalog/{handle}"), ("GET", "/api/projects")}
+        scoped = {("GET", "/api/whoami"), ("GET", "/api/projects")}
         bad = []
         n = 0
         for route in app.routes:
@@ -149,10 +121,7 @@ async def main():
                                      **({"json": {}} if method in ("POST", "PUT") else {}))
                 n += 1
                 if key in scoped:
-                    if key == ("GET", "/catalog/{handle}"):
-                        if r.status_code != 403:   # another project's source
-                            bad.append((method, path, r.status_code))
-                    elif r.status_code in (401, 403):
+                    if r.status_code in (401, 403):
                         bad.append((method, path, r.status_code))
                 elif r.status_code != 403:
                     bad.append((method, path, r.status_code, r.text[:80]))
@@ -160,9 +129,6 @@ async def main():
            str(bad))
         # its OWN project: only reading it
         own_ok = {("GET", "/api/projects/{uid}"), ("GET", "/api/projects/{uid}/timeline"),
-                  ("POST", "/api/projects/{uid}/stats"),
-                  # the goal-first page's reads
-                  ("GET", "/api/projects/{uid}/outline"), ("GET", "/api/projects/{uid}/health"),
                   # docs and tickets (TR-403): what a session building the project reads
                   ("GET", "/api/projects/{uid}/docs"), ("GET", "/api/projects/{uid}/docs/{doc_id}"),
                   ("GET", "/api/projects/{uid}/tickets"),
@@ -197,66 +163,27 @@ async def main():
                     bad.append((method, path, r.status_code))
         ck(f"{n} writes and settings of its own project: 403", not bad, str(bad))
         ck("it is still there", (await cx.get(f"/api/projects/{a}")).status_code == 200)
-        r = await cx.post(f"/api/projects/{b}/stats", json={"by": "service"}, headers=H(key_a))
+        r = await cx.get(f"/api/projects/{b}/timeline", headers=H(key_a))
         ck("the 403 says what the key may do",
            r.status_code == 403 and "only reads project Alpha" in r.text, r.text)
 
         print("== another project's resources, by id and by name ==")
         for label, method, path, body in (
                 ("timeline", "GET", f"/api/projects/{b}/timeline", None),
-                ("stats", "POST", f"/api/projects/{b}/stats", {"by": "service"}),
                 ("the project", "GET", f"/api/projects/{b}", None),
                 ("the project by name", "GET", "/api/projects/Beta", None),
-                ("the source", "GET", "/catalog/source:evt_b", None),
-                ("the trigger", "GET", "/catalog/trigger:watch_b", None),
-                ("the shared findings source", "GET", f"/catalog/source:{FINDINGS_SOURCE}", None),
-                ("an unknown source", "GET", "/catalog/source:nope", None),
-                ("read naming the project", "POST", "/read", {"selector": {"service": "checkout"}, "project": b}),
-                ("read naming it by name", "POST", "/read", {"selector": {"service": "checkout"}, "project": "Beta"}),
-                ("read naming its source", "POST", "/read", {"selector": {"service": "checkout"}, "sources": ["evt_b"]}),
-                ("read naming an unknown source", "POST", "/read", {"selector": {"service": "checkout"}, "sources": ["nope"]}),
-                ("sources list", "GET", "/api/sources", None),
-                ("a source's events", "GET", "/api/sources/evt_b/events", None),
-                ("remember", "POST", "/remember", {"key": "x", "content": "y"}),
-                ("ingest", "POST", "/ingest/evt_a", {"service": "x"}),
-                ("otlp", "POST", "/v1/logs", {}),
-                ("catalog export", "GET", "/api/catalog/export", None)):
+                ("its docs", "GET", f"/api/projects/{b}/docs", None),
+                ("its tickets", "GET", f"/api/projects/{b}/tickets", None),
+                ("ingest", "POST", "/ingest/claude_code", []),
+                ("a webhook key", "POST", "/ingest/github_app-0000000000000000", {})):
             r = await cx.request(method, path, headers=H(key_a),
                                  **({"json": body} if body is not None else {}))
             ck(f"{label}: 403", r.status_code == 403, f"{r.status_code} {r.text[:120]}")
 
         print("== what the key reads is its project ==")
-        r = await cx.post("/read", json={"selector": {"service": "checkout"}, "window": "1h"},
-                          headers=H(key_a))
-        rows = r.json()["rows"]
-        srcs = {x["source"] for x in rows}
-        texts = " ".join(x["text"] for x in rows)
-        ck("/read without a project reads the key's project",
-           r.status_code == 200 and "evt_a" in srcs and "evt_b" not in srcs, str(srcs))
-        ck("its rows are Alpha's, not Beta's", "alpha 500" in texts and "beta 500" not in texts,
-           texts[:300])
-        r2 = await cx.post("/read", json={"selector": {"service": "checkout"}, "window": "1h",
-                                          "project": "Alpha"}, headers=H(key_a))
-        # a row's "offset" is whole seconds since its event, so two reads a second apart differ by it
-        same = lambda xs: [{k: v for k, v in x.items() if k != "offset"} for x in xs]
-        ck("naming its own project by name works",
-           r2.status_code == 200 and same(r2.json()["rows"]) == same(rows), r2.text[:300])
-        st = (await cx.post(f"/api/projects/{a}/stats", json={"by": "service", "window": "1h"},
-                            headers=H(key_a))).json()["stats"]
-        ck("stats over its sources: 1 log event for checkout, not Beta's",
-           "checkout | 1 |" in st, st)
-        cat = (await cx.get("/catalog", headers=H(key_a))).json()
-        ck("/catalog lists its sources, triggers and project only",
-           {s["name"] for s in cat["sources"]} == {"evt_a"}
-           and [t["name"] for t in cat["triggers"]] == ["watch_a"]
-           and [p["id"] for p in cat["projects"]] == [a], json.dumps(cat))
-        d = await cx.get("/catalog/source:evt_a", headers=H(key_a))
-        ck("describing its own source works", d.status_code == 200
-           and all(e["to"] == "trigger:watch_a" for e in d.json()["lineage"]), d.text[:200])
         ps = (await cx.get("/api/projects", headers=H(key_a))).json()["projects"]
         ck("/api/projects lists its project only, without template params",
-           [p["id"] for p in ps] == [a] and "params" not in ps[0]
-           and ps[0]["triggers"] == ["watch_a"], str(ps))
+           [p["id"] for p in ps] == [a] and "params" not in ps[0], str(ps))
         g = await cx.get(f"/api/projects/{a}", headers=H(key_a))
         ck("GET its project", g.status_code == 200 and g.json()["name"] == "Alpha", g.text[:200])
         tl = await cx.get(f"/api/projects/{a}/timeline", headers=H(key_a))
@@ -275,12 +202,9 @@ async def main():
         ck("list_projects: its project", [p["id"] for p in lp] == [a], str(lp))
         ck("naming another project is refused",
            "only" in await m.project_timeline(project="Beta"))
-        ck("read", "alpha 500" in await m.read({"service": "checkout"}, window="1h")
-           and "beta 500" not in await m.read({"service": "checkout"}, window="1h"))
-        ck("stats", "checkout" in await m.stats("service", window="1h"))
         tl = json.loads(await m.project_timeline(limit=5))
         ck("project_timeline", isinstance(tl.get("threads"), list), str(tl)[:200])
-        ck("an admin tool is refused", "only reads project" in await m.list_sources())
+        ck("a list of another project's docs is refused", "only" in await m.list_docs(project="Beta"))
 
         print("== revoking the key ==")
         ck("revoke", (await cx.delete(f"/api/keys/{kid_a}")).status_code == 200)

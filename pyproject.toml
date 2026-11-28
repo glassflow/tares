@@ -21,12 +21,10 @@ dependencies = [
     "httpx>=0.27",
     "fastapi>=0.115",
     "uvicorn>=0.30",
-    "pyyaml>=6",
     "pydantic>=2",
     "mcp>=1.2,<2",   # 2.0 renamed FastMCP->MCPServer and dropped mcp.server.fastmcp (see mcp_server.py)
     "pytz>=2024.1",   # DuckDB needs it to bind tz-aware datetimes to TIMESTAMPTZ
-    "asyncpg>=0.29",  # Postgres connector driver — base so the connector works on `tares up`
-    "anthropic>=0.40",  # the model provider layer (models.py): the summaries and the setup planner
+    "anthropic>=0.40",  # the model provider layer (models.py): the summaries
     # /metrics (metrics.py): Prometheus text format for the daemon's own counters. Pure Python and
     # small, so base: a fleet scrapes every cell without an extra to remember.
     "prometheus-client>=0.20",
@@ -40,9 +38,10 @@ dependencies = [
     "alembic>=1.13",
 ]
 
-# Tests only: tares.crew's JSON schemas are checked with it. Not a runtime dependency.
+# Tests only: tares.crew's JSON schemas are checked with jsonschema, the workflow and changelog tests
+# read YAML. Not runtime dependencies.
 [dependency-groups]
-dev = ["jsonschema>=4"]
+dev = ["jsonschema>=4", "pyyaml>=6"]
 
 [project.urls]
 Homepage = "https://www.glassflow.ai/tares"
@@ -50,10 +49,6 @@ Documentation = "https://docs.glassflow.ai/tares"
 Repository = "https://github.com/glassflow/tares"
 
 [project.optional-dependencies]
-# OTLP gRPC receiver (:4317). The OTLP/HTTP JSON receiver needs none of this; grpcio is a heavy
-# compiled dep, so the gRPC path stays opt-in. (postgres/agent deps are now base — `tares up`
-# ships a working Postgres connector and Ask agent with no extras.)
-otlp-grpc = ["grpcio>=1.60", "opentelemetry-proto>=1.20"]
 # A cell's state in Postgres (TARES_STATE_DSN, state_db.py): the cloud image installs it; a
 # local install keeps its state in DuckDB and needs none of this.
 postgres-state = ["psycopg[binary]>=3.1"]

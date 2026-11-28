@@ -1,6 +1,6 @@
 """The daemon's own counters, served at `GET /metrics` in the Prometheus text format (TR-308).
 
-What a cell is doing, for a fleet dashboard and alerts: events in, poll errors, source health,
+What a cell is doing, for a fleet dashboard and alerts: events in,
 model calls, tokens and spend by provider, database size against its limit, the event loop's lag, and how long each
 HTTP route takes (`tares_http_request_duration_seconds`, TR-652) and where the time of the ticket
 brief, the builder brief and merge-ready goes (`tares_route_phase_seconds`, TR-1476). Labels name the source,
@@ -29,10 +29,6 @@ except ImportError:   # pragma: no cover - the dependency is base; this is belt 
 
 if AVAILABLE:
     EVENTS = Counter("tares_events_ingested_total", "Events stored, per source", ["source"])
-    POLLS = Counter("tares_polls_total", "Poll attempts, per source and outcome",
-                    ["source", "outcome"])   # ok | error | paused
-    SOURCE_STATE = Gauge("tares_source_state", "Source health: 1 for the state the source is in",
-                         ["source", "state"])   # ok | error | paused | push
     MODEL_CALLS = Counter("tares_model_calls_total", "Model calls, per provider and surface",
                           ["provider", "surface"])
     MODEL_TOKENS = Counter("tares_model_tokens_total", "Tokens, per provider, surface and direction",
@@ -122,27 +118,6 @@ def challenges_lost(n: int) -> None:
 def session_lines_to_duckdb(n: int) -> None:
     if AVAILABLE and n:
         SESSION_LINES_TO_DUCKDB.inc(n)
-
-
-def poll(source: str, outcome: str) -> None:
-    if AVAILABLE:
-        POLLS.labels(source=source, outcome=outcome).inc()
-
-
-def source_state(source: str, state: str) -> None:
-    """One-hot: the state the source is in reads 1, the others 0."""
-    if AVAILABLE:
-        for s in ("ok", "error", "paused", "push"):
-            SOURCE_STATE.labels(source=source, state=s).set(1 if s == state else 0)
-
-
-def source_gone(source: str) -> None:
-    if AVAILABLE:
-        for s in ("ok", "error", "paused", "push"):
-            try:
-                SOURCE_STATE.remove(source, s)
-            except KeyError:
-                pass
 
 
 def model_usage(provider: str | None, surface: str, calls: int, input_tokens: int,
@@ -269,7 +244,7 @@ def step(name: str):
 # Path prefixes the API answers under; a request outside them that matched no route is the console
 # (its files and client-side routes), labelled `static` rather than one series per path.
 _CONSOLE_CATCH_ALL = "/{path:path}"   # the daemon's last route, serving the console's index
-_API_PREFIXES = ("/api", "/ingest", "/v1", "/mcp", "/health", "/read")
+_API_PREFIXES = ("/api", "/ingest", "/mcp", "/health")
 
 
 class RequestTiming:
@@ -308,13 +283,11 @@ def prime(sources=(), providers=()) -> None:
     """Create every counter's label set at zero before its first event. A counter that only
     appears when something happens makes `increase()` miss that first event (Prometheus sees a
     series that starts at 1); with the zero sample present, rates and increases are right from
-    the first poll, the first model call. Called on start and on every catalog reload."""
+    the first event, the first model call. Called on start."""
     if not AVAILABLE:
         return
     for s in sources:
         EVENTS.labels(source=s)
-        for o in ("ok", "error", "paused"):
-            POLLS.labels(source=s, outcome=o)
     for p in providers:
         MODEL_UNPRICED.labels(provider=p)
         for surface in ("ask",):   # the summaries' surface (agents and Ask went, TR-1810)

@@ -35,7 +35,7 @@ def H(tok):
 
 def start(db, port, auth):
     remove_db(db)
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
+    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
@@ -58,12 +58,22 @@ async def push(cx, B, tok, body, **headers):
 
 
 async def persons(cx, B, tok, session, text):
-    """The tares_person label of each stored event with `text` in `session`, read back through
-    /read: the id, or None when the event has no such label."""
-    rd = (await cx.post(f"{B}/read", headers=H(tok) if tok else {}, json={
-        "selector": {"session": session}, "window": "3650d", "include_payload": True})).json()
-    return [(r.get("labels") or {}).get("tares_person") for r in rd.get("rows", [])
+    """The tares_person label of each stored line with `text` in `session`, read back through the
+    project's session route (the session is tied to the project `Rec` by its first line): the id, or
+    None when the line has no such label."""
+    hd = H(tok) if tok else {}
+    uid = next(p["id"] for p in (await cx.get(f"{B}/api/projects", headers=hd)).json()["projects"]
+               if p["name"] == "Rec")
+    rd = (await cx.get(f"{B}/api/projects/{uid}/sessions/{session}", headers=hd,
+                       params={"limit": 1000})).json()
+    return [(r.get("labels") or {}).get("tares_person") for r in rd.get("lines", [])
             if (r.get("text") or "") == text]
+
+
+def tie(sid):
+    """The line that ties session `sid` to the project `Rec`."""
+    return json.dumps({"type": "session_project", "sessionId": sid, "cwd": "/tmp/proj",
+                       "timestamp": "2026-10-21T09:59:00Z", "tares_project": "Rec"}) + "\n"
 
 
 async def auth_off():
@@ -74,11 +84,11 @@ async def auth_off():
         if not await _wait(f"{B}/health"):
             ck("daemon up (auth off)", False); return
         async with httpx.AsyncClient() as cx:
-            await cx.post(f"{B}/api/sources",
-                          json={"name": "claude_code", "connector": "claude_code", "config": {}})
-            r = await push(cx, B, None, line("so", "off-plain") + "\n"
+            r = await cx.post(f"{B}/api/projects", json={"template": "custom", "name": "Rec"})
+            ck("auth off: a project to tie the session to", r.status_code == 201, r.text)
+            r = await push(cx, B, None, tie("so") + line("so", "off-plain") + "\n"
                            + line("so", "off-spoof", spoof="p_someone") + "\n")
-            ck("auth off: ingest", r.status_code == 202 and r.json()["ingested"] == 2, r.text)
+            ck("auth off: ingest", r.status_code == 202 and r.json()["ingested"] == 3, r.text)
             lo = await persons(cx, B, None, "so", "off-plain")
             ck("auth off: the label is local", lo == ["local"], str(lo))
             lo = await persons(cx, B, None, "so", "off-spoof")

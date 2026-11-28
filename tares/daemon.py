@@ -1,9 +1,6 @@
-"""taresd — the always-on daemon. Owns the store; runs connector loops + trigger eval; serves
-the local HTTP API (agent surface + management API) and the built-in console UI.
-
-The catalog lives in the store (DB-backed). On first boot with an empty catalog, the YAML file at
-TARES_CATALOG is imported once; from then on YAML is an import/export format, and all source/
-trigger/agent/project management happens over /api (or the UI at /).
+"""taresd: the always-on daemon. Owns the store; takes the session lines and GitHub App webhooks
+in; serves the local HTTP API (the factory's routes and the management API) and the built-in
+console UI. There is no source catalog (Tares 2.0, TR-1811).
 """
 from __future__ import annotations
 
@@ -22,23 +19,17 @@ import uuid
 from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs
 
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
+from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse,
                                Response)
 from pydantic import BaseModel, model_validator
 
 from . import loop as loop_mod
-from .config import (CatalogError, catalog_from_db, export_db_to_yaml,
-                     hidden_objects, import_yaml_to_db, slack_channel_from_url,
-                     validate_source_dict, VIEWS_REMOVED, _source_from_dict)
-from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
-                         source_type_for)
 from .host import Host
 from .projects.icon import normalize_icon
 from .envelope import now_utc
@@ -63,26 +54,16 @@ from . import linear as _linear
 from .integrations import hooks as integrations_hooks, registry as integrations_registry, tickets as _tickets_integ
 from . import github_tickets as _gh_tickets
 from . import providers as providers_mod
-from .runtime import Runtime
 from . import slack as slack_mod
 from . import slack_verify
 from . import timeline
-from . import goal as goal_mod
 from .slack import SETTING_KEY as SLACK_TOKEN_SETTING, resolve_token as resolve_slack_token
 from .store import ReadExclude, Store, StoreUnavailable
 from .projects import Engine as ProjectEngine, ProjectError
-from .reads import resolve_read
 
 SLACK_TEAM_SETTING = "slack_team"   # JSON {id, name}: the Slack team the bot token belongs to
 
-CATALOG_PATH = os.getenv("TARES_CATALOG", "catalog.yaml")
-# Renamed in 1.0 along with everything else. An install that upgrades without moving its file is
-# caught by config.reject_legacy_db(), which refuses to start rather than silently creating an empty
-# database next to the old one — DuckDB would happily do exactly that.
 DB_PATH = os.getenv("TARES_DB", "tares.duckdb")
-# Re-import the catalog YAML on every boot (declarative: the file is the source of truth, so an
-# operator manages a read-only demo's sources by editing the YAML and restarting).
-CATALOG_SYNC = os.getenv("TARES_CATALOG_SYNC", "").strip().lower() in ("1", "true", "yes", "on")
 
 # Auth mode. When set (via `tares up --auth`, which resolves + exports a root token), the whole
 # API + console + ingest require a credential; when unset the instance is open (local default).
@@ -147,7 +128,7 @@ def _installed_version() -> str | None:
 
 
 def _is_ingest(path: str) -> bool:
-    return path.startswith("/ingest/") or path in ("/v1/logs", "/v1/traces", "/v1/metrics")
+    return path.startswith("/ingest/")
 
 
 def _bearer(auth: str | None) -> str:
@@ -185,8 +166,7 @@ def _public(method: str, path: str) -> bool:
         return True
     if method == "GET" and path in GITHUB_APP_CALLBACKS:
         return True      # gated by the signed state, see GITHUB_APP_CALLBACKS
-    return method in ("GET", "HEAD") and not (
-        path.startswith("/api/") or path.startswith("/catalog") or path == "/query")
+    return method in ("GET", "HEAD") and not path.startswith("/api/")
 
 
 _SIZE_UNITS = {"": 1, "k": 10**3, "m": 10**6, "g": 10**9, "t": 10**12,
@@ -209,7 +189,7 @@ def _parse_size(v: str | None) -> int | None:
 # The operator's explicit limit; None means "the volume the data directory sits on", which is
 # what a cell wants: a grown volume is reflected on the next mount, no chart value to refresh.
 MAX_DB_SIZE = _parse_size(os.getenv("TARES_MAX_DB_SIZE"))
-# Above this share of the limit ingest is refused (507) and polls pause, so the database never
+# Above this share of the limit ingest is refused (507), so the database never
 # fills its disk and dies (glassflow-web, 2026-09-08). Reads, findings and the console keep working.
 INGEST_PAUSE_PCT = float(os.getenv("TARES_INGEST_PAUSE_PCT", "95"))
 
@@ -288,8 +268,8 @@ def _state_db_unreachable(e: BaseException) -> bool:
 def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
     """The app we serve when the store could not be opened. It exists so the failure reaches a
     human instead of ERR_CONNECTION_REFUSED: the console still loads and every data route answers
-    503 with the reason, so the UI can name the problem. No runtime, no connectors, no ingest —
-    nothing that would need the store. Restart once the DB is reachable again.
+    503 with the reason, so the UI can name the problem. No ingest: nothing that would need the
+    store. Restart once the DB is reachable again.
 
     `retry`: the failure passes on its own (_state_db_unreachable), so /health answers 503 and the
     liveness probe restarts the daemon, which tries the database again. Left at 200, a cell that
@@ -314,8 +294,7 @@ def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
                             status_code=503)
 
     # Everything that needs the store answers 503 (not a bare 500, and not the SPA's index.html).
-    for _p in ("/api/{rest:path}", "/query", "/read", "/remember", "/catalog", "/catalog/{rest:path}",
-               "/ingest/{rest:path}", "/v1/logs", "/v1/traces", "/v1/metrics"):
+    for _p in ("/api/{rest:path}", "/ingest/{rest:path}"):
         app.add_api_route(_p, unavailable, include_in_schema=False,
                           methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
 
@@ -329,37 +308,6 @@ def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
         return _serve_ui(path)
 
     return app
-
-
-class ReadReq(BaseModel):
-    selector: dict = {}          # {label: value, ...} — strict-AND conjunction; must be non-empty
-    window: str = "15m"
-    client: str = "http"   # http | mcp | ui — tags the read in the activity log
-    include_payload: bool = False  # also return the raw lossless record as `raw` on each row
-    project: str = ""            # read only this project's sources
-    sources: list[str] = []      # read only these sources (within the project when both given)
-
-
-class SourceIn(BaseModel):
-    name: str
-    type: str = ""          # ignored — the signal type is derived from the connector
-    connector: str
-    poll: str = "5s"
-    config: dict = {}
-    project: str = ""       # the project the new source joins; "" = the default project
-
-
-class RememberReq(BaseModel):
-    key: str                     # the entity this memory is about
-    content: str
-    memory_type: str = "observation"   # observation | aggregation | decision | custom
-    fields: dict = {}            # extra values, kept in the payload (lossless); not auto-aggregated
-    source: str | None = None    # target memory source; default auto-provisions agent_memory
-
-
-class ImportReq(BaseModel):
-    yaml: str
-    mode: str = "merge"    # merge (upsert) | replace (clear catalog first)
 
 
 class ProjectIn(BaseModel):
@@ -392,10 +340,6 @@ class ProjectUpdate(BaseModel):
     icon: str | None = None
 
 
-class ProjectRepair(BaseModel):
-    key: str               # a plan key (or "kind:key")
-
-
 class GithubCredentialIn(BaseModel):
     name: str
     token: str = ""              # secret; blank-to-keep on update
@@ -426,10 +370,6 @@ class GithubAppCreateIn(BaseModel):
 
 class EditionIn(BaseModel):
     edition: str
-
-
-class McpSettingsIn(BaseModel):
-    object_tools: bool | None = None
 
 
 class AnthropicKeyIn(BaseModel):
@@ -520,20 +460,9 @@ def make_app() -> FastAPI:
               f"and restart.", flush=True)
         return _degraded_app(e.reason)
 
-    # The edition is settled here, before the catalog import and the seed project below: a
-    # seeded empty cell would otherwise look like a cell with data and be settled as platform.
+    # The edition is settled here, before the seed project below: a seeded empty cell would
+    # otherwise look like a cell with data and be settled as platform.
     edition_mod.settle(store)
-
-    # seed the DB catalog from YAML on first boot — or on every boot when CATALOG_SYNC is set, so
-    # the file stays the source of truth (the admin interface for a read-only demo: edit + restart).
-    if Path(CATALOG_PATH).exists() and (store.catalog_empty() or CATALOG_SYNC):
-        counts = import_yaml_to_db(store, Path(CATALOG_PATH).read_text(),
-                                   engine=ProjectEngine(store))
-        store.migrate_claude_code_repo_label()   # an old catalog file may still say `project`
-        how = "synced" if CATALOG_SYNC else "imported"
-        print(f"taresd: {how} {CATALOG_PATH} into catalog "
-              f"({counts['sources']} sources, {counts['triggers']} triggers"
-              f"{', ' + str(counts['projects']) + ' projects' if counts.get('projects') else ''})")
 
     # The sessions table catches up with the events in the background (TR-1471); the lines stored
     # from here on are counted as they arrive.
@@ -544,49 +473,11 @@ def make_app() -> FastAPI:
     # first trigger and page do not wait for it (TR-1695)
     session_digest.start(store)
 
-    runtime = Runtime(store)
-    # poll connectors hold off while ingest is paused for storage (see storage_state)
-    runtime.storage_full = lambda: storage_state(store, DB_PATH)["detail"] if storage_state(store, DB_PATH)["paused"] else None
-    # Projects: templates instantiated with params; they create and own ordinary catalog objects.
-    projects = ProjectEngine(store, reload=runtime.reload_catalog, runtime=runtime)
-
-    # projects made from a template before goals existed get the template's goal (once)
-    projects.fill_template_goals()
-    # and the triggers a template planned get its plain-words description (once)
-    filled = projects.fill_template_trigger_descriptions()
-    # triggers on GitHub token sources keep meaning "a commit" now that those report PRs (once)
-    filled += projects.fill_github_commit_filters()
-    if filled:
-        # re-read the catalog only: nothing runs yet (the sources start in lifespan), and a
-        # reload that restarts sources needs a running event loop (it crashed 1.38.0-rc.2's first
-        # start on a cell with template projects)
-        runtime.catalog = catalog_from_db(store)
+    projects = ProjectEngine(store)
     _seed_project(store, projects)
-
-    def _otlp_source_for(header: str | None) -> str:
-        """Resolve the OTLP source for an export (shared by the HTTP and gRPC receivers). Raises
-        KeyError/ValueError; auto-provisions a single `otlp` source on the first export."""
-        names = [s.name for s in runtime.catalog.sources.values() if s.connector == "otlp"]
-        if header:
-            if header not in names:
-                raise KeyError(f"unknown OTLP source {header!r}")
-            return header
-        if len(names) == 1:
-            return names[0]
-        if not names:   # zero-setup: provision one on first export (point a collector and go)
-            store.upsert_catalog_source(
-                "otlp", source_type_for("otlp"), "otlp", "5s",
-                normalize_config("otlp", {"labels": [
-                    {"name": "service", "field": "resourceAttributes.service.name",
-                     "primary": True}]}))
-            runtime.reload_catalog()
-            print("taresd: auto-provisioned OTLP source 'otlp'")
-            return "otlp"
-        raise ValueError("multiple OTLP sources; set the X-Tares-Source header")
 
     @asynccontextmanager
     async def lifespan(_app):
-        runtime.start_all()
         # the daemon's own counters (/metrics, TR-308): storage gauges read on scrape, the event
         # loop watched by a one-second timer for the whole life of the process
         _metrics.set_storage_probe(lambda: {**store.storage_usage(), **{
@@ -618,20 +509,7 @@ def make_app() -> FastAPI:
         # Linear and GitHub Issues tickets kept in step by their integrations (TR-1806)
         from .integrations import sync as integration_sync
         sync_task = asyncio.create_task(integration_sync.run(store, loop_stop))
-        print(f"taresd: {len(runtime.catalog.sources)} source(s); "
-              f"console at / · agent API at /read · management API at /api")
-        # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
-        grpc_server = None
-        port = os.getenv("TARES_OTLP_GRPC_PORT", "4317")
-        if port and port.lower() not in ("off", "none", "0"):
-            try:
-                from .otlp_grpc import serve as _serve_otlp_grpc
-                grpc_server = await _serve_otlp_grpc(int(port), _otlp_source_for, runtime.ingest_otlp)
-                print(f"taresd: OTLP gRPC receiver on :{port}")
-            except ImportError:
-                print("taresd: OTLP gRPC off (install tares[otlp-grpc] to enable)")
-            except Exception as e:   # never let the optional receiver block startup
-                print(f"taresd: OTLP gRPC failed to start: {e}")
+        print("taresd: console at / · management API at /api")
         yield
         loop_stop.set()
         loop_watch.cancel()
@@ -642,15 +520,11 @@ def make_app() -> FastAPI:
         archive_task.cancel()
         report_task.cancel()
         sync_task.cancel()
-        if grpc_server is not None:
-            await grpc_server.stop(grace=2)
-        runtime.shutdown()
 
     # the interactive API reference lives under /api so /docs is the console's Docs and memory page
     app = FastAPI(title="taresd", lifespan=lifespan, docs_url="/api/reference", redoc_url=None)
     app.state.store = store   # for in-process tests; DuckDB is single-writer, so no second Store
     integrations_hooks.bind(store)   # the guardrail hooks resolve a project's guardrails from it
-    app.state.runtime = runtime
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
 
@@ -668,14 +542,13 @@ def make_app() -> FastAPI:
     licence.current(store, force=True)
 
     # ── auth: scoped credentials ──────────────────────────────────────────────
-    # Three scopes — read (consume: reads, catalog reads), ingest (contribute:
-    # /ingest, /v1/*, remember), admin (configure: catalog CRUD, discover, credentials, keys).
+    # Three scopes: read (consume), ingest (contribute: /ingest, the crew's own writes), admin
+    # (configure: credentials, keys, settings).
     # Credentials: the env AUTH_TOKEN is the implicit root (admin, non-revocable), plus revocable
     # scoped keys in the api_keys table (docs/design/api-keys.md).
-    _ADMIN_PATHS = ("/api/catalog/export", "/api/catalog/import")
-    # the only writes a read key may make: reads that take a body. Every other write, including a
-    # route added later, needs admin.
-    _READ_WRITES = ("/read", "/api/labels/preview")
+    # the only writes a read key may make: reads that take a body (none today). Every other
+    # write, including a route added later, needs admin.
+    _READ_WRITES: tuple[str, ...] = ()
     _PERSONAL_LINES = re.compile(r"^/api/docs/personal/[^/]+/lines$")
 
     # the route lives in ee (tares_ee/areas.py); the rule stays here, or a person's own claim would need admin
@@ -700,11 +573,11 @@ def make_app() -> FastAPI:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
         admin, except the few in _READ_WRITES: a read with a body."""
         if (method == "POST" and path.startswith("/ingest/")
-                and (_webhook_key(path[len("/ingest/"):]) or runtime.signature_for(path[len("/ingest/"):]))):
-            # a source that checks signatures (a GitHub App, a signed webhook) is authenticated by
-            # the signature the route verifies on the raw body; GitHub cannot send a Tares key
+                and _webhook_key(path[len("/ingest/"):])):
+            # a GitHub App's webhook is authenticated by the signature the route verifies on the
+            # raw body; GitHub cannot send a Tares key
             return None
-        if method == "POST" and (_is_ingest(path) or path == "/remember"):
+        if method == "POST" and _is_ingest(path):
             return "ingest"   # before _public(): ingest paths are "public" only in the sense of
                               # not needing the auth token — they have their own scope
         if _public(method, path):
@@ -758,23 +631,12 @@ def make_app() -> FastAPI:
             return "admin"   # the factory settings page and the factory setup screen (TR-871): the
                              # keys, the crew's limits, the Slack channels, the connected
                              # integrations. A read key is refused, as on the other admin-only pages
-        if path == "/api/setup/github-suggestion":
-            return "admin"   # spends model money and distills private READMEs: not for read keys
-        if (path in _ADMIN_PATHS or path.startswith("/api/keys")
-                or path.startswith("/api/discover") or path.startswith("/api/settings")
+        if (path.startswith("/api/keys") or path.startswith("/api/settings")
                 or path.startswith("/api/linear")):
             return "admin"
-        if method != "GET" and path.startswith("/api/sources"):
-            return "admin"
         m = _PROJECT_PATH.match(path)
-        if m:
-            rest = m.group(2) or ""
-            # a project's keys: credentials; and the guided setup, whose plan and checks describe
-            # the whole configuration
-            if rest.startswith("/keys") or rest.startswith("/setup"):
-                return "admin"
-            if method == "POST" and rest == "/stats":
-                return "read"
+        if m and (m.group(2) or "").startswith("/keys"):
+            return "admin"   # a project's keys: credentials
         if method not in ("GET", "HEAD") and path not in _READ_WRITES:
             return "admin"
         return "read"
@@ -785,8 +647,7 @@ def make_app() -> FastAPI:
     # is the scope the key needs; the handlers narrow what the allowed routes return to the key's
     # project (request.state.project_key).
     _PROJECT_PATH = re.compile(r"^/api/projects/([^/]+)(/.*)?$")
-    _PK_ROUTES = {("GET", "/api/whoami"): "any", ("POST", "/read"): "read",
-                  ("GET", "/catalog"): "read", ("GET", "/api/projects"): "read"}
+    _PK_ROUTES = {("GET", "/api/whoami"): "any", ("GET", "/api/projects"): "read"}
     _PK_PROJECT_ROUTES = [   # (method, the path after /api/projects/<its id>, scope)
         ("GET", re.compile(r"^$"), "read"),
         ("GET", re.compile(r"^/timeline$"), "read"),
@@ -803,9 +664,6 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/sessions$"), "read"),
         ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
         ("GET", re.compile(r"^/pickup$"), "read"),
-        ("GET", re.compile(r"^/outline$"), "read"),
-        ("GET", re.compile(r"^/health$"), "read"),
-        ("POST", re.compile(r"^/stats$"), "read"),
     ]
 
     def _project_key_scope(method: str, path: str, project: str) -> str | None:
@@ -813,8 +671,6 @@ def make_app() -> FastAPI:
         make it at all (any other route, or another project's)."""
         if (method, path) in _PK_ROUTES:
             return _PK_ROUTES[(method, path)]
-        if method == "GET" and path.startswith("/catalog/"):
-            return "read"   # the handler allows only the project's own sources and triggers
         m = _PROJECT_PATH.match(path)
         if m and m.group(1) == project:
             rest = m.group(2) or ""
@@ -947,16 +803,7 @@ def make_app() -> FastAPI:
             return None
         return ReadExclude(
             {"ids": [p["id"] for p in hp] + sorted(deleted), "names": [p["name"] for p in hp],
-             "shared": sorted(n for n, c in runtime.catalog.sources.items()
-                              if c.connector in _SHARED_CONNECTORS)}, records)
-
-    # Licence-independent by design (TR-915): never consult licence or team here.
-    def _hidden_sources(hidden: set[str]) -> set[str]:
-        """Sources that belong only to hidden projects. A source shared with a project the caller
-        can see stays; its hidden rows are dropped row by row (store._exclude_sql)."""
-        if not hidden:
-            return set()
-        return {n for n, uids in store.source_memberships().items() if uids and set(uids) <= hidden}
+             "shared": []}, records)
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _owned_by_hidden(kind: str, name: str, hidden: set[str]) -> bool:
@@ -966,19 +813,6 @@ def make_app() -> FastAPI:
             return False
         uids = store.projects_using(kind, name)
         return bool(uids) and set(uids) <= hidden
-
-    # Licence-independent by design (TR-915): never consult licence or team here.
-    def _is_hidden(kind: str, name: str, hidden: set[str]) -> bool:
-        return bool(hidden) and (name in _hidden_sources(hidden) if kind == "source"
-                                 else _owned_by_hidden(kind, name, hidden))
-
-    # Licence-independent by design (TR-915): never consult licence or team here.
-    def _gone_if_hidden(kind: str, name: str, message: str) -> None:
-        """A named object that belongs only to private projects the caller cannot see answers a
-        write exactly as one that is not there: the same 404 and the same body (TR-944). A name
-        in a request body is treated the same way: left out of the set it is checked against."""
-        if _is_hidden(kind, name, _hidden_ids()):
-            _err(KeyError(message), 404)
 
     # Auth off (no token) → no middleware, the instance is fully open (local default). Auth on →
     # every non-public route needs a credential carrying the required scope; ingest is gated exactly
@@ -1024,8 +858,7 @@ def make_app() -> FastAPI:
     @app.get("/metrics", include_in_schema=False)
     def metrics_endpoint(request: Request):
         """The daemon's own counters in the Prometheus text format (TR-308): events per source,
-        poll outcomes, source state, agent runs, model calls and spend by provider, storage against
-        its limit, trigger evaluation time, event loop lag. Counts only. Public like /health
+        model calls and spend by provider, storage against its limit, event loop lag. Counts only. Public like /health
         unless TARES_METRICS_TOKEN is set; then it wants `Authorization: Bearer <that token>`
         (TR-653). The auth guard lets /metrics through either way, so this check decides."""
         if metrics_token and not hmac.compare_digest(
@@ -1057,8 +890,7 @@ def make_app() -> FastAPI:
             pct = st["pct_used"]
             if st["detail"]:
                 status, detail = "degraded", st["detail"]
-        body = {"status": status, "auth_required": bool(AUTH_TOKEN),
-                "sources": [] if AUTH_TOKEN else list(runtime.catalog.sources),
+        body = {"status": status, "auth_required": bool(AUTH_TOKEN), "sources": [],
                 "pct_used": pct, "version": _installed_version(),
                 "capabilities": list(CAPABILITIES),
                 "uptime_seconds": int(time.monotonic() - _STARTED_MONO)}
@@ -1099,261 +931,10 @@ def make_app() -> FastAPI:
             _err(ValueError(f"unknown project {ref!r}"), 400)
         return p["id"]
 
-    def _fallback_project(*uids) -> str | None:
-        """The first project in `uids` that is set, as a fallback for a write that named none (the
-        project that made the object, else the default). One the caller cannot see is no fallback
-        for them: same ask as an unseen default, and nothing is written into it (TR-629)."""
-        uid = next((u for u in uids if u), None)
-        p = store.get_project(uid) if uid else None
-        if p is not None and not _can_see(p):
-            _err(ValueError("name the project to use (its id or name)"), 400)
-        return uid
-
-    _SHARED_CONNECTORS = ("finding", "memory")
-
-    def _project_view(uid: str) -> tuple[list[str], dict]:
-        """What a project reads: its member sources plus the shared findings and memory sources,
-        and the row scope that narrows those shared ones to the project's own rows (findings of
-        its agents and findings recorded in it)."""
-        shared = sorted(n for n, c in runtime.catalog.sources.items()
-                        if c.connector in _SHARED_CONNECTORS)
-        members = [s for s in store.project_sources(uid) if s in runtime.catalog.sources]
-        agents = [a["name"] for a in store.list_catalog_agents()
-                  if uid in store.projects_using("agent", a["name"])]
-        return (sorted(set(members) | set(shared)),
-                {"sources": shared, "project": uid, "agents": agents})
-
-    def _key_project(request: Request, ref: str) -> str | None:
-        """The project a read is narrowed to: a project key's own (naming another answers 403),
-        else the one named, else None."""
-        pk = _pk(request)
-        if pk:
-            p = store.get_project(pk) or {}
-            if ref and ref.strip() not in (pk, p.get("name")):
-                _err(PermissionError(_project_key_denied(pk)), 403)
-            return pk
-        return _resolve_project(ref) if ref else None
-
-    @app.post("/read")
-    def read(req: ReadReq, request: Request):
-        """Raw label-native read. The selector is a {label: value} conjunction (strict AND). By
-        default it reads every source; `project` narrows it to that project's sources (the
-        shared findings and memory sources included, with only the project's own rows) and
-        `sources` to the ones named (both: the named ones within the project). A project key
-        always reads its own project."""
-        if not req.selector:
-            _err(ValueError('read needs a selector, e.g. {"project": "frontend"}'))
-        names, scope = None, None
-        uid = _key_project(request, req.project)
-        if uid:
-            names, scope = _project_view(uid)
-        exclude = _read_exclude()
-        hidden_src = _hidden_sources(set(exclude["ids"])) if exclude else set()
-        if req.sources:
-            if _pk(request):
-                # a project key learns nothing about sources outside its project, not even
-                # whether they exist
-                if set(req.sources) - set(names or []):
-                    _err(PermissionError(_project_key_denied(uid)), 403)
-            unknown = sorted(set(req.sources) - (set(runtime.catalog.sources) - hidden_src))
-            if unknown:
-                _err(KeyError(f"unknown sources {unknown}"), 404)
-            names = [s for s in req.sources if names is None or s in names]
-        if hidden_src:
-            names = [n for n in (sorted(runtime.catalog.sources) if names is None else names)
-                     if n not in hidden_src]
-        owners: set[str] = set()
-        payload, nrows, sources, rows = resolve_read(store, runtime.catalog, req.selector, req.window,
-                                                     include_payload=req.include_payload,
-                                                     sources=names, scope=scope, exclude=exclude,
-                                                     owners=owners)
-        log_key = ", ".join(f"{k}={v}" for k, v in req.selector.items())
-        store.log_query("r_" + uuid.uuid4().hex[:12], "(read)", log_key, req.window,
-                        nrows, req.client,
-                        project=store.read_projects(
-                            req.selector, uid, sources=req.sources or sources,
-                            unseen=set(exclude["ids"]) if exclude else None, owners=owners))
-        return {"payload": payload, "count": nrows, "sources": sources, "rows": rows}
-
-    # Views were removed: a trigger names its own sources. The old routes answer 404 with the
-    # reason instead of the generic "unknown path", so an old client learns what changed.
-    def _views_removed():
-        _err(KeyError(VIEWS_REMOVED), 404)
-
-    for _gone in ("/query", "/derive", "/api/views", "/api/views/{name}"):
-        app.add_api_route(_gone, _views_removed, methods=["GET", "POST", "PUT", "DELETE"],
-                          include_in_schema=False)
-
-    @app.get("/catalog")
-    def catalog_list(request: Request):
-        members = store.source_memberships()
-        pk = _pk(request)
-        if pk:   # a project key sees its own project only
-            names, _scope = _project_view(pk)
-            p = store.get_project(pk) or {}
-            return {
-                "sources": [{"name": n, "type": runtime.catalog.sources[n].type,
-                             "projects": [pk]} for n in names],
-                "triggers": [{"name": t.name, "project": t.project, "sources": t.sources,
-                              "key_field": t.key_field}
-                             for t in runtime.catalog.triggers if pk in store.projects_using("trigger", t.name)],
-                "projects": [{"id": pk, "name": p.get("name"), "template": p.get("template")}],
-            }
-        hidden = _hidden_ids()
-        hidden_src = _hidden_sources(hidden)
-        return {
-            "sources": [{"name": s.name, "type": s.type,
-                         "projects": [u for u in members.get(s.name, []) if u not in hidden]}
-                        for s in runtime.catalog.sources.values() if s.name not in hidden_src],
-            "triggers": [{"name": t.name, "project": t.project, "sources": t.sources,
-                          "key_field": t.key_field} for t in runtime.catalog.triggers
-                         if not _owned_by_hidden("trigger", t.name, hidden)],
-            "projects": [{"id": p["id"], "name": p["name"], "template": p["template"]}
-                         for p in store.list_projects() if p["id"] not in hidden],
-        }
-
-    # ── catalog.describe — the discovery surface (design doc §4 MCP surface) ──
-    def _lineage_edges() -> list[dict]:
-        edges = []
-        for t in runtime.catalog.triggers:
-            for s in t.sources:
-                edges.append({"from": f"source:{s}", "to": f"trigger:{t.name}",
-                              "transform": "condition"})
-        return edges
-
-    def _lag_seconds(ts) -> float | None:
-        if ts is None:
-            return None
-        aware = ts if ts.tzinfo else ts.replace(tzinfo=now_utc().tzinfo)
-        return max((now_utc() - aware).total_seconds(), 0.0)
-
-    def _source_label_names(entry: dict) -> list[str]:
-        cfg = entry.get("config") if isinstance(entry.get("config"), dict) else {}
-        return [l["name"] for l in (cfg.get("labels") or []) if isinstance(l, dict) and l.get("name")]
-
-    def _source_primary(entry: dict) -> str | None:
-        """Name of the source's explicitly-marked primary label (the key), or None."""
-        cfg = entry.get("config") if isinstance(entry.get("config"), dict) else {}
-        for l in cfg.get("labels") or []:
-            if isinstance(l, dict) and l.get("primary"):
-                return l.get("name")
-        return None
-
-    def _label_facets() -> dict:
-        """Entity axes the console facets by. A key is just the label marked primary, so facets
-        are named labels (one flagged primary). Sources with no declared labels fall back to an
-        unnamed `key` facet (their bare key_value)."""
-        facets: dict = {}
-        for s in store.list_catalog_sources():
-            names = _source_label_names(s)
-            if names:
-                primary = _source_primary(s)
-                for ln in names:
-                    f = facets.setdefault(ln, {"sources": [], "primary": False})
-                    f["sources"].append(s["name"])
-                    if ln == primary:
-                        f["primary"] = True
-            else:
-                f = facets.setdefault("key", {"sources": [], "primary": True, "unnamed": True})
-                f["sources"].append(s["name"])
-        return facets
-
-    @app.get("/catalog/{handle}")
-    def catalog_describe(handle: str, request: Request):
-        kind, _, name = handle.partition(":")
-        pk = _pk(request)
-        if pk:
-            # a project key describes its project's own sources and triggers; the shared findings
-            # and memory sources hold other projects' rows too, so they are read, not described
-            mine = ({t.name for t in runtime.catalog.triggers if pk in store.projects_using("trigger", t.name)}
-                    if kind == "trigger" else
-                    {s for s in store.project_sources(pk)
-                     if s in runtime.catalog.sources
-                     and runtime.catalog.sources[s].connector not in _SHARED_CONNECTORS})
-            if kind not in ("source", "trigger") or name not in mine:
-                _err(PermissionError(_project_key_denied(pk)), 403)
-        if kind == "view":
-            _err(KeyError(VIEWS_REMOVED), 404)
-        if not name or kind not in ("source", "trigger"):
-            _err(ValueError("handle must be source:<name> or trigger:<name>"))
-        hidden = _hidden_ids()
-        if hidden:
-            if (name in _hidden_sources(hidden) if kind == "source"
-                    else _owned_by_hidden("trigger", name, hidden)):
-                _err(KeyError(f"unknown {kind} {name!r}"), 404)
-        edges = [e for e in _lineage_edges() if handle in (e["from"], e["to"])]
-        if hidden:
-            # a source that feeds a trigger of a hidden project must not name that trigger
-            edges = [e for e in edges
-                     if not _owned_by_hidden("trigger", e["to"].split(":", 1)[1], hidden)]
-        if pk:
-            project_triggers = {f"trigger:{t.name}" for t in runtime.catalog.triggers
-                                if pk in store.projects_using("trigger", t.name)}
-            edges = [e for e in edges if e["to"] in project_triggers]
-
-        if kind == "source":
-            entry = next((s for s in store.list_catalog_sources() if s["name"] == name), None)
-            if entry is None:
-                _err(KeyError(f"unknown source {name!r}"), 404)
-            entry = {**entry, "config": redact_config(entry["connector"], entry["config"])}
-            health = runtime.health_snapshot().get(name) or {}
-            names = _source_label_names(entry)
-            exclude = _read_exclude()
-            # each named axis; its values are no longer counted (TR-1810), so the lists are empty
-            if names:
-                labels = {ln: [] for ln in names}
-                primary_label = _source_primary(entry)
-            else:
-                labels = {"key": []}
-                primary_label = "key"
-            return {
-                "handle": handle, "kind": "source", "entry": entry,
-                "schema": store.source_schema(name),
-                "labels": labels,           # each named axis
-                "primary_label": primary_label,   # which axis is the key
-                "freshness": {"last_event_time": health.get("last_ingest"),
-                              "lag_seconds": _lag_seconds(health.get("last_ingest")),
-                              "events_total": health.get("events_total", 0),
-                              "status": health.get("status")},
-                "lineage": edges,
-                "sample": store.recent_events(source=name, limit=3, exclude=exclude),
-            }
-
-        entry = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
-        if entry is None:
-            _err(KeyError(f"unknown trigger {name!r}"), 404)
-        return {"handle": handle, "kind": "trigger", "entry": entry, "lineage": edges}
-
-    # ── remember — the agent writes its own memory back (closes the loop) ─────
-    @app.post("/remember", status_code=202)
-    async def remember(req: RememberReq):
-        source_name = req.source or next(
-            (s.name for s in runtime.catalog.sources.values() if s.connector == "memory"), None)
-        if source_name is None:   # first memory ever: provision the source on the fly
-            source_name = "agent_memory"
-            store.upsert_catalog_source(source_name, "agent_memory", "memory", "5s", {})
-            runtime.reload_catalog()
-            print(f"taresd: auto-provisioned memory source {source_name!r}")
-        payload = {"key": req.key, "content": req.content,
-                   "memory_type": req.memory_type, "fields": req.fields}
-        try:
-            n = await runtime.ingest(source_name, payload)
-        except KeyError as e:
-            _err(e, 404)
-        except ValueError as e:
-            _err(e)
-        return {"ok": True, "source": source_name, "ingested": n}
-
-    # ── push ingestion (webhook sources) ──────────────────────────────────────
-    def _verify_headers(request: Request) -> dict:
-        """Vercel verifies a drain endpoint via the x-vercel-verify response header — echo back the
-        value it sends on its verification probe (how the Vercel drain flow actually verifies)."""
-        val = request.headers.get("x-vercel-verify")
-        return {"x-vercel-verify": val} if val else {}
-
+    # ── push ingestion: the runtimes' session lines and the GitHub App's webhook ──
     async def _parse_ingest_body(request: Request):
-        """Accept a JSON object/array OR NDJSON (one JSON object per line, as some log drains send).
-        An empty body (a verification ping) parses to []."""
+        """Accept a JSON object/array OR NDJSON (one JSON object per line). An empty body (a
+        ping) parses to []."""
         raw = (await request.body()).decode("utf-8", "replace").strip()
         if not raw:
             return []
@@ -1365,11 +946,6 @@ def make_app() -> FastAPI:
             except json.JSONDecodeError:
                 _err(ValueError("body must be JSON or NDJSON"))
 
-    @app.get("/ingest/{token}", include_in_schema=False)
-    def ingest_verify(token: str, request: Request):
-        # Vercel (and similar) probe the endpoint before saving a drain — answer with the verify header.
-        return JSONResponse({"ok": True}, headers=_verify_headers(request))
-
     def _refuse_if_full() -> None:
         """507 Insufficient Storage when the store is at the pause mark: the producer gets a plain
         reason and can retry later; the database keeps working for everything else."""
@@ -1377,9 +953,15 @@ def make_app() -> FastAPI:
         if st["paused"]:
             raise HTTPException(status_code=507, detail=st["detail"])
 
+    async def _store(source: str, envelopes: list) -> int:
+        """Store a batch of events off the event loop and count it on /metrics."""
+        await asyncio.to_thread(store.append, envelopes)
+        _metrics.events_ingested(source, len(envelopes))
+        return len(envelopes)
+
     async def _ingest_runtime(name: str, request: Request):
         """A runtime's intake (TR-1804): the runtime slot's integration `name` makes session lines
-        of the body, and they are stored under the session source. No source catalog is read."""
+        of the body, and they are stored under the session source."""
         from .integrations import registry as integrations_registry
         from .session_map import SOURCE as SESSION_SOURCE
         _refuse_if_full()
@@ -1391,14 +973,12 @@ def make_app() -> FastAPI:
                                                         "cell, so its lines cannot be stored now")
         try:
             envs = cls().push_lines(body, store=store, person_id=person["id"] if person else None)
-            # the store step still runs the platform's ingest tail (the envelope listeners) until
-            # those are deleted (TR-1811); then it is store.append alone
-            n = await runtime._store_envelopes(SESSION_SOURCE, envs)
+            n = await _store(SESSION_SOURCE, envs)
         except ValueError as e:
             _err(e, 400)
         except session_ingest.LinesNotStored as e:
             _err(e, 503)         # not acknowledged: the sender keeps the lines and sends them again
-        return JSONResponse({"ingested": n}, status_code=202, headers=_verify_headers(request))
+        return JSONResponse({"ingested": n}, status_code=202)
 
     @app.post("/ingest/claude_code", status_code=202)
     async def ingest_claude_code(request: Request):
@@ -1412,109 +992,43 @@ def make_app() -> FastAPI:
 
     async def _ingest_github(row: dict, request: Request):
         """A GitHub App webhook delivery on its key (TR-1807): the ci_github integration's. Checked
-        with the App credential's webhook secret on the raw body, mapped, its pull requests kept in
-        pr_events and every event told to the GitHub subscribers (the brain sync). The platform's
-        ingest tail still stores the events until the catalog goes (TR-1811)."""
-        from .github_webhook import GithubAppDeliveries
+        with the App credential's webhook secret on the raw body, mapped, stored, its pull
+        requests kept in pr_events and every event told to the GitHub subscribers (the brain
+        sync)."""
+        from . import github_webhook
         from .webhook_verify import verify
         source = row.get("source") or "github"
-        cfg = runtime.catalog.sources.get(source)
-        if cfg is None:
-            _err(KeyError(f"the GitHub source {source!r} of this key was deleted"), 404)
-        if cfg.paused:
-            _err(ValueError(f"source {source!r} is paused"), 400)
         cred = store.get_github_credential(row.get("credential") or "") or {}
         secret = str((cred.get("config") or {}).get("webhook_secret") or "")
         reason = verify("github", secret, await request.body(), dict(request.headers), None)
         if reason:
-            runtime.count_rejected(source, reason)
+            github_webhook.count_rejected(source, reason)
             return JSONResponse({"detail": f"signature check failed (github): {reason}"},
                                 status_code=401)
         body = await _parse_ingest_body(request)
         try:
-            envs = GithubAppDeliveries(store, source, row.get("credential") or "").map_payload(
+            envs = github_webhook.GithubAppDeliveries(
+                store, source, row.get("credential") or "").map_payload(
                 body, headers=dict(request.headers))
         except ValueError as e:
             _err(e, 400)
-        # the runtime's store step keeps the pull requests in pr_events and tells the GitHub hub,
-        # for every GitHub source (github_webhook.after_store); TR-1811 calls it from here instead
-        n = await runtime._store_envelopes(source, envs)
-        return JSONResponse({"ingested": n}, status_code=202, headers=_verify_headers(request))
+        n = await _store(source, envs)
+        if envs:
+            github_webhook.after_store(store, source, envs)   # pr_events and the GitHub hub
+        return JSONResponse({"ingested": n}, status_code=202)
 
     @app.post("/ingest/{token}", status_code=202)
     async def ingest(token: str, request: Request):
-        """Push events into a source, as a JSON object, a JSON array or NDJSON."""
+        """A GitHub App's webhook delivery, on the key its hook URL carries (integration_keys).
+        Any other key answers 404."""
         _refuse_if_full()
         try:
             keyed = await asyncio.to_thread(store.integration_key, token)
-        except Exception:   # noqa: BLE001 — a store that cannot answer: the catalog path decides
-            keyed = None
-        if keyed is not None and keyed.get("integration") == "ci_github":
-            return await _ingest_github(keyed, request)
-        sig = runtime.signature_for(token)
-        if sig:
-            # verified on the exact bytes, before parsing (re-serialized JSON would not match)
-            from .webhook_verify import verify
-            reason = verify(sig["scheme"], sig["secret"], await request.body(),
-                            dict(request.headers), sig.get("header"))
-            if reason:
-                runtime.count_rejected(sig["source"], reason)
-                return JSONResponse({"detail": f"signature check failed ({sig['scheme']}): "
-                                               f"{reason}"}, status_code=401)
-        body = await _parse_ingest_body(request)
-        try:
-            person = _current_person(request)   # from the credential, never from the body
-            n = await runtime.ingest(token, body,
-                                     headers=dict(request.headers), stamp_person=True,
-                                     person_id=person["id"] if person else None)
-        except KeyError as e:
-            _err(e, 404)
-        except ValueError as e:
-            _err(e, 400)
-        except session_ingest.LinesNotStored as e:
-            _err(e, 503)         # not acknowledged: the sender keeps the lines and sends them again
-        return JSONResponse({"ingested": n}, status_code=202, headers=_verify_headers(request))
-
-    # ── OTLP receiver (OpenTelemetry/HTTP JSON; gRPC counterpart in lifespan) ──
-    def _resolve_otlp_source(header: str | None) -> str:
-        try:
-            return _otlp_source_for(header)   # shared with the gRPC receiver
-        except KeyError as e:
-            _err(e, 404)
-        except ValueError as e:
-            _err(e)
-
-    async def _otlp(signal: str, request: Request):
-        _refuse_if_full()
-        try:
-            body = await request.json()
-        except Exception:
-            _err(ValueError("invalid JSON (OTLP/HTTP JSON expected)"))
-        source = _resolve_otlp_source(request.headers.get("x-tares-source"))
-        try:
-            await runtime.ingest_otlp(source, signal, body)
-        except KeyError as e:
-            _err(e, 404)
-        except ValueError as e:
-            _err(e, 400)
-        return {}   # OTLP success: an (empty) ExportServiceResponse
-
-    @app.post("/v1/logs")
-    async def otlp_logs(request: Request):
-        return await _otlp("logs", request)
-
-    @app.post("/v1/traces")
-    async def otlp_traces(request: Request):
-        return await _otlp("traces", request)
-
-    @app.post("/v1/metrics")
-    async def otlp_metrics(request: Request):
-        return await _otlp("metrics", request)
-
-    # ── management API: connectors ────────────────────────────────────────────
-    @app.get("/api/connectors")
-    def connectors():
-        return {name: spec for name, spec in SPECS.items()}
+        except Exception:   # noqa: BLE001  (a store that cannot answer: the delivery is retried)
+            raise HTTPException(status_code=503, detail="the store could not look the key up now")
+        if keyed is None or keyed.get("integration") != "ci_github":
+            _err(KeyError(f"unknown ingest key {token!r}"), 404)
+        return await _ingest_github(keyed, request)
 
     # (there is no /api/security — whether auth is on is a boolean on /health; producers authenticate
     #  with scoped ingest API keys, not a shared token.)
@@ -1630,7 +1144,7 @@ def make_app() -> FastAPI:
     def revoke_key(kid: str):
         if _key_hidden(store.get_api_key(kid), _hidden_ids()) or not store.revoke_api_key(kid):
             _err(KeyError(f"no active key {kid!r}"), 404)
-        return {"ok": True, "note": "key revoked; its subscriptions were removed"}
+        return {"ok": True, "note": "key revoked"}
 
     def _edition_out() -> dict:
         value, needed = edition_mod.edition(store)
@@ -1638,7 +1152,7 @@ def make_app() -> FastAPI:
 
     def _whoami_edition() -> dict:
         out = _edition_out()
-        return {**out, "mcp_object_tools": edition_mod.object_tools(store, out["edition"])}
+        return out
 
     # ── People: who is on the cell. Keys belong to them; the credential names who is calling ──
     def _person_out(p: dict) -> dict:
@@ -1775,10 +1289,8 @@ def make_app() -> FastAPI:
 
     @app.get("/api/capabilities")
     def capabilities():
-        """Host capabilities that gate local-only console features, so the UI can hide actions that
-        can't work on this deployment — e.g. a hosted cell has no Docker socket, so Auto-discover
-        would be a dead end. (Claude Code is plugin-based and works everywhere, so it's not gated.)"""
-        import shutil
+        """Host capabilities that gate console features, so the UI can hide actions that cannot
+        work on this deployment."""
         from importlib.metadata import version as _pkg_version
         try:
             ver = _pkg_version("tares")   # the installed release (release.sh bumps pyproject.toml)
@@ -1787,7 +1299,6 @@ def make_app() -> FastAPI:
         url_configured = resolve_api_base(store)[1] != ""
         return {
             "version": ver,
-            "discover_docker": shutil.which("docker") is not None or os.path.exists("/var/run/docker.sock"),
             # whether a model provider resolves (env ANTHROPIC_API_KEY or a saved provider)
             "agent_key_configured": resolve_provider(store)[0] is not None,
             # the summaries and the setup planner run on the cell default
@@ -1799,415 +1310,54 @@ def make_app() -> FastAPI:
             "slack_configured": bool(resolve_slack_token(store)[0]),
         }
 
-    @app.post("/api/labels/preview")
-    def label_preview(body: dict = Body(...)):
-        """Pure preview of a label spec's value normalization against a source's OBSERVED values:
-        before -> after with event counts, so the user sees the merge they're about to create
-        before saving (docs/design/label-value-normalization.md). No state is touched."""
-        from collections import Counter
-
-        from .config import extract_labels
-        from .connectors import build_connector, normalize_label_specs
-
-        source = body.get("source")
-        spec = body.get("label") or {}
-        cfg = runtime.catalog.sources.get(str(source))
-        if cfg is None or cfg.name in _hidden_sources(_hidden_ids()):
-            _err(KeyError(f"unknown source {source!r}"), 404)
-        try:   # validate the label spec exactly like a save would (bad regex -> 400 here)
-            normalized = normalize_label_specs([spec])
-        except CatalogError as e:
-            _err(e)
-        if not normalized or "field" not in normalized[0]:
-            _err(ValueError("preview needs a field label spec"))
-        lspec = normalized[0]
-
-        conn = build_connector(cfg, store)
-        pairs: Counter = Counter()   # (before, after) -> events
-        sampled = 0
-        for payload in store.recent_payloads(cfg.name, 2000, exclude=_read_exclude()):
-            ctx = conn.label_context(payload)
-            if not isinstance(ctx, dict):
-                continue
-            sampled += 1
-            plain = extract_labels([{k: v for k, v in lspec.items() if k not in ("pattern", "replace", "map")}], ctx)
-            if lspec["name"] not in plain:
-                continue
-            before = plain[lspec["name"]]
-            after = extract_labels([lspec], ctx)[lspec["name"]]
-            pairs[(before, after)] += 1
-        results = [{"from": b, "to": a, "events": n}
-                   for (b, a), n in sorted(pairs.items(), key=lambda kv: -kv[1])]
-        return {"sampled": sampled, "results": results,
-                "distinct_before": len({b for b, _ in pairs}),
-                "distinct_after": len({a for _, a in pairs})}
-
-    @app.get("/api/sources/discover", include_in_schema=False)
-    def discover_source_get():
-        _err(ValueError("discover is POST-only: POST /api/sources/discover "
-                        "{connector, config}"), 405)
-
-    @app.post("/api/sources/discover")
-    async def discover_source(body: dict = Body(...)):
-        from .connectors import REGISTRY
-        connector = body.get("connector")
-        if connector not in REGISTRY:
-            _err(ValueError(f"unknown connector {connector!r}"), 404)
-        config = dict(body.get("config", {}) or {})
-        if config.get("credential") and not config.get("token"):
-            # discover() is a classmethod with no store: resolve the stored GitHub credential
-            # here so it can authenticate; the proposal keeps the reference, never the token
-            from .github_credentials import get_token, resolve_api_url
-            try:
-                config["token"] = await get_token(store, config["credential"], config.get("repo"))
-            except ValueError as e:
-                _err(e, 404)
-            config.setdefault("api_url", resolve_api_url(store, config["credential"]) or "")
-        try:
-            # bounded + catch-all: driver errors (asyncpg timeouts/auth/network) are not ValueError
-            # and would otherwise 500 with nothing shown to the user
-            proposal = await asyncio.wait_for(
-                REGISTRY[connector].discover(config), timeout=30)
-        except (TimeoutError, asyncio.TimeoutError):
-            _err(ValueError("discover timed out; is the target reachable from the Tares "
-                            "server? (a hosted Tares can only reach public endpoints)"))
-        except HTTPException:
-            raise
-        except Exception as e:
-            _err(ValueError(f"discover failed: {e}"))
-        if proposal is None:
-            _err(ValueError(f"connector {connector!r} doesn't support discovery yet"))
-        return proposal
-
-    @app.get("/api/discover/environment")
-    async def discover_environment(provider: str = "docker"):
-        if provider != "docker":
-            _err(ValueError(f"unknown provider {provider!r} (have: docker)"), 404)
-        from .discovery import scan_docker
-        try:
-            return await scan_docker()
-        except ValueError as e:
-            _err(e)
-
-
-    # ── management API: sources ───────────────────────────────────────────────
-    @app.get("/api/sources")
-    def list_sources():
-        health = runtime.health_snapshot()
-        members = store.source_memberships()
-        hidden = _hidden_ids()
-        hidden_src = _hidden_sources(hidden)
-        return [{**s, "config": redact_config(s["connector"], s["config"]),
-                 "projects": [u for u in members.get(s["name"], []) if u not in hidden],
-                 "health": health.get(s["name"])} for s in store.list_catalog_sources()
-                if s["name"] not in hidden_src]
-
-    @app.get("/api/sources/{name}")
-    def get_source(name: str):
-        hidden = _hidden_ids()
-        hidden_src = _hidden_sources(hidden)
-        for s in store.list_catalog_sources():
-            if s["name"] == name and name not in hidden_src:
-                return {**s, "config": redact_config(s["connector"], s["config"]),
-                        "projects": [u for u in store.source_memberships().get(name, [])
-                                     if u not in hidden],
-                        "health": runtime.health_snapshot().get(name)}
-        _err(KeyError(f"unknown source {name!r}"), 404)
-
-    @app.post("/api/sources", status_code=201)
-    def create_source(body: SourceIn):
-        if body.name in runtime.catalog.sources:
-            _err(ValueError(f"source {body.name!r} already exists"), 409)
-        uid = _resolve_project(body.project)
-        try:
-            validate_source_dict(body.model_dump())
-            config = normalize_config(body.connector, body.config)
-        except CatalogError as e:
-            _err(e)
-        store.upsert_catalog_source(body.name, source_type_for(body.connector), body.connector,
-                                    body.poll, config)
-        store.put_in_project("source", body.name, uid, creator=True)
-        runtime.reload_catalog()
-        cfg = runtime.catalog.sources.get(body.name)
-        return {"ok": True, "name": body.name, "ingest_key": cfg.ingest_key if cfg else None}
-
-    @app.put("/api/sources/{name}")
-    def update_source(name: str, body: SourceIn):
-        existing = {s["name"]: s for s in store.list_catalog_sources()}.get(name)
-        if existing is None:
-            _err(KeyError(f"unknown source {name!r}"), 404)
-        _gone_if_hidden("source", name, f"unknown source {name!r}")
-        if body.name != name:
-            _err(ValueError("renaming a source is not supported; delete and recreate"), 400)
-        try:
-            validate_source_dict(body.model_dump())
-            # A client edits with the secret masked; if it saves the placeholder back unchanged,
-            # keep the stored secret instead of overwriting it (see connectors.redact_config).
-            config = normalize_config(
-                body.connector, restore_secrets(body.connector, body.config, existing["config"]))
-        except CatalogError as e:
-            _err(e)
-        store.upsert_catalog_source(name, source_type_for(body.connector), body.connector,
-                                    body.poll, config, paused=existing["paused"])
-        store.mark_customized("source", name)
-        runtime.reload_catalog()
-        # Label specs apply to NEW events going forward — ingest reads the current specs. Existing
-        # events keep the labels they were ingested with. A retroactive relabel of stored events can
-        # rewrite millions of rows, so it is a planned explicit background action (see
-        # store.backfill_labels for the building block), never something that runs inline on an edit.
-        return {"ok": True, "relabeled": False}
-
-    # What else goes if an object is deleted, in delete order (agents, then triggers). The
-    # delete dialogs show it and offer to take it along; the cascade deletes use the same list.
-    @app.get("/api/catalog/dependents")
-    def catalog_dependents(kind: str, name: str):
-        from .projects.engine import dependents
-        if kind not in ("source", "trigger"):
-            _err(ValueError("kind must be source or trigger"), 400)
-        hidden = _hidden_ids()
-        if hidden and (name in _hidden_sources(hidden) if kind == "source"
-                       else _owned_by_hidden("trigger", name, hidden)):
-            return {"dependents": []}   # a private project's object answers as one that is not there
-        return {"dependents": [d for d in dependents(store, kind, name)
-                               if not _owned_by_hidden(d["kind"], d["name"], hidden)]}
-
-    def _delete_dependents(kind: str, name: str) -> list[str]:
-        from .projects.engine import dependents
-        gone = []
-        for d in dependents(store, kind, name):
-            if d["kind"] == "agent":
-                store.delete_catalog_agent(d["name"])   # with its wiring in every project
-            elif d["kind"] == "trigger":
-                store.delete_catalog_trigger(d["name"])
-                store.remove_subscriptions_by_trigger(d["name"])
-            gone.append(f"{d['kind']}:{d['name']}")
-        return gone
-
-    @app.delete("/api/sources/{name}")
-    def delete_source(name: str, purge_events: bool = False, cascade: bool = False):
-        """`cascade` takes the triggers that read this source and those triggers' agents with
-        it; without it a source that something depends on is refused by name."""
-        if name not in {s["name"] for s in store.list_catalog_sources()}:
-            _err(KeyError(f"unknown source {name!r}"), 404)
-        _gone_if_hidden("source", name, f"unknown source {name!r}")
-        referencing = [t.name for t in runtime.catalog.triggers if name in t.sources]
-        gone: list[str] = []
-        if referencing and not cascade:
-            _err(ValueError(f"source {name!r} is used by triggers {referencing}; "
-                            f"delete them too (cascade) or remove it from those triggers first"),
-                 409)
-        if cascade:
-            gone = _delete_dependents("source", name)
-        store.delete_catalog_source(name)
-        purged = store.purge_events(name) if purge_events else 0
-        runtime.reload_catalog()
-        return {"ok": True, "purged_events": purged, "deleted": gone}
-
-    @app.post("/api/sources/{name}/pause")
-    def pause_source(name: str):
-        if name not in runtime.catalog.sources:
-            _err(KeyError(f"unknown source {name!r}"), 404)
-        _gone_if_hidden("source", name, f"unknown source {name!r}")
-        store.set_source_paused(name, True)
-        runtime.reload_catalog()
-        return {"ok": True}
-
-    @app.post("/api/sources/{name}/resume")
-    def resume_source(name: str):
-        if name not in runtime.catalog.sources:
-            _err(KeyError(f"unknown source {name!r}"), 404)
-        _gone_if_hidden("source", name, f"unknown source {name!r}")
-        store.set_source_paused(name, False)
-        runtime.reload_catalog()
-        return {"ok": True}
-
-    @app.post("/api/sources/test")
-    async def test_source(body: SourceIn):
-        try:
-            validate_source_dict(body.model_dump())
-            d = body.model_dump()
-            d["config"] = normalize_config(body.connector, body.config)
-        except CatalogError as e:
-            _err(e)
-        return await runtime.test_source(_source_from_dict(d))
-
-    @app.get("/api/sources/{name}/events")
-    def source_events(name: str, limit: int = 50):
-        hidden = _hidden_ids()
-        if name not in {s["name"] for s in store.list_catalog_sources()} \
-                or name in _hidden_sources(hidden):
-            _err(KeyError(f"unknown source {name!r}"), 404)
-        return store.recent_events(source=name, limit=min(limit, 500), exclude=_read_exclude())
-
-    @app.get("/api/sources/{name}/fields")
-    def source_fields(name: str, limit: int = 500):
-        """What this source actually contains: the connector's normalized fields (the things you can
-        key/label on), each with how many sampled events carry it and its top values. Makes the
-        otherwise-invisible normalized structure visible, so a key is chosen, not guessed."""
-        from collections import Counter
-
-        from .connectors import build_connector
-        cfg = runtime.catalog.sources.get(name)
-        if cfg is None or name in _hidden_sources(_hidden_ids()):
-            _err(KeyError(f"unknown source {name!r}"), 404)
-        conn = build_connector(cfg, store)
-
-        # Which fields are actual entity axes (the things you read/alert by). Match a declared label
-        # by the field's last path segment, so a nested context (e.g. a Prometheus label set stored
-        # under `metric`) still maps: `metric.service` counts as the declared `service` label.
-        label_specs = (cfg.config.get("labels") or []) if isinstance(cfg.config, dict) else []
-        label_names = {s.get("field") or s.get("name") for s in label_specs} | {s.get("name") for s in label_specs}
-        label_names.discard(None)
-        key_names = {(s.get("field") or s.get("name")) for s in label_specs if s.get("primary")}
-        key_names.discard(None)
-
-        from .config import extract_labels
-
-        counts: dict[str, Counter] = {}
-        label_counts: dict[str, Counter] = {}   # the EXTRACTED value of each declared label
-        sampled = 0
-        for payload in store.recent_payloads(name, min(limit, 2000), exclude=_read_exclude()):
-            ctx = conn.label_context(payload)
-            if not isinstance(ctx, dict):
-                continue
-            sampled += 1
-            for k, v in ctx.items():
-                if isinstance(v, dict):                 # explode one level: metric.service, metric.endpoint, …
-                    for sk, sv in v.items():
-                        if sv not in (None, ""):
-                            counts.setdefault(f"{k}.{sk}", Counter())[str(sv)] += 1
-                elif v not in (None, ""):
-                    counts.setdefault(k, Counter())[str(v)] += 1
-            # Profile the actual EXTRACTED labels too (the same extraction ingest uses), so a
-            # derived label (regex/const/map over a raw field) is visible with its real coverage
-            # and values — not just the raw field it reads from.
-            for lname, lval in extract_labels(label_specs, ctx).items():
-                if lval not in (None, ""):
-                    label_counts.setdefault(lname, Counter())[str(lval)] += 1
-
-        def entry(fname, help_="", primary_default=False):
-            vals = counts.get(fname, Counter())
-            seg = fname.rsplit(".", 1)[-1]
-            return {"name": fname, "help": help_, "primary_default": primary_default,
-                    "coverage": sum(vals.values()), "distinct": len(vals),
-                    "is_label": seg in label_names or fname in label_names,
-                    "is_key": seg in key_names or fname in key_names,
-                    "values": [{"value": val, "events": c} for val, c in vals.most_common(8)]}
-
-        fields, seen = [], set()
-        for spec in getattr(type(conn), "PROVIDES", None) or []:   # advertised fields, in order
-            fields.append(entry(spec["name"], spec.get("help", ""), spec.get("primary", False)))
-            seen.add(spec["name"])
-        for fname in counts:                                       # plus observed (flattened) fields
-            if fname not in seen:
-                fields.append(entry(fname))
-        # entity axes first (key, then label), then the rest — lead with what you'd actually key on.
-        fields.sort(key=lambda f: (0 if f["is_key"] else 1 if f["is_label"] else 2))
-
-        # Declared labels, profiled by their EXTRACTED value — the curated axes you read/alert by,
-        # surfaced whether they map to a raw field (service) or are derived (http_status). Coverage
-        # of 0 means the extraction matched nothing (e.g. a bad regex) — useful on its own.
-        labels = []
-        for s in label_specs:
-            lname = s.get("name")
-            if not lname:
-                continue
-            vals = label_counts.get(lname, Counter())
-            labels.append({"name": lname, "is_key": bool(s.get("primary")),
-                           "coverage": sum(vals.values()), "distinct": len(vals),
-                           "values": [{"value": val, "events": c} for val, c in vals.most_common(8)]})
-        labels.sort(key=lambda l: 0 if l["is_key"] else 1)
-
-        return {"sampled": sampled, "fields": fields, "labels": labels}
-
-    @app.get("/api/resources")
-    async def list_all_resources():
-        """Every part on the cell (sources, wake-ups, agents, tools, skills, project keys), each
-        with the projects that use it: the All resources page."""
-        from . import resources as resources_mod
-        out = await asyncio.to_thread(resources_mod.list_resources, store, runtime.catalog,
-                                      runtime.health_snapshot())
-        hidden = _hidden_ids()
-        if hidden:   # a part only hidden projects use is left out; a shared one drops their names
-            for kind, rows in out.items():
-                kept = []
-                for r in rows:
-                    users = r.get("used_by") or []
-                    shown = [u for u in users if u["id"] not in hidden]
-                    if users and not shown:
-                        continue
-                    kept.append({**r, "used_by": shown})
-                out[kind] = kept
-        return out
-
-    # ── GitHub credentials: a token stored once, referenced by sources and MCP servers ──
+    # ── GitHub credentials: a token or an App stored once, used by the crew and the integrations ──
     # Same write-only contract as the other credentials: the token is never returned, blank-to-keep
     # on update, and the console can list, test and delete.
     from .github_credentials import (APP_KINDS, forget_repos, get_token, list_repos_for, list_tree,
                                      redact as _gh_redact, test_credential)
     from . import github_app as _gh_app
+    from . import github_webhook as _gh_webhook
 
     def _gh_users(name: str) -> dict:
-        """Where a credential is used, so deleting one is an informed act."""
-        sources = [s["name"] for s in store.list_catalog_sources()
-                   if (s.get("config") or {}).get("credential") == name]
-        ref = f"credential:github/{name}"
-        servers = [m["name"] for m in store.list_mcp_servers() if m.get("auth_value") == ref]
-        return {"sources": sources, "mcp_servers": servers}
-
-    def _gh_app_source(name: str) -> str | None:
-        """The webhook source an App credential feeds, if it exists."""
-        return next((s["name"] for s in store.list_catalog_sources()
-                     if s["connector"] == "github_app"
-                     and (s.get("config") or {}).get("credential") == name), None)
+        """Where a credential is used, so deleting one is an informed act. Nothing in the cell
+        names a credential since the source catalog went (TR-1811): both lists are empty."""
+        return {"sources": [], "mcp_servers": []}
 
     def _gh_deliveries(cred: dict) -> dict:
-        """What the settings row shows about an App's webhook: last delivery, refusals, drops."""
-        src = _gh_app_source(cred["name"])
-        if not src:
+        """What the settings row shows about an App's webhook: its key, the name its events go
+        under, last delivery, refusals, drops."""
+        row = store.integration_key_for("ci_github", cred["name"])
+        if not row:
             return {}
-        from .connectors.github_app import STATS
-        st = STATS.get(src) or {}
-        cfg = runtime.catalog.sources.get(src)
-        return {"source": src, "ingest_key": cfg.ingest_key if cfg else None,
+        src = row.get("source") or "github"
+        st = _gh_webhook.STATS.get(src) or {}
+        return {"source": src, "ingest_key": row["key"],
                 "deliveries": {"received": st.get("deliveries", 0), "stored": st.get("stored", 0),
                                "last_at": st.get("last_at"), "last_event": st.get("last_event"),
                                "unknown_installation": st.get("unknown_installation", 0),
-                               "rejected_signature": runtime.rejected_deliveries.get(src, 0)}}
+                               "rejected_signature": _gh_webhook.REJECTED.get(src, 0)}}
 
     def _gh_row(c: dict) -> dict:
         return {**_gh_redact(c), **_gh_users(c["name"]),
                 **(_gh_deliveries(c) if c.get("kind") in APP_KINDS else {})}
 
-    def _keep_gh_key(src: str, name: str) -> None:
-        """The App's webhook key in integration_keys (TR-1805): what /ingest/<key> reads, with no
-        source catalog. Its events still go under the catalog source's name until the catalog goes."""
-        cfg = runtime.catalog.sources.get(src)
-        key = cfg.ingest_key if cfg else None
-        if key:
-            store.put_integration_key(key, "ci_github", name, src)
-
-    def _ensure_gh_app_source(name: str, ingest_key: str | None = None) -> str:
-        """The GitHub App source a credential feeds, created when missing: `github` when that name
-        is free, else `github_<credential>`. One per credential; it is a part of the cell like any
-        source (Default project until a project uses it)."""
-        existing = _gh_app_source(name)
-        if existing:
-            if ingest_key and runtime.catalog.sources[existing].ingest_key != ingest_key:
-                # an App recreated under the same name: its hook URL carries the new key
-                store.set_source_ingest_key(existing, ingest_key)
-                runtime.reload_catalog()
-            _keep_gh_key(existing, name)
-            return existing
-        src = "github" if "github" not in runtime.catalog.sources else \
-            "github_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
-        store.upsert_catalog_source(src, source_type_for("github_app"), "github_app", "1m",
-                                    normalize_config("github_app", {"credential": name}),
-                                    ingest_key=ingest_key)
-        store.put_in_project("source", src, _fallback_project(store.default_project_id()), creator=True)
-        runtime.reload_catalog()
-        _keep_gh_key(src, name)
-        return src
+    def _ensure_gh_app_key(name: str, ingest_key: str | None = None) -> dict:
+        """The webhook key of an App credential (integration_keys, TR-1805), made when missing:
+        {key, source}. Its events go under `github` when no other credential's key uses that name,
+        else `github_<credential>`. A key given (an App recreated under the same name, whose hook
+        URL carries the new key) replaces the old one."""
+        row = store.integration_key_for("ci_github", name)
+        if row and (not ingest_key or row["key"] == ingest_key):
+            return row
+        if row:
+            src = row.get("source") or "github"
+        else:
+            taken = store.integration_key_sources("ci_github")
+            src = "github" if "github" not in taken else \
+                "github_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
+        key = ingest_key or f"github_app-{secrets.token_hex(8)}"
+        store.put_integration_key(key, "ci_github", name, src)
+        return {"key": key, "source": src}
 
     def _check_gh_name(name: str) -> str:
         name = (name or "").strip()
@@ -2259,9 +1409,8 @@ def make_app() -> FastAPI:
                 except ValueError as e:
                     _err(e)
             store.upsert_github_credential(name, "", "app", api_url, "", config=cfg)
-            src = _ensure_gh_app_source(name)
-            return {"ok": True, "account": "", "source": src,
-                    "ingest_key": runtime.catalog.sources[src].ingest_key}
+            hook = _ensure_gh_app_key(name)
+            return {"ok": True, "account": "", "source": hook["source"], "ingest_key": hook["key"]}
         if body.kind == "app_broker":
             # Tares Cloud: the control plane keeps the App's key and brokers tokens (TR-166)
             if not (body.token_url.strip() and body.broker_secret.strip()
@@ -2274,9 +1423,9 @@ def make_app() -> FastAPI:
                    "repositories": _gh_repositories(body.repositories or [])}
             store.upsert_github_credential(name, "", "app_broker", api_url, body.account.strip(),
                                            config=cfg)
-            src = _ensure_gh_app_source(name)
-            return {"ok": True, "account": body.account.strip(), "source": src,
-                    "ingest_key": runtime.catalog.sources[src].ingest_key}
+            hook = _ensure_gh_app_key(name)
+            return {"ok": True, "account": body.account.strip(), "source": hook["source"],
+                    "ingest_key": hook["key"]}
         if body.kind != "token":
             _err(ValueError("kind must be token, app or app_broker"))
         if not body.token.strip():
@@ -2408,7 +1557,7 @@ def make_app() -> FastAPI:
     # 1. POST .../apps (admin) returns the manifest and where to POST it; the console submits it as
     #    a form, so the person lands on GitHub's "create App" page with everything filled in.
     # 2. GitHub sends the browser to .../apps/callback?code=...&state=...; the code is exchanged for
-    #    the App's id, key and webhook secret, the credential and its webhook source are stored.
+    #    the App's id, key and webhook secret, the credential and its webhook key are stored.
     # 3. The person installs it; GitHub sends the browser to .../apps/installed?installation_id=...
     # The two callbacks are public to the auth middleware (a redirect has no Tares key) and gated
     # by the signed state, or for the install by proving the installation belongs to our App.
@@ -2420,9 +1569,9 @@ def make_app() -> FastAPI:
 
     @app.post("/api/integrations/github/apps")
     def create_github_app(body: GithubAppCreateIn, request: Request):
-        from .setup_flow import public_base
         name = _check_gh_name(body.name)
-        base = (body.public_url.strip() or public_base(str(request.base_url))).rstrip("/")
+        base = (body.public_url.strip() or os.getenv("TARES_PUBLIC_URL", "").strip()
+                or str(request.base_url)).rstrip("/")
         ingest_key = f"github_app-{secrets.token_hex(8)}"
         hook_url = f"{base}/ingest/{ingest_key}"
         host = urlsplit(base).hostname or ""
@@ -2453,7 +1602,7 @@ def make_app() -> FastAPI:
                                     "webhook_secret", "html_url", "owner", "app_name")}
         cfg["installations"] = []
         store.upsert_github_credential(name, "", "app", "", conv["owner"], config=cfg)
-        _ensure_gh_app_source(name, data["key"])
+        _ensure_gh_app_key(name, data["key"])
         return _gh_settings({"github": name, "event": "created"})
 
     @app.get("/api/integrations/github/{name}/install")
@@ -2674,21 +1823,6 @@ def make_app() -> FastAPI:
             _err(ValueError("edition must be one of " + ", ".join(edition_mod.EDITIONS)))
         store.set_setting(edition_mod.EDITION_SETTING, value)
         return {"ok": True, **_edition_settings()}
-
-    # whether the MCP server lists the building-block tools (TR-757); null clears the choice
-    def _mcp_settings() -> dict:
-        value, _needed = edition_mod.edition(store)
-        return {"object_tools": edition_mod.object_tools(store, value)}
-
-    @app.get("/api/settings/mcp")
-    def get_mcp_settings():
-        return _mcp_settings()
-
-    @app.put("/api/settings/mcp")
-    def set_mcp_settings(body: McpSettingsIn):
-        store.set_setting(edition_mod.OBJECT_TOOLS_SETTING,
-                          None if body.object_tools is None else ("1" if body.object_tools else "0"))
-        return {"ok": True, **_mcp_settings()}
 
     # ── the Slack bot token: same contract as the Anthropic key ──────────────
     # One token per instance, behind the cell's Slack posts. It is a credential, so it is
@@ -2967,47 +2101,13 @@ def make_app() -> FastAPI:
         thread_ts = (form.get("thread_ts") or "").strip() or None
         return slack_mod.build_error(slack_mod.ASK_GONE_NOTE, thread_ts)
 
-    # ── a delivery's endpoint, named deterministically (the project timeline masks webhook URLs) ──
-    _AGENT_ADJ = ["brisk", "quiet", "amber", "bold", "calm", "deft", "eager", "fleet",
-                  "keen", "lucid", "merry", "noble", "prime", "swift", "vivid", "wry"]
-    _AGENT_NOUN = ["heron", "otter", "drake", "skiff", "beacon", "compass", "gull", "harbor",
-                   "keel", "lantern", "mast", "pilot", "rudder", "sextant", "tide", "wake"]
-
-    def _agent_identity(url: str) -> tuple[str, str]:
-        """(name, masked display URL) for a subscriber endpoint. A Tares agent's URL carries its
-        real name and no secret, so it's shown verbatim; a Slack channel likewise. An external hook
-        URL is the identity but carries a secret in the path, so it's anonymized (deterministic
-        name) and the last path segment masked."""
-        from .config import agent_name_from_url
-        internal = agent_name_from_url(url.rstrip("/"))
-        if internal is not None:
-            return internal, "in-process (Tares agent)"
-        channel = slack_channel_from_url(url.rstrip("/"))
-        if channel is not None:
-            # The channel IS the identity and holds no secret (the token does), so it's shown as
-            # written — a raw slack://channel/C0123456 URL in the roster reads like a bug.
-            return f"#{channel}", "Slack channel"
-        norm = url.rstrip("/")
-        h = int(hashlib.sha256(norm.encode()).hexdigest(), 16)
-        name = f"{_AGENT_ADJ[h % len(_AGENT_ADJ)]}-{_AGENT_NOUN[(h // 16) % len(_AGENT_NOUN)]}"
-        try:
-            from urllib.parse import urlsplit
-            u = urlsplit(norm)
-            segs = [seg for seg in u.path.split("/") if seg]
-            if segs:
-                segs[-1] = segs[-1][:2] + "…" if len(segs[-1]) > 2 else "…"
-            masked = f"{u.scheme}://{u.netloc}/" + "/".join(segs)
-        except Exception:
-            masked = norm[:24] + "…"
-        return name, masked
-
     # ── management API: projects (templates instantiated with params) ─────────
     # A project creates and owns ordinary objects; those stay editable and deletable on their own
     # pages. These routes are the instance's lifecycle and its combined view.
     def _uc_err(e: Exception):
         if isinstance(e, KeyError):
             _err(e, 404)
-        if isinstance(e, (ProjectError, CatalogError, ValueError)):
+        if isinstance(e, (ProjectError, ValueError)):
             _err(e, 400)
         raise e
 
@@ -3015,9 +2115,8 @@ def make_app() -> FastAPI:
     def project_templates():
         return {"templates": projects.list_templates()}
 
-    # By key, hidden templates included: the gallery list leaves out templates a person does not
-    # pick (rius_rca is created by the Rius control plane), but the Edit page of a project built
-    # on one still has to render its form.
+    # By key, hidden templates included (custom and default): the Edit page of a project still
+    # renders its form from it.
     @app.get("/api/projects/templates/{key}")
     def project_template(key: str):
         from .projects.registry import get_template
@@ -3030,13 +2129,9 @@ def make_app() -> FastAPI:
         """What a project key is told about its project: who it is and what it is made of, not
         its template parameters (they can hold credentials)."""
         p = store.get_project(uid) or {}
-        names, _scope = _project_view(uid)
         return {"id": uid, "name": p.get("name"), "template": p.get("template"),
                 "goal": p.get("goal"),
                 "status": p.get("status"), "created_at": p.get("created_at"),
-                "sources": names,
-                "triggers": sorted(t.name for t in runtime.catalog.triggers
-                                   if uid in store.projects_using("trigger", t.name)),
                 "skills": [s["name"] for s in store.list_skills(uid)]}
 
     # Licence-independent by design (TR-915): never consult licence or team here.
@@ -3080,9 +2175,7 @@ def make_app() -> FastAPI:
                             "software_factory"))
         try:
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            hidden = _hidden_ids()
             out = projects.create(body.template, params, name=body.name or None, goal=body.goal,
-                                  gone=lambda kind, name: _is_hidden(kind, name, hidden),
                                   icon=body.icon)
         except Exception as e:
             _uc_err(e)
@@ -3119,8 +2212,7 @@ def make_app() -> FastAPI:
                     factory_home.clear_cache()   # Home keeps its answer for a few seconds
                 return out
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            hidden = _hidden_ids()
-            out = projects.update(uid, params, gone=lambda kind, name: _is_hidden(kind, name, hidden))
+            out = projects.update(uid, params)
             if "goal" in given:
                 projects.set_goal(uid, body.goal)
                 out = {**projects.get(uid), "report": out["report"]}
@@ -3138,15 +2230,11 @@ def make_app() -> FastAPI:
 
     @app.delete("/api/projects/{uid}")
     def delete_project(uid: str, purge_events: bool = False, delete_sources: str = ""):
-        """Deletes the project's triggers, agents and MCP servers. `delete_sources=a,b` also
-        deletes those of its sources that no other project uses (the others are kept and listed
-        in `kept`); every other source stays, in the default project if in no other. Sources are
-        only ever deleted when asked: `delete_sources=all` names every source of the project, and
-        `none`, or leaving it out, keeps them all."""
+        """Deletes the project. `purge_events` and `delete_sources` stay for old clients: a project
+        holds no sources since the catalog went, so `all` and `none` name nothing."""
         _project_or_404(uid)
-        chosen = [x.strip() for x in delete_sources.split(",") if x.strip() and x.strip() != "none"]
-        if chosen == ["all"]:
-            chosen = sorted(store.project_sources(uid))
+        chosen = [x.strip() for x in delete_sources.split(",")
+                  if x.strip() and x.strip() not in ("none", "all")]
         try:
             out = projects.delete(uid, purge_events=purge_events, delete_sources=chosen)
         except Exception as e:
@@ -3154,35 +2242,12 @@ def make_app() -> FastAPI:
         factory_home.clear_cache()
         return out
 
-    @app.post("/api/projects/{uid}/sources")
-    def add_project_source(uid: str, body: dict = Body(...)):
-        """Add an existing source to a project (sources are shared between projects)."""
-        _project_or_404(uid)
-        name = str((body or {}).get("name") or "").strip()
-        if not name:
-            _err(ValueError("name is required"), 400)
-        _gone_if_hidden("source", name, f"unknown source {name!r}")
-        try:
-            return projects.add_source(uid, name)
-        except Exception as e:
-            _uc_err(e)
-
-    @app.delete("/api/projects/{uid}/sources/{name}")
-    def remove_project_source(uid: str, name: str):
-        """Take a source out of a project; refused while a trigger of the project reads it."""
-        _project_or_404(uid)
-        try:
-            return projects.remove_source(uid, name)
-        except Exception as e:
-            _uc_err(e)
-
     @app.post("/api/projects/{uid}/pause")
     def pause_project(uid: str, body: dict | None = Body(default=None)):
-        """Body {"sources": true} also pauses the project's sources, so nothing accumulates while
-        it is paused. Default: sources keep ingesting."""
+        """The project is marked paused (a body is accepted and ignored, for old clients)."""
         _project_or_404(uid)
         try:
-            return projects.pause(uid, sources=bool((body or {}).get("sources")))
+            return projects.pause(uid)
         except Exception as e:
             _uc_err(e)
 
@@ -3194,42 +2259,14 @@ def make_app() -> FastAPI:
         except Exception as e:
             _uc_err(e)
 
-    @app.post("/api/projects/{uid}/repair")
-    def repair_project(uid: str, body: ProjectRepair):
-        _project_or_404(uid)
-        try:
-            return projects.repair(uid, body.key)
-        except Exception as e:
-            _uc_err(e)
-
-    @app.post("/api/projects/templates/{key}/detect")
-    async def project_detect(key: str):
-        try:
-            return await projects.detect(key)
-        except Exception as e:
-            _uc_err(e)
-
-    @app.post("/api/projects/{uid}/actions/{name}")
-    async def project_action(uid: str, name: str, request: Request):
-        _project_or_404(uid)
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        try:
-            return await asyncio.to_thread(projects.action, uid, name, body if isinstance(body, dict) else {})
-        except Exception as e:
-            _uc_err(e)
-
     @app.get("/api/projects/{uid}/timeline")
     async def project_timeline(request: Request, uid: str, limit: int = 50, before: str = "",
                                trigger: str = "", agent: str = "", outcome: str = "",
                                entity: str = ""):
-        """Everything that happened in the project, newest first, one thread per firing or
-        unprompted run, with what each led to nested inside (TR-331). Page with `before` =
-        the previous page's `next_before`; a `before` without a zone is UTC. Any of `trigger`,
-        `agent`, `outcome`, `entity` shows only the threads that match, so the hand-overs pushed
-        through without every sign-off (`events`) are left out: they have none of those."""
+        """What happened in the project, newest first (TR-331): the hand-overs pushed through
+        without every sign-off (`events`). `threads` stays, empty, since triggers and agents went.
+        Page with `before` = the previous page's `next_before`; a `before` without a zone is UTC.
+        Any of `trigger`, `agent`, `outcome`, `entity` filters threads, so `events` are left out."""
         _project_or_404(uid)
         if projects.get(uid) is None:
             _err(KeyError(f"unknown project {uid!r}"), 404)
@@ -3243,11 +2280,9 @@ def make_app() -> FastAPI:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
         if outcome and outcome not in timeline.OUTCOMES:
             _err(ValueError(f"outcome must be one of {', '.join(timeline.OUTCOMES)}"))
-        scheduled = {t.name for t in runtime.catalog.triggers
-                     if getattr(t.condition, "every", None)}
         out = await asyncio.to_thread(
             timeline.project_timeline, store, uid, limit=limit, before=at, trigger=trigger,
-            agent=agent, outcome=outcome, entity=entity, scheduled=scheduled)
+            agent=agent, outcome=outcome, entity=entity, scheduled=set())
         filtered = bool(trigger or agent or outcome or entity)
         events = [] if filtered else timeline.override_events(
             store.list_handover_overrides(uid), at, out.get("next_before"))
@@ -3255,37 +2290,7 @@ def make_app() -> FastAPI:
             # every hand-over the lead pushed through without every sign-off (TR-636), on the page
             # whose window holds its time, so across pages none repeats and none is lost
             out["events"] = events
-        if _pk(request):
-            # a webhook URL can carry its receiver's secret: a project key sees it masked,
-            # like the agents roster shows it
-            def mask(threads):
-                for t in threads:
-                    for d in t.get("deliveries") or []:
-                        if d.get("kind") == "webhook":
-                            d["target"] = _agent_identity(d["target"] or "")[1]
-                    for r in t.get("runs") or []:
-                        stack = [r]
-                        while stack:
-                            x = stack.pop()
-                            mask(x.get("firings") or [])
-                            stack.extend(x.get("children") or [])
-            mask(out["threads"])
         return out
-
-    # ── the goal-first project page: how it works, what the agents found, is it working ──
-    @app.get("/api/projects/{uid}/outline")
-    async def project_outline(uid: str):
-        """How the project works, in plain sentences built from its configuration."""
-        _project_or_404(uid)
-        return await asyncio.to_thread(goal_mod.outline, store, runtime.catalog, uid,
-                                       runtime.health_snapshot())
-
-    @app.get("/api/projects/{uid}/health")
-    async def project_health(uid: str):
-        """Is the project working: a state, one message, and what needs attention first."""
-        p = _project_or_404(uid)
-        return await asyncio.to_thread(goal_mod.project_health, store, runtime.catalog, uid, p,
-                                       runtime.health_snapshot())
 
     @app.get("/api/projects/{uid}/summary")
     def project_summary(uid: str):
@@ -3301,7 +2306,7 @@ def make_app() -> FastAPI:
     # ── model usage: one ledger row per model call the cell makes ────────────
     def _record_model_usage(model: str, usage: dict, key_source: str = "", kind: str = "anthropic",
                             provider_id: str | None = None) -> None:
-        """One ledger row per summary (the standup, a milestone, the report) or setup plan, so the
+        """One ledger row per summary (the standup, a milestone, the report), so the
         cell's spend meter covers everything that talks to a model. `key_source` is the origin of
         the key that PAID for it, captured by the caller when it resolved the key, never
         re-resolved here: the stored key could have changed meanwhile. The surface stays "ask",
@@ -3313,428 +2318,6 @@ def make_app() -> FastAPI:
             usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"],
             price_usage(kind, model, usage),
             key_source=key_source or None, provider=provider_id)
-
-    # ── the guided project setup: goal -> plan -> apply -> connect -> try it ──
-    from . import setup_flow
-
-    def _setup_err(e):
-        raise HTTPException(status_code=e.status, detail=e.message)
-
-    def _setup_model():
-        """(provider, model, key origin, provider id) the plan is written on: the cell's
-        default provider. 409 with a plain message when none."""
-        provider, origin = resolve_provider(store)
-        if provider is None:
-            _err(ValueError(setup_flow.NO_PROVIDER), 409)
-        pid = providers_mod.default_id(store)
-        return provider, providers_mod.default_model_for(store, pid), origin, pid
-
-    async def _setup_read(name: str, args: dict) -> tuple[bool, str]:
-        """The planner's read tools, answered by this daemon's own routes in process."""
-        paths = {"list_connectors": "/api/connectors", "list_sources": "/api/sources",
-                 "list_templates": "/api/projects/templates"}
-        if name == "github_repo":
-            return await setup_flow.read_github_repo(store, str(args.get("repo") or ""))
-        if name == "source_fields":
-            path = f"/api/sources/{str(args.get('name') or '')}/fields"
-        elif name in paths:
-            path = paths[name]
-        else:
-            return False, f"unknown tool {name!r}"
-        headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
-                                     base_url="http://setup", headers=headers, timeout=30) as cx:
-            r = await cx.get(path)
-        text = r.text
-        return r.status_code < 400, text if len(text) <= 20000 else text[:20000] + "\n(truncated)"
-
-    async def _setup_generate(message: str, prev: dict | None = None,
-                              who: str | None = None) -> dict:
-        provider, model, origin, pid = _setup_model()
-        try:
-            return await setup_flow.model_plan(
-                provider, model, message, store, runtime.catalog, _setup_read,
-                on_usage=lambda u: _record_model_usage(model, u, key_source=origin,
-                                                       kind=provider.kind, provider_id=pid),
-                prev=prev, who=who)
-        except setup_flow.SetupError as e:
-            _setup_err(e)
-
-    @app.get("/api/setup/github-suggestion")
-    async def setup_github_suggestion():
-        """The guided setup's opening line when GitHub is connected (TR-262): one goal grounded
-        in the person's newest repositories, cached a day. {available: false} without GitHub;
-        {suggestion: null} when no model provider is set up (the page just leaves it out)."""
-        if not store.list_github_credentials():
-            return {"available": False, "suggestion": None, "repos": []}
-        provider, _origin = resolve_provider(store)
-        if provider is None:
-            return {"available": True, "suggestion": None,
-                    "repos": await setup_flow.github_repo_lines(store, limit=8)}
-        pid = providers_mod.default_id(store)
-        model = providers_mod.default_model_for(store, pid)
-        try:
-            out = await setup_flow.github_suggestion(
-                store, provider, model,
-                on_usage=lambda u: _record_model_usage(model, u, key_source=_origin,
-                                                     kind=provider.kind, provider_id=pid))
-        except Exception as e:  # noqa: BLE001 — the page works without it
-            print(f"setup: github suggestion failed: {type(e).__name__}: {e}")
-            return {"available": True, "suggestion": None, "repos": []}
-        return {"available": True, **out}
-
-    @app.post("/api/setup/plan")
-    async def setup_plan(body: dict = Body(...)):
-        """{goal, who?, existing_sources?} -> {plan}: the whole project in plain words, written
-        by the cell's model and checked like a catalog import."""
-        try:
-            goal = goal_mod.normalize_goal(body.get("goal"))
-        except ValueError as e:
-            _err(e)
-        if not goal:
-            _err(ValueError("say what the project is for"))
-        who = body.get("who") or None
-        if who not in (None, "tares", "own"):
-            _err(ValueError("who is tares or own"))
-        gh_repos = await setup_flow.github_repo_lines(store)
-        plan = await _setup_generate(setup_flow.plan_message(
-            goal, who, body.get("existing_sources", True) is not False, store, runtime.catalog,
-            github=gh_repos), who=who)
-        return {"plan": plan}
-
-    @app.post("/api/setup/adjust")
-    async def setup_adjust(body: dict = Body(...)):
-        """{plan, instruction} -> {plan}: the plan revised as the person asked."""
-        plan = body.get("plan")
-        instruction = " ".join(str(body.get("instruction") or "").split())
-        if not isinstance(plan, dict):
-            _err(ValueError("plan is required"))
-        if not instruction:
-            _err(ValueError("say what to change"))
-        if len(instruction) > 2000:
-            _err(ValueError("an instruction is at most 2000 characters"))
-        return {"plan": await _setup_generate(setup_flow.adjust_message(plan, instruction),
-                                              prev=plan)}
-
-    @app.post("/api/setup/check")
-    def setup_check(body: dict = Body(...)):
-        """{plan} -> {plan, problems}: the plan normalized exactly as apply would (sentences and
-        the summary derived from it as it is now) and what stops it from applying, per item
-        ({where, message}), in plain words. No model call; apply accepts a plan with no
-        problems."""
-        raw = body.get("plan")
-        if not isinstance(raw, dict):
-            _err(ValueError("plan is required"))
-        hidden = _hidden_ids()
-        plan, problems = setup_flow.check(raw, store, runtime.catalog,
-                                          draft=body.get("project") or None,
-                                          gone=lambda kind, name: _is_hidden(kind, name, hidden))
-        return {"plan": plan, "problems": problems}
-
-    # ── drafts: a project being planned lives on the cell from the first "Plan it" ─────────
-    # The draft is a project row with status draft and nothing in it; its setup holds the goal,
-    # who does the work, the plan as the person edits it, and `planning`: the steps of a plan
-    # being written right now ({state running|failed, steps [{text, state, at}], error}).
-    # Planning runs in the background; the console polls GET setup to show it.
-    _planning_tasks: dict[str, asyncio.Task] = {}
-
-    def _draft_or_404(uid: str) -> dict:
-        p = _project_or_404(uid)
-        if p.get("status") != setup_flow.DRAFT:
-            _err(ValueError("this project is already set up"), 409)
-        return store.get_project_setup(uid) or {}
-
-    def _draft_words(body: dict, setup: dict | None = None) -> tuple[str, str]:
-        """The name the person gave the project and what they said about it, both optional; an
-        absent field keeps what the draft has."""
-        setup = setup or {}
-        name = " ".join(str(body["name"] if "name" in body else setup.get("name") or "").split())
-        about = str(body["description"] if "description" in body
-                    else setup.get("description") or "").strip()
-        if len(name) > 80:
-            _err(ValueError("a project name is at most 80 characters"))
-        if len(about) > 4000:
-            _err(ValueError("a description is at most 4000 characters"))
-        return name, about
-
-    def _draft_name(goal: str) -> str:
-        base = (goal[:60].rsplit(" ", 1)[0] if len(goal) > 60 else goal) or "New project"
-        base = base[:1].upper() + base[1:]
-        taken = {p["name"] for p in store.list_projects()}
-        name, n = base, 2
-        while name in taken:
-            name, n = f"{base} {n}", n + 1
-        return name
-
-    def _start_planning(uid: str, message: str, prev: dict | None, who: str | None) -> None:
-        """Write (or revise) the draft's plan in the background, its steps kept on the setup."""
-        steps: list[dict] = []
-
-        def save(**planning) -> None:
-            if planning.get("state") == "failed":   # the step it was on stopped there
-                for st in steps:
-                    if st["state"] == "running":
-                        st["state"] = "stopped"
-            setup = store.get_project_setup(uid)
-            if setup is None:            # the draft was deleted meanwhile
-                return
-            setup["planning"] = planning or None
-            store.set_project_setup(uid, setup)
-
-        def progress(text: str, running: bool) -> None:
-            for st in steps:
-                if st["state"] == "running":
-                    st["state"] = "done"
-            steps.append({"text": text, "state": "running" if running else "done",
-                          "at": now_utc().isoformat()})
-            save(state="running", steps=list(steps))
-
-        async def run() -> None:
-            try:
-                provider, model, origin, pid = _setup_model()
-                plan = await setup_flow.model_plan(
-                    provider, model, message, store, runtime.catalog, _setup_read,
-                    on_usage=lambda u: _record_model_usage(model, u, key_source=origin,
-                                                           kind=provider.kind, provider_id=pid),
-                    prev=prev, who=who, progress=progress)
-                setup = store.get_project_setup(uid)
-                if setup is None:
-                    return
-                # the name the person gave stays the name of a plan written from the goal; a
-                # change they asked for afterwards ("call it Bar") wins, and becomes their name
-                if setup.get("name") and prev is None:
-                    plan["name"] = setup["name"]
-                elif setup.get("name") and plan.get("name"):
-                    setup["name"] = plan["name"]
-                # a secret typed into a new source stays out of the draft (as on every save)
-                setup.update(plan=setup_flow.stored_plan(plan), planning=None, who=plan.get("who"))
-                store.set_project_setup(uid, setup)
-                other = store.get_project_by_name(plan.get("name") or "")
-                if plan.get("name") and (other is None or other["id"] == uid):
-                    store.update_project(uid, name=plan["name"])   # the list shows the plan's name
-            except HTTPException as e:
-                save(state="failed", steps=steps, error=str(e.detail),
-                     no_provider=e.status_code == 409)
-            except setup_flow.SetupError as e:
-                save(state="failed", steps=steps, error=e.message)
-            except Exception as e:  # noqa: BLE001 — a failed plan is said on the page, not lost
-                save(state="failed", steps=steps, error=f"Planning stopped: {type(e).__name__}: {e}")
-            finally:
-                _planning_tasks.pop(uid, None)
-
-        progress(setup_flow.context_words(runtime.catalog), False)
-        _planning_tasks[uid] = loop_mod.spawn(run())
-
-    # a restart ends any planning in flight: say so rather than leave the page waiting
-    for _p in store.list_projects():
-        if _p.get("status") == setup_flow.DRAFT:
-            _s = store.get_project_setup(_p["id"]) or {}
-            if (_s.get("planning") or {}).get("state") == "running":
-                _s["planning"] = {**_s["planning"], "state": "failed",
-                                  "error": "Tares restarted while planning. Plan it again."}
-                store.set_project_setup(_p["id"], _s)
-
-    @app.post("/api/setup/drafts", status_code=202)
-    async def setup_draft(request: Request, body: dict = Body(...)):
-        """{goal, who?, name?, description?} -> {project}: a draft project, and its plan being
-        written in the background. GET /api/projects/{id}/setup shows the planning step by step,
-        then the plan. `name` is kept as the project's name; `description` goes to the planner."""
-        try:
-            goal = goal_mod.normalize_goal(body.get("goal"))
-        except ValueError as e:
-            _err(e)
-        if not goal:
-            _err(ValueError("say what the project is for"))
-        who = body.get("who") or None
-        if who not in (None, "tares", "own"):
-            _err(ValueError("who is tares or own"))
-        name, about = _draft_words(body)
-        if name and store.get_project_by_name(name):
-            _err(ValueError(f"a project named {name!r} already exists"), 409)
-        _setup_model()   # no provider: 409 now, on the goal page, not later on the draft
-        uid = "uc_" + uuid.uuid4().hex[:10]
-        person = _current_person(request)
-        store.create_project(uid, "custom", name or _draft_name(goal), {"objects": []},
-                             status=setup_flow.DRAFT, goal=goal,
-                             lead_person_id=person["id"] if person else None)
-        store.log_project(uid, "draft", "planning from the goal")
-        store.set_project_setup(uid, {"step": "plan", "goal": goal, "who": who, "plan": None,
-                                      "practice_run": None, "name": name, "description": about})
-        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog,
-                                                     github=await setup_flow.github_repo_lines(store),
-                                                     name=name, description=about),
-                        None, who)
-        return {"project": projects.get(uid)}
-
-    @app.post("/api/projects/{uid}/setup/plan", status_code=202)
-    async def setup_replan(uid: str, body: dict = Body(default={})):
-        """A draft planned again in the background: {goal, who?, name?, description?} plans from a
-        changed goal; {instruction} changes the current plan as asked."""
-        setup = _draft_or_404(uid)
-        if uid in _planning_tasks:
-            _err(ValueError("Tares is planning this project already"), 409)
-        instruction = " ".join(str(body.get("instruction") or "").split())
-        if instruction:
-            if len(instruction) > 2000:
-                _err(ValueError("an instruction is at most 2000 characters"))
-            plan = body.get("plan") if isinstance(body.get("plan"), dict) else setup.get("plan")
-            if not isinstance(plan, dict):
-                _err(ValueError("there is no plan to change yet"))
-            _setup_model()
-            # a secret typed into a new source is neither kept on the draft nor sent to the model
-            plan = setup_flow.stored_plan(plan)
-            setup["plan"] = plan
-            store.set_project_setup(uid, setup)
-            _start_planning(uid, setup_flow.adjust_message(plan, instruction), plan, None)
-            return {"ok": True}
-        try:
-            goal = goal_mod.normalize_goal(body.get("goal") or setup.get("goal"))
-        except ValueError as e:
-            _err(e)
-        if not goal:
-            _err(ValueError("say what the project is for"))
-        who = body.get("who") or setup.get("who") or None
-        if who not in (None, "tares", "own"):
-            _err(ValueError("who is tares or own"))
-        name, about = _draft_words(body, setup)
-        other = store.get_project_by_name(name) if name else None
-        if other and other["id"] != uid:
-            _err(ValueError(f"a project named {name!r} already exists"), 409)
-        _setup_model()
-        setup.update(goal=goal, who=who, plan=None, name=name, description=about)
-        store.set_project_setup(uid, setup)
-        store.update_project(uid, goal=goal, **({"name": name} if name else {}))
-        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog,
-                                                     github=await setup_flow.github_repo_lines(store),
-                                                     name=name, description=about),
-                        None, who)
-        return {"ok": True}
-
-    @app.post("/api/setup/apply", status_code=201)
-    def setup_apply(request: Request, body: dict = Body(...)):
-        """{plan, project?} -> {project, plan, connect}: create the project and everything it
-        needs in one go, then say what only the person can do. `project`: the draft that becomes
-        the project. `plan` is the plan as the project keeps it (a secret typed into a new
-        source's settings left out)."""
-        raw = body.get("plan")
-        if not isinstance(raw, dict):
-            _err(ValueError("plan is required"))
-        draft = body.get("project") or None
-        if draft is not None:
-            _draft_or_404(str(draft))
-            if str(draft) in _planning_tasks:
-                _err(ValueError("Tares is still planning this project"), 409)
-        hidden = _hidden_ids()
-        plan, errors = setup_flow.normalize(raw, store, runtime.catalog, draft=draft,
-                                            gone=lambda kind, name: _is_hidden(kind, name, hidden))
-        if errors:
-            _err(ValueError("This plan cannot be set up: " + " ".join(errors)), 422)
-        try:
-            uid, key = setup_flow.apply(store, projects, plan, _make_key, draft=draft)
-        except setup_flow.SetupError as e:
-            _setup_err(e)
-        if draft is None:   # a draft was led by whoever made it; this project has no lead yet
-            person = _current_person(request)
-            if person:
-                store.set_project_lead(uid, person["id"])
-        setup = {"plan": setup_flow.stored_plan(plan), "step": "connect", "practice_run": None}
-        if key is not None:
-            setup["own_key_id"] = key["id"]
-        store.set_project_setup(uid, setup)
-        base = setup_flow.public_base(str(request.base_url))
-        return {"project": projects.get(uid), "plan": setup["plan"],
-                "connect": setup_flow.connect_info(store, runtime.catalog, uid, plan, base, key)}
-
-    def _setup_or_404(uid: str) -> dict:
-        _project_or_404(uid)
-        setup = store.get_project_setup(uid)
-        if setup is None:
-            _err(KeyError("this project was not set up with the guided setup"), 404)
-        return setup
-
-    @app.get("/api/projects/{uid}/setup")
-    async def get_project_setup(uid: str, request: Request):
-        """{step, plan, practice_run, checks, connect}: where the guided setup is, live status for
-        Connect, and what Connect shows (the addresses as the daemon sees them; the own agent's
-        key is not in it, it was shown once)."""
-        setup = _setup_or_404(uid)
-        if _project_or_404(uid).get("status") == setup_flow.DRAFT:
-            return {"step": "plan", "draft": True, "goal": setup.get("goal"),
-                    "name": setup.get("name") or "", "description": setup.get("description") or "",
-                    "who": setup.get("who"), "plan": setup.get("plan"),
-                    "planning": setup.get("planning"), "practice_run": None, "checks": None,
-                    "connect": None}
-        checks = await asyncio.to_thread(setup_flow.checks, store, runtime.catalog,
-                                         runtime.health_snapshot(), uid, setup)
-        base = setup_flow.public_base(str(request.base_url))
-        return {"step": setup.get("step"), "plan": setup.get("plan"),
-                "practice_run": setup.get("practice_run"), "checks": checks,
-                "connect": setup_flow.connect_info(store, runtime.catalog, uid,
-                                                   setup.get("plan") or {}, base, None)}
-
-    @app.put("/api/projects/{uid}/setup")
-    def put_project_setup(uid: str, body: dict = Body(...)):
-        """{step}: connect, try or done. On a draft, {plan}: the plan as the person edited it,
-        kept so they can leave and come back."""
-        setup = _setup_or_404(uid)
-        if _project_or_404(uid).get("status") == setup_flow.DRAFT:
-            if not isinstance(body.get("plan"), dict):
-                _err(ValueError("a draft keeps its plan: send {plan}"))
-            if uid in _planning_tasks:
-                _err(ValueError("Tares is planning this project; wait for the plan"), 409)
-            setup["plan"] = setup_flow.stored_plan(body["plan"])
-            if setup.get("name") and body["plan"].get("name"):   # renamed on the plan: that is their name now
-                setup["name"] = str(body["plan"]["name"])
-            store.set_project_setup(uid, setup)
-            return {"ok": True}
-        step = body.get("step")
-        if step not in setup_flow.STEPS:
-            _err(ValueError(f"step is one of {', '.join(setup_flow.STEPS)}"))
-        setup["step"] = step
-        store.set_project_setup(uid, setup)
-        return {"ok": True, "step": step}
-
-    def _plan_watch(setup: dict, name: str) -> dict:
-        w = next((w for w in (setup.get("plan") or {}).get("watches") or []
-                  if w.get("name") == name), None)
-        if w is None:
-            _err(KeyError(f"the plan has no source named {name!r}"), 404)
-        return w
-
-    async def _practice_ingest(name: str, sample: dict) -> list:
-        """Store the example event on the source, labelled practice=true, without waking any
-        trigger: a practice event must not start a real run."""
-        from .connectors import build_connector
-        cfg = runtime.catalog.sources[name]
-        envs = build_connector(cfg, store).map_payload(sample)
-        for e in envs:
-            e.labels = {**(e.labels or {}), "practice": "true"}
-        await asyncio.to_thread(store.append, envs)
-        rt = runtime.sources.get(name)
-        if rt is not None:
-            rt.health.events_since_start += len(envs)
-            rt.health.last_ok_at = now_utc()
-        _metrics.events_ingested(name, len(envs))
-        return envs
-
-    @app.post("/api/projects/{uid}/setup/test-event")
-    async def setup_test_event(uid: str, body: dict = Body(...)):
-        """{source}: send the plan's example event into a push source, so the person sees it
-        arrive without wiring anything."""
-        setup = _setup_or_404(uid)
-        name = str(body.get("source") or "").strip()
-        w = _plan_watch(setup, name)
-        cfg = runtime.catalog.sources.get(name)
-        if cfg is None:
-            _err(KeyError(f"source {name!r} no longer exists"), 404)
-        if SPECS.get(cfg.connector, {}).get("mode") != "push":
-            _err(ValueError(f"{name} collects its events itself, so there is no test event to "
-                            "send"))
-        if not isinstance(w.get("sample"), dict):
-            _err(ValueError(f"the plan has no example event for {name}"))
-        _refuse_if_full()
-        envs = await _practice_ingest(name, w["sample"])
-        return {"ok": True, "ingested": len(envs)}
 
     # ── a project's docs and tickets (TR-403): what a spec session leaves for the session that
     # builds it. Docs belong to the cell and projects include them; tickets are owned by Linear
@@ -4904,7 +3487,7 @@ def make_app() -> FastAPI:
         return p["id"] if p else ref
 
     h = Host(
-        store, runtime,
+        store,
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         current_person=lambda request: _current_person(request),
@@ -4913,7 +3496,6 @@ def make_app() -> FastAPI:
         is_admin=lambda request: _is_admin(request),
         hidden_ids=lambda: _hidden_ids(), can_see=lambda p: _can_see(p),
         read_exclude=lambda: _read_exclude(),
-        hidden_sources=lambda: _hidden_sources(_hidden_ids()),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
@@ -4930,7 +3512,7 @@ def make_app() -> FastAPI:
     waiting_slack_mod.register(app, store, h, _waiting_slack)
     app.state.waiting_slack = _waiting_slack
     # the edition screens (tares/screens/__init__.py lists them)
-    screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime, morning=_morning))
+    screens.register_all(app, store, h, SimpleNamespace(fx=fx, morning=_morning))
     integrations_api.register(app, store, h)
     guardrails_api.register(app, store, h)
     project_secrets.register(app, store, h)   # TR-775
@@ -4943,18 +3525,6 @@ def make_app() -> FastAPI:
             # one page read: its repeated small reads run once (TR-1631)
             return await asyncio.to_thread(request_memo.run, factory_home.build, store, fx, request)
         return JSONResponse({"error": "no home on this edition"}, status_code=404)
-
-    def _run_hidden(run_id: str) -> bool:
-        """Does this run belong only to private projects the caller cannot see?"""
-        hidden = _hidden_ids()
-        if not hidden:
-            return False
-        uids = store.run_projects(run_id)
-        if uids:
-            return set(uids) <= hidden
-        # a run with no project of its own follows the watcher that raised it
-        run = store.get_agent_run(run_id)
-        return bool(run) and _owned_by_hidden("agent", run["agent"], hidden)
 
     # what the Claude Code sessions spend: the plan's limits and tokens by project
     claude_usage.register(app, store, _hidden_ids)
@@ -5117,35 +3687,6 @@ def make_app() -> FastAPI:
             _err(ValueError("name is at most 64 characters"))
         return _make_key(name, sorted(_PROJECT_SCOPES), uid)
 
-    @app.post("/api/projects/{uid}/stats")
-    def project_stats(uid: str, body: dict = Body(...)):
-        """{by, window?, where?, top?, sources?}: counts per value of the label `by` over the
-        project's sources, the last window against the one before, as a few lines of text."""
-        from .stats import stats_table
-        _project_or_404(uid)
-        by = str(body.get("by") or "").strip()
-        if not by:
-            _err(ValueError('stats needs `by`, the label to count per, e.g. "service"'))
-        names, scope = _project_view(uid)
-        named = body.get("sources") or []
-        if named:
-            if not isinstance(named, list) or set(named) - set(names):
-                _err(PermissionError("sources must be sources of this project"), 403)
-            names = [s for s in names if s in named]
-        where = body.get("where") or None
-        if where is not None and not isinstance(where, dict):
-            _err(ValueError("where is a {label: value} object"))
-        window = str(body.get("window") or "30m")
-        p = store.get_project(uid) or {}
-        try:
-            text = stats_table(store, names, by, window, where=where, top=body.get("top") or 20,
-                               scope=f"project {p.get('name') or uid}", project_rows=scope)
-        except ValueError as e:
-            _err(e)
-        store.log_query("s_" + uuid.uuid4().hex[:12], "(stats)", f"by {by}", window, 0, "http",
-                        project=uid)
-        return {"stats": text}
-
     # /api/usecases*: the pre-1.14 routes, same handlers, old response shape ({"usecases"},
     # {"recipes"}, and `recipe` on an instance, which get() still emits). Not in the schema;
     # removed two releases after 1.14.
@@ -5164,38 +3705,8 @@ def make_app() -> FastAPI:
             ("/api/usecases/{uid}", delete_project, ["DELETE"], 200),
             ("/api/usecases/{uid}/pause", pause_project, ["POST"], 200),
             ("/api/usecases/{uid}/resume", resume_project, ["POST"], 200),
-            ("/api/usecases/{uid}/repair", repair_project, ["POST"], 200),
-            ("/api/usecases/recipes/{key}/detect", project_detect, ["POST"], 200),
-            ("/api/usecases/{uid}/actions/{name}", project_action, ["POST"], 200),
             ("/api/usecases/{uid}/summary", project_summary, ["GET"], 200)):
         app.add_api_route(_path, _fn, methods=_methods, status_code=_status, include_in_schema=False)
-
-    # ── management API: catalog import/export ────────────────────────────────
-    @app.get("/api/catalog/export")
-    def catalog_export(sources: str | None = None, include_secrets: bool = False):
-        """Catalog YAML. Defaults (no params, as the agent/MCP call it): all sources, secrets
-        OMITTED. `sources=a,b` limits to a subset (triggers and agents filtered to stay consistent);
-        `include_secrets=true` emits real connector secrets (admin-gated route)."""
-        src = [s for s in sources.split(",") if s] if sources else None
-        return PlainTextResponse(export_db_to_yaml(store, src, include_secrets, _hidden_ids()),
-                                 media_type="application/yaml")
-
-    @app.post("/api/catalog/import")
-    def catalog_import(body: ImportReq):
-        # what the caller cannot see is neither replaced nor overwritten, and nothing answers
-        # differently for it than for a name the cell does not have (TR-998)
-        hidden = _hidden_ids()
-        if body.mode == "replace":
-            store.clear_catalog(hidden_objects(store, hidden) if hidden else None, hidden)
-        try:
-            counts = import_yaml_to_db(store, body.yaml, engine=projects, hide=hidden)
-            store.migrate_claude_code_repo_label()
-        except (CatalogError, ProjectError) as e:
-            _err(e)
-        except Exception as e:
-            _err(ValueError(f"invalid YAML: {e}"))
-        runtime.reload_catalog()
-        return {"ok": True, **counts}
 
     # ── metering ──────────────────────────────────────────────────────────────
     @app.get("/api/usage")
@@ -5203,7 +3714,7 @@ def make_app() -> FastAPI:
         """What this instance is using: db + WAL bytes, the volume they sit on, and event counts.
         `max_bytes` is the operator's TARES_MAX_DB_SIZE, else the volume the database sits on
         (`max_bytes_source` says which); null only when neither is known. At INGEST_PAUSE_PCT of it
-        ingest is refused and polls pause (`ingest_paused`), so the disk never fills.
+        ingest is refused (`ingest_paused`), so the disk never fills.
         `pct_used` is (db + wal) over max_bytes on a 0-100 scale, NOT a 0-1 fraction — so a
         "warn at 80%" consumer compares against 80, not 0.8. Null whenever max_bytes is null.
         Cheap by construction: file stats plus the maintained per-source counters, no table scan,
@@ -5215,11 +3726,6 @@ def make_app() -> FastAPI:
         except OSError:
             disk_total = disk_free = None
         st = storage_state(store, DB_PATH)
-        hidden_src = _hidden_sources(_hidden_ids())   # a private project's source is not counted
-        if hidden_src:
-            gone = [x for x in u["sources"] if x["name"] in hidden_src]
-            u = {**u, "sources": [x for x in u["sources"] if x["name"] not in hidden_src],
-                 "events": u["events"] - sum(x["events"] for x in gone)}
         return {**u, "disk_total": disk_total, "disk_free": disk_free,
                 "max_bytes": st["max_bytes"], "max_bytes_source": st["max_bytes_source"],
                 "pct_used": st["pct_used"], "ingest_paused": st["paused"]}

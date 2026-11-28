@@ -330,7 +330,7 @@ def ddl_skips():
         ck(f"Store._ddl() makes, alters and indexes no {name}", not hits, hits)
     ck("the frozen old DDL still has them, as the record", all(
         any(re.search(r"CREATE TABLE IF NOT EXISTS " + n + r"\b", x) for x in OLD_DDL) for n in MOVED_TABLE_NAMES))
-    ck("and the other tables are still made", any("CREATE TABLE IF NOT EXISTS mcp_servers" in x for x in stmts))
+    ck("and the events table is still made", any("CREATE TABLE IF NOT EXISTS events" in x for x in stmts))
 
     # a fresh DuckDB file has none of them
     d = tempfile.mkdtemp()
@@ -428,9 +428,9 @@ def methods():
     s._set_setting_once("once", "second")
     ck("a one-time marker keeps its first value", s.get_setting("once") == "first")
     ck("a data upgrade's marker is in the session store, not in DuckDB",
-       s.get_setting("lineage_backfilled") is not None
+       s.get_setting("skills_shared") is not None
        and (HARNESS or "settings" not in s._tables_of(s.con)),   # the harness's move marks DuckDB
-       (s.get_setting("lineage_backfilled"), "settings" in s._tables_of(s.con)))
+       (s.get_setting("skills_shared"), "settings" in s._tables_of(s.con)))
     s.close()
 
 
@@ -640,12 +640,7 @@ def accounts_methods():
        and s.get_api_key("kRev")["person_id"] == a["id"], s.get_api_key("kRev"))
     s.touch_api_key("kA")
     ck("touch_api_key sets the time", s.get_api_key("kA")["last_used_at"] is not None)
-    s.add_subscription("sub_kA", "t1", "https://hook.example.test/a", created_by="key:kA")
-    s.add_subscription("sub_other", "t1", "https://hook.example.test/o", created_by="key:kB")
     ck("revoke_api_key says it revoked", s.revoke_api_key("kA") is True)
-    with s._sread:
-        subs = [r[0] for r in s.sc.execute("SELECT subscription_id FROM subscriptions").fetchall()]
-    ck("and deleted that key's subscriptions only", "sub_kA" not in subs and "sub_other" in subs, subs)
     ck("a revoked key is not found, and revoking again says no", s.find_api_key("hA") is None
        and s.get_api_key("kA")["revoked_at"] is not None and s.revoke_api_key("kA") is False
        and s.revoke_api_key("kNope") is False)
@@ -774,7 +769,7 @@ def accounts_takeover():
 # `github_issues` and `config` are JSON text, and the blank and null forms are the ones the copy must
 # tell apart. `github_credentials.config` stays text.
 PROJECT_TABLES = ("usecases", "usecase_objects", "usecase_log", "docs", "skills", "shared_skills",
-                  "catalog_sources", "github_credentials", "model_usage")
+                  "github_credentials", "model_usage")
 _PROJECT_COLS = ("id", "recipe", "name", "params", "status", "created_at", "updated_at", "last_error", "goal",
                  "setup", "linear", "github_issues", "kind", "lead_person_id", "scope", "icon")
 PROJECTS = {
@@ -805,11 +800,6 @@ PROJECTS = {
         ("runbook", "How to restart", "restart it", "uc_demo", _T, _T, "console"),
         ("plain", "Plain", "do it", None, _T, _T, None),
     ]),
-    "catalog_sources": (("name", "type", "connector", "poll", "config", "paused", "created_at", "updated_at",
-                         "ingest_key", "owned_by", "customized"), [
-        ("logs", "otlp", "otlp", "5s", '{"labels": [1]}', False, _T, _T, "ik_logs", "uc_demo", False),
-        ("laptop", "poll", "claude_code", "5m", None, True, _T, _T, None, None, None),
-    ]),
     "github_credentials": (("name", "kind", "token", "api_url", "account", "created_at", "updated_at", "config"), [
         ("gh1", "app", "tok1", "https://api.github.com", "org", _T, _T, '{"app_id": 7}'),
         ("gh2", "token", "tok2", None, None, _T, _T, None),
@@ -822,7 +812,7 @@ PROJECTS = {
     ]),
 }
 PROJECT_COUNTS = {"usecases": 3, "usecase_objects": 3, "usecase_log": 2, "docs": 2, "skills": 1,
-                  "shared_skills": 2, "catalog_sources": 2, "github_credentials": 2, "model_usage": 2}
+                  "shared_skills": 2, "github_credentials": 2, "model_usage": 2}
 
 
 def _table_rows(sdb, name):
@@ -852,7 +842,6 @@ def projects_copy():
     ck("the rows are there (the start may add the default project, a log line or the seeds)",
        all(have[t] >= PROJECT_COUNTS[t] for t in PROJECT_TABLES), have)
     demo, old, blank = s.get_project("uc_demo"), s.get_project("uc_old"), s.get_project("uc_blank")
-    # (demo is the cell's default project in SEED: the start adds the loose source `laptop` to it)
     ck("params arrive parsed", demo["params"]["objects"][0] == {"kind": "source", "name": "logs"}
        and old["params"] == {} and blank["params"] == {}, (demo["params"], old["params"], blank["params"]))
     ck("a project keeps its goal, kind, lead, scope and icon", (demo["goal"], demo["kind"], demo["lead_person_id"],
@@ -870,10 +859,6 @@ def projects_copy():
     ck("the log keeps a null detail and a text one", {e["action"]: e["detail"] for e in s.list_project_log("uc_demo")}
        .get("create") in (None, "") and {e["action"]: e["detail"] for e in s.list_project_log("uc_demo")}
        .get("edit") == "renamed", s.list_project_log("uc_demo"))
-    src = {x["name"]: x for x in s.list_catalog_sources()}
-    ck("a source's config arrives parsed, null as is", src["logs"]["config"] == {"labels": [1]}
-       and src["laptop"]["config"] in (None, {}) and src["laptop"]["paused"] is True
-       and src["logs"]["ingest_key"] == "ik_logs" and src["logs"]["owned_by"] == "uc_demo", src)
     gh = {c["name"]: c for c in s.list_github_credentials()}
     ck("a GitHub credential's config is the dict, and a null one is {}", gh["gh1"]["config"] == {"app_id": 7}
        and gh["gh2"]["config"] == {} and gh["gh2"]["api_url"] == "" and gh["gh1"]["token"] == "tok1", gh)
@@ -1101,29 +1086,6 @@ def projects_methods():
     ck("delete_skill returns True, removes the use, the unused skill goes with it", s.delete_skill("uc_a", "run") is True
        and s.get_skill(None, "run") is None and s.delete_skill("uc_a", "run") is False)
 
-    print("== sources ==")
-    s.upsert_catalog_source("src1", "poll", "http_poll", "1m", {"url": "u"}, paused=False, ingest_key="k1")
-    cs = {x["name"]: x for x in s.list_catalog_sources()}
-    ck("upsert_catalog_source writes one row, config a dict", cs["src1"]["config"] == {"url": "u"}
-       and cs["src1"]["ingest_key"] == "k1" and cs["src1"]["paused"] is False, cs["src1"])
-    s.upsert_catalog_source("src1", "poll", "http_poll", "2m", {"url": "v"})
-    cs = {x["name"]: x for x in s.list_catalog_sources()}
-    ck("a second upsert replaces the config and keeps the ingest key", cs["src1"]["config"] == {"url": "v"}
-       and cs["src1"]["poll"] == "2m" and cs["src1"]["ingest_key"] == "k1", cs["src1"])
-    s.set_source_paused("src1", True)
-    s.set_source_ingest_key("src1", "k2")
-    cs = {x["name"]: x for x in s.list_catalog_sources()}
-    ck("pause and ingest key change their column only", cs["src1"]["paused"] is True
-       and cs["src1"]["ingest_key"] == "k2" and cs["src1"]["config"] == {"url": "v"}, cs["src1"])
-    s.put_in_project("source", "src1", "uc_a")
-    ck("project_sources joins the project's objects to the sources", list(s.project_sources("uc_a"))
-       == ["src1"], s.project_sources("uc_a"))
-    ck("projects_using names the project", s.projects_using("source", "src1") == ["uc_a"])
-    grew()
-    s.delete_catalog_source("src1")
-    ck("delete_catalog_source removes the source and its objects", "src1" not in [x["name"] for x in s.list_catalog_sources()]
-       and s.projects_using("source", "src1") == [], s.projects_using("source", "src1"))
-
     print("== GitHub credentials ==")
     s.upsert_github_credential("gh", "tok", kind="app", api_url="https://x", account="org", config={"app_id": 1})
     g = {c["name"]: c for c in s.list_github_credentials()}["gh"]
@@ -1172,10 +1134,8 @@ def projects_methods():
     ck("the other project is untouched", s.get_project("uc_a") is not None)
 
     print("== writes that read first wait for the store's write lock ==")
-    s.upsert_catalog_source("src2", "poll", "http_poll", "1m", {})
     # on Postgres two of these threads' transactions interleave; only this lock keeps them apart
     for name, call in (
-            ("delete_catalog_source", lambda: s.delete_catalog_source("src2")),
             ("upsert_skill", lambda: s.upsert_skill("uc_a", "locked", "d", "b")),
             ("delete_skill", lambda: s.delete_skill("uc_a", "locked")),
             ("upsert_github_credential", lambda: s.upsert_github_credential("locked", "tok")),
@@ -1186,9 +1146,6 @@ def projects_methods():
     # a write that reads a row and writes it back relies on every other writer of the row waiting here
     doc = s.create_doc("uc_a", "working", "locked", "b")
     for name, call in (
-            ("upsert_catalog_source", lambda: s.upsert_catalog_source("src3", "poll", "http_poll", "1m", {})),
-            ("set_source_ingest_key", lambda: s.set_source_ingest_key("src3", "k")),
-            ("set_source_paused", lambda: s.set_source_paused("src3", True)),
             ("record_model_usage", lambda: s.record_model_usage("ask", "a", "r", "m", 1, 1, 1)),
             ("create_project", lambda: s.create_project("uc_c", "custom", "C", {})),
             ("update_project", lambda: s.update_project("uc_a", params={"k": 1})),
@@ -1347,10 +1304,10 @@ def projects_takeover():
             return out
 
         before = snapshot()
-        ck("the old DDL made the nine tables, with the sample rows",
+        ck("the old DDL made the eight tables, with the sample rows",
            {t: len(before[t][1]) for t in PROJECT_TABLES} == PROJECT_COUNTS, {t: len(before[t][1]) for t in PROJECT_TABLES})
         ck("params and config are TEXT there", dict((c[0], c[1]) for c in before["usecases"][0])["params"] == "text"
-           and dict((c[0], c[1]) for c in before["catalog_sources"][0])["config"] == "text")
+           and dict((c[0], c[1]) for c in before["github_credentials"][0])["config"] == "text")
         sdb = SessionStore(tempfile.mkdtemp(), dsn)
         sdb.upgrade()
         ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
@@ -4127,7 +4084,7 @@ if __name__ == "__main__":
        [t.name for t in MOVED_TABLES]
        == ["session_stations", "session_states", "project_sessions", "session_usage", "session_meters",
            "settings", "people", "api_keys", "project_members", "usecases", "usecase_objects", "usecase_log",
-           "docs", "skills", "shared_skills", "catalog_sources", "github_credentials", "model_usage",
+           "docs", "skills", "shared_skills", "github_credentials", "model_usage",
            "tickets", "ticket_history", "ticket_numbers", "milestones", "milestone_check_results",
            "milestone_acceptances", "ticket_checks", "challenges", "reviews", "review_findings",
            "rule_proposals", "assumptions", "desk_items", "decisions", "handovers", "grants", "pending_memory",

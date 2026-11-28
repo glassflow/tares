@@ -38,8 +38,7 @@ import httpx
 
 import fake_lore
 from tares import github_credentials
-from tares.config import SourceCfg
-from tares.connectors import github_events as gh
+from tares import github_events as gh
 from tares.envelope import Envelope, now_utc
 from tares_ee.brain import index as index_mod
 from tares_ee.brain import repos as repos_mod
@@ -96,6 +95,17 @@ def unit():
     ck("the defaults are one minute and half an hour", (sync_mod.RETRY_FIRST_SECONDS, sync_mod.RETRY_CAP_SECONDS) == (60.0, 1800.0))
 
 
+
+async def app_delivery(store, envs, source="github"):
+    """What the GitHub App's webhook route does with a delivery's events (daemon `_ingest_github`): store
+    them, then tell core's GitHub hub (github_webhook.after_store). Events of any other source are only
+    stored, as on every other ingest route."""
+    from tares import github_webhook
+    await asyncio.to_thread(store.append, list(envs))
+    if envs and source == "github":
+        github_webhook.after_store(store, source, list(envs))
+
+
 async def main():
     from tares.daemon import make_app
     sync_mod.TICK_SECONDS = 0.05
@@ -131,14 +141,13 @@ async def main():
 
     app = make_app()
     async with app.router.lifespan_context(app):
-        store, runtime = app.state.store, app.state.runtime
+        store = app.state.store
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=H(ROOT))
         r = await cx.put("/api/licence", json={"key": licensed.test_licence()})
         ck("the licence is stored", r.status_code == 200, r.text[:200])
         store.upsert_github_credential("appcred", "", kind="app", config={"app_id": 7})
         store.upsert_github_credential("setup", T1)
         syncer = app.state.brain_syncer
-        runtime.catalog.sources["github"] = SourceCfg(name="github", type="event_stream", connector="github_app", poll_seconds=0)
 
         clock = [1000.0]
         syncer._clock = lambda: clock[0]
@@ -171,7 +180,7 @@ async def main():
                             text=b["text"], event_time=b["event_time"], labels=b["labels"], payload=payload)
 
         async def ingest(*envs):
-            await runtime._store_envelopes("github", list(envs))
+            await app_delivery(store, envs)
 
         def syncs(sid):
             return [c for c in lore.calls("POST", "sync_repo") if c.path == f"/v1/repos/{sid}/sync"]

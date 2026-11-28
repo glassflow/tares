@@ -6,8 +6,8 @@ owner keeps their own path: claiming `local`, editing themselves, and, arriving 
 once `local` is claimed, being `local` again (never refused, never a second row). Finding a person
 who is already on the cell by email works in every licence state, and so does their key.
 
-The owner's key also carries two one-person behaviours that core must keep on its own: a project set
-up with a person's key is led by that person.
+The owner's key also carries a one-person behaviour that core must keep on its own: a project made
+with a person's key is led by that person (the guided setup went with the source catalog, TR-1811).
 Both are checked under an owner key (`owner: true`), the way a one-person cell has it.
 
 The seats and the licensed paths are ee/tests/test_people_seats.py.
@@ -15,7 +15,6 @@ The seats and the licensed paths are ee/tests/test_people_seats.py.
 Run: .venv/bin/python tests/test_people_single.py
 """
 import asyncio
-import copy
 import os
 import sys
 import tempfile
@@ -59,37 +58,6 @@ def H(tok):
     return {"Authorization": f"Bearer {tok}"}
 
 
-class Failing:
-    """A model provider that fails at once: a draft is made (and led) before any planning runs."""
-    kind = "anthropic"
-
-    async def complete(self, **kw):
-        raise RuntimeError("no model in this test")
-
-
-PLAN = {
-    "goal": "Tell me about every new lead",
-    "name": "Lead one",
-    "summary": "derived",
-    "watches": [{
-        "key": "w1", "existing": False, "name": "lead-events", "connector": "webhook",
-        "config": {"event_type": "log", "text_template": "{service}: {msg}",
-                   "labels": [{"name": "service", "field": "service", "primary": True}]},
-        "sentence": "New leads, as they happen", "needs": "send",
-        "sample": {"service": "crm", "msg": "new lead", "level": "info"}}],
-    "wakes": [{
-        "key": "k1", "name": "lead-new", "sources": ["lead-events"], "filters": [],
-        "key_field": "service",
-        "condition": {"aggregate": "count", "predicate": "> 5", "window": "5m"},
-        "cooldown": "10m", "window": "15m", "sentence": "A new lead",
-        "knobs": [{"id": "threshold", "label": "leads", "value": 5, "min": 1, "max": 1000},
-                  {"id": "window_minutes", "label": "minutes", "value": 5, "min": 1, "max": 1440}]}],
-    "who": "own", "agents": [],
-    "own_agent": {"name": "claude-code", "wake": "webhook", "sentence": "Your agent is woken"},
-    "tools": [], "skills": [], "notes": [],
-}
-
-
 async def main():
     from tares import daemon
     # one existing person before the cell starts: the cell has a person other than `local`
@@ -98,7 +66,7 @@ async def main():
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                headers=H(ROOT))
-        store, runtime = app.state.store, app.state.runtime
+        store = app.state.store
 
         async def people():
             return (await cx.get("/api/people")).json()["people"]
@@ -205,25 +173,7 @@ async def main():
         ck("the system credential changes anyone", r.status_code == 200 and r.json()["name"] == "Patrick",
            f"{r.status_code} {r.text[:200]}")
 
-        print("== the owner's key still leads what it sets up (kept in core) ==")
-        daemon.resolve_provider = lambda store, pid=None: (Failing(), "test")
-        r = await cx.post("/api/setup/drafts", headers=H(owner_key),
-                          json={"goal": PLAN["goal"], "who": "own"})
-        ck("a draft made with the owner's key (202)", r.status_code == 202, r.text[:300])
-        draft = r.json()["project"]["id"]
-        eq("the owner leads the draft", store.get_project(draft)["lead_person_id"], "local")
-        for _ in range(100):   # let the failed planning finish before the cell stops
-            if ((store.get_project_setup(draft) or {}).get("planning") or {}).get("state") != "running":
-                break
-            await asyncio.sleep(0.05)
-        raw = copy.deepcopy(PLAN)
-        from tares import setup_flow as S
-        plan, errs = S.normalize(raw, store, runtime.catalog)
-        eq("the plan is valid", errs, [])
-        r = await cx.post("/api/setup/apply", headers=H(owner_key), json={"plan": plan})
-        ck("set up with no draft with the owner's key (201)", r.status_code == 201, r.text[:300])
-        eq("the owner leads that project",
-           store.get_project(r.json()["project"]["id"])["lead_person_id"], "local")
+        print("== the owner's key still leads what it makes (kept in core) ==")
         r = await cx.post("/api/projects", headers=H(owner_key), json={"template": "custom", "name": "mine"})
         ck("a project made with the owner's key (201 or 200)", r.status_code in (200, 201), r.text[:200])
         eq("the owner leads it", store.get_project(r.json()["id"])["lead_person_id"], "local")

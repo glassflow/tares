@@ -1,4 +1,4 @@
-"""The GitHub connector, App side and token side (TR-159, TR-161, TR-163, TR-164).
+"""The GitHub App: auth, webhooks and the event contract (TR-159, TR-161, TR-163, TR-164, TR-1811).
 
 Run: .venv/bin/python tests/test_github_app.py   (no network: GitHub is faked in-process)
 
@@ -7,13 +7,11 @@ Covers, against a fake GitHub that checks the App's JWT with a generated RSA key
   installation chosen by repo, a broker credential, named errors (not installed, wrong key).
 * Signed state: round trip, tampering, expiry.
 * Signature checks (webhook_verify): github, linear (with its replay window), hmac_sha256.
-* The event contract: every stored event type, and a merged PR seen by webhook and by polling
-  producing the same key, event type and labels.
-* The daemon, with auth on: Create GitHub App (manifest -> callback -> credential + webhook source),
-  the install callback, a signed delivery accepted with no Tares key, an unsigned or wrongly signed
-  one refused (401, counted), ping / duplicate / unknown installation, uninstall removing the
-  installation, a trigger filtered to `action=merged` firing once, the credential row never
-  carrying the key or secrets, the token path's pull request polling (no backfill on first poll).
+* The event contract: every stored event type.
+* The daemon, with auth on: Create GitHub App (manifest -> callback -> credential + webhook key in
+  integration_keys), the install callback, a signed delivery accepted with no Tares key, an unsigned
+  or wrongly signed one refused (401, counted), ping / duplicate / unknown installation, uninstall
+  removing the installation, the credential row never carrying the key or secrets.
 """
 import asyncio
 import json
@@ -23,7 +21,6 @@ from datetime import datetime, timedelta, timezone
 
 import tempfile
 os.environ["TARES_DB"] = os.path.join(tempfile.mkdtemp(), "tares-ghapp-test.duckdb")   # its own folder: settings live beside the file
-os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
 os.environ["TARES_AUTH_TOKEN"] = "root-secret"
 os.environ["TARES_PUBLIC_URL"] = "https://cell.example.com"
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
@@ -158,7 +155,7 @@ def fixture(name):
 async def unit():
     from tares import github_app as ga
     from tares.webhook_verify import sign, verify
-    from tares.connectors import github_events as gh
+    from tares import github_events as gh
 
     print("== App JWT and installation tokens ==")
     tok = ga.app_jwt(APP_ID, PEM)
@@ -285,26 +282,13 @@ async def unit():
     check("push to the default branch says so", push["labels"].get("on_default_branch") == "true",
           str(push["labels"]))
 
-    print("== the `in` filter and GitHub trigger sentences ==")
+    print("== the `in` filter ==")
     from tares.store import _filter_sql
-    from tares.config import CatalogError, validate_filters
     sql, params = _filter_sql([{"field": "repo", "op": "in", "value": ["acme/app", "acme/lib"]}])
     check("in -> lower(label) IN (?, ?), case-insensitive",
           "lower(" in sql and "IN (?, ?)" in sql and params == ["acme/app", "acme/lib"], f"{sql} {params}")
     sql2, params2 = _filter_sql([{"field": "repo", "op": "in", "value": ["Acme/App"]}])
     check("a typed repo in another case still matches", params2 == ["acme/app"], str(params2))
-    try:
-        validate_filters([{"field": "repo", "op": "in", "value": "acme/app"}], "trigger 't'")
-        check("in with a non-list value refused", False)
-    except CatalogError:
-        check("in with a non-list value refused", True)
-    from tares import goal
-    w = goal._github_event_words([{"field": "event_type", "op": "eq", "value": "pull_request"},
-                                  {"field": "action", "op": "eq", "value": "merged"},
-                                  {"field": "repo", "op": "in", "value": ["acme/app", "acme/lib"]}])
-    check("a GitHub trigger is said by its event",
-          w[0] == "a pull request is merged" and goal.filters_words(w[1])
-          == " matching repo one of acme/app, acme/lib", str(w))
 
 
 async def daemon():
@@ -318,7 +302,7 @@ async def daemon():
     root = {"Authorization": "Bearer root-secret"}
     async with app.router.lifespan_context(app):
         store = app.state.store
-        runtime = app.state.runtime
+        from tares import github_webhook
         transport = httpx.ASGITransport(app=app)
         async with _RealClient(transport=transport, base_url="http://test", headers=root) as cx, \
                 _RealClient(transport=transport, base_url="http://test") as anon:
@@ -356,10 +340,9 @@ async def daemon():
                   cred and cred["kind"] == "app" and cred["config"]["private_key"] == PEM
                   and cred["config"]["webhook_secret"] == WEBHOOK_SECRET
                   and cred["config"]["slug"] == "tares-cell", str(cred and cred["kind"]))
-            src = runtime.catalog.sources.get("github")
-            check("webhook source `github` created with the manifest's ingest key",
-                  src is not None and src.connector == "github_app" and src.ingest_key == ingest_key,
-                  str(src))
+            hook = store.integration_key_for("ci_github", "acme-app")
+            check("its webhook key is the manifest's, in integration_keys, events under `github`",
+                  hook == {"key": ingest_key, "source": "github"}, str(hook))
             r = await cx.get("/api/integrations/github")
             row = next(c for c in r.json()["credentials"] if c["name"] == "acme-app")
             raw = json.dumps(row)
@@ -405,12 +388,6 @@ async def daemon():
                   == {"acme/app", "acme/lib", "other/site"}, r.text)
 
             print("== deliveries ==")
-            # a catalog trigger row (triggers are no longer evaluated, TR-1810): the upgrade below reads it
-            store.upsert_catalog_trigger(
-                "pr_merged", ["github"], {"aggregate": "count", "predicate": "> 0", "window": "5m"}, {},
-                "5m", filters=[{"field": "event_type", "op": "eq", "value": "pull_request"},
-                               {"field": "action", "op": "eq", "value": "merged"}])
-
             async def deliver(event, payload, delivery, secret=WEBHOOK_SECRET, signed=True):
                 if "pull_request" in payload:     # inside the trigger's window, whatever the clock
                     payload = {**payload, "pull_request": {
@@ -430,8 +407,8 @@ async def daemon():
             check("unsigned -> 401", r.status_code == 401, r.text)
             r = await deliver("pull_request", opened, "d-1", secret="wrong")
             check("wrong secret -> 401", r.status_code == 401 and "signature" in r.text, r.text)
-            check("refusals counted on the source", runtime.rejected_deliveries.get("github") == 2,
-                  str(runtime.rejected_deliveries))
+            check("refusals counted on the source", github_webhook.REJECTED.get("github") == 2,
+                  str(github_webhook.REJECTED))
             r = await deliver("pull_request", opened, "d-1")
             check("signed PR opened -> stored", r.status_code == 202 and r.json()["ingested"] == 1, r.text)
             r = await deliver("pull_request", opened, "d-1")
@@ -449,9 +426,6 @@ async def daemon():
                   len(rows) == 2 and rows[1][0] == "acme/app#7"
                   and json.loads(rows[1][3]).get("action") == "merged"
                   and json.loads(rows[1][3]).get("base") == "main", str(rows))
-            fired = store.sc.execute(
-                "SELECT count(*) FROM dispatch_log WHERE trigger = 'pr_merged'").fetchone()[0]
-            check("no trigger fires on a delivery (TR-1810)", fired == 0, str(fired))
 
             r = await anon.post(f"/ingest/{ingest_key}", content=b"{}", headers={
                 "X-GitHub-Event": "ping", "X-Hub-Signature-256": "sha256=éé".encode()})
@@ -500,122 +474,9 @@ async def daemon():
                   "broker-secret" not in json.dumps(row) and row["installations"][0]["id"] == 101,
                   json.dumps(row)[:300])
 
-            print("== token path: pull request polling ==")
-            r = await cx.post("/api/integrations/github", json={"name": "pat", "token": "tok-pat",
-                                                                "api_url": "http://api.github.test"})
-            from tares.config import SourceCfg
-            from tares.connectors import build_connector
-            cfg = SourceCfg(name="gh_poll", type="event_stream", connector="github",
-                            poll_seconds=60, poll="60s",
-                            config={"repo": "acme/app", "credential": "pat", "files": False,
-                                    "labels": [{"name": "repo", "field": "repo", "primary": True}]})
-            conn = build_connector(cfg, store)
-            base = datetime.now(timezone.utc) - timedelta(minutes=5)
-            STATE["pulls"] = [{"number": 3, "title": "Old PR", "state": "closed",
-                               "created_at": _iso(base), "closed_at": _iso(base),
-                               "merged_at": _iso(base), "updated_at": _iso(base),
-                               "user": {"login": "bob"}, "head": {"ref": "x", "sha": "s3"},
-                               "base": {"ref": "main"}, "html_url": "u3", "merged": True}]
-            first = await conn.poll()
-            check("first poll imports no old pull requests", first == [], str(first))
-            later = datetime.now(timezone.utc) + timedelta(seconds=5)
-            STATE["pulls"] = [{"number": 7, "title": "Add retry", "state": "closed",
-                               "created_at": _iso(later), "closed_at": _iso(later + timedelta(seconds=1)),
-                               "merged_at": _iso(later + timedelta(seconds=1)),
-                               "updated_at": _iso(later + timedelta(seconds=1)),
-                               "user": {"login": "alice"}, "head": {"ref": "feat/retry", "sha": "abc"},
-                               "base": {"ref": "main"}, "html_url": "u7", "merged": True,
-                               "draft": False}] + STATE["pulls"]
-            envs = await conn.poll()
-            acts = [(e.event_type, e.key_value, e.labels.get("action")) for e in envs]
-            check("next poll: opened then merged, keyed per PR",
-                  acts == [("pull_request", "acme/app#7", "opened"),
-                           ("pull_request", "acme/app#7", "merged")], str(acts))
-            again = await conn.poll()
-            check("a third poll with nothing new is empty", again == [], str(again))
-            from tares.connectors import github_events as gh
-            hook = gh.build("pull_request", fixture("pull_request_merged.json"))
-            polled = envs[-1]
-            same = ("repo", "action", "number", "author", "branch", "base", "state")
-            check("webhook and polling agree: event type, key and labels for the same merge",
-                  polled.event_type == hook["event_type"] and polled.key_value == hook["key"]
-                  and all(str(polled.labels.get(k)) == str(hook["labels"].get(k)) for k in same),
-                  f"{polled.labels} vs {hook['labels']}")
-
-            print("== upgrade: triggers on token sources keep meaning a commit ==")
-            r = await cx.post("/api/sources", json={"name": "old_repo", "connector": "github",
-                                                    "poll": "60s", "config": {"repo": "acme/app",
-                                                                              "credential": "pat"}})
-            check("token source created", r.status_code in (200, 201), r.text)
-            for tname, filters in (("old_any", []), ("old_pr", [{"field": "event_type", "op": "eq",
-                                                                  "value": "pull_request"}])):
-                store.upsert_catalog_trigger(tname, ["old_repo"],
-                                             {"aggregate": "count", "predicate": "> 0", "window": "5m"},
-                                             {}, "5m", filters=filters)
-            store.set_setting("github_commit_filters_filled", None)
-            from tares.projects import Engine
-            n = Engine(store).fill_github_commit_filters()
-            trigs = {t["name"]: t for t in store.list_catalog_triggers()}
-            check("an unfiltered trigger on a token source gets event_type = commit",
-                  trigs["old_any"]["filters"] == [{"field": "event_type", "op": "eq",
-                                                   "value": "commit"}], str(trigs["old_any"]))
-            check("a trigger already naming its event type is left alone; App triggers too",
-                  trigs["old_pr"]["filters"][0]["value"] == "pull_request"
-                  and trigs["pr_merged"]["filters"][0]["value"] == "pull_request" and n == 1,
-                  f"{n} {trigs['old_pr']['filters']}")
-            check("the upgrade runs once", Engine(store).fill_github_commit_filters() == 0)
-
-            print("== the setup builder and GitHub ==")
-            from tares import setup_flow
-            _plan, errs = setup_flow.normalize({
-                "goal": "review merged PRs", "name": "PR review", "who": "tares",
-                "watches": [{"key": "w1", "name": "gh", "connector": "github_app",
-                             "config": {"credential": "acme-app"}}]}, store, runtime.catalog)
-            check("a plan cannot make a new GitHub App source (it comes with the App)",
-                  any("GitHub App's source" in e for e in errs), str(errs))
-            check("the planner is told how GitHub events are named",
-                  "action merged" in setup_flow.SYSTEM and "github_app source" in setup_flow.SYSTEM)
-
-            print("== a plan grounded in their repositories (TR-262) ==")
+            print("== the guided setup is gone (TR-1811) ==")
             r = await cx.get("/api/setup/github-suggestion")
-            body = r.json()
-            check("suggestion endpoint without a model provider: available, repos, no sentence",
-                  body["available"] and body["suggestion"] is None and "acme/app (private)" in body["repos"],
-                  str(body))
-            lines = await setup_flow.github_repo_lines(store)
-            msg = setup_flow.plan_message("watch my code", "tares", True, store, runtime.catalog, github=lines)
-            check("the planner's first message lists their repositories",
-                  "Their GitHub repositories" in msg and "- acme/app (private)" in msg, msg[-300:])
-            check("the planner can read one repository when GitHub is connected, not otherwise",
-                  any(t["name"] == "github_repo" for t in setup_flow.read_tools(True))
-                  and not any(t["name"] == "github_repo" for t in setup_flow.read_tools()))
-            ok, text = await setup_flow.read_github_repo(store, "acme/app")
-            check("github_repo: root files and README", ok and "docker-compose.yml" in text
-                  and "checkout service" in text, text[:200])
-
-            class FakeReply:
-                text = '"Review every merged pull request in acme/app"'
-                usage = {}
-
-            class FakeProvider:
-                calls = 0
-
-                async def complete(self, **kw):
-                    FakeProvider.calls += 1
-                    return FakeReply()
-            store.set_setting(setup_flow.SUGGEST_SETTING, None)
-            one = await setup_flow.github_suggestion(store, FakeProvider(), "m")
-            two = await setup_flow.github_suggestion(store, FakeProvider(), "m")
-            check("one sentence from the repos, cached (one model call for two opens)",
-                  one["suggestion"] == "Review every merged pull request in acme/app"
-                  and two["suggestion"] == one["suggestion"] and FakeProvider.calls == 1, str(one))
-
-            rk = await cx.post("/api/keys", json={"name": "reader", "scopes": ["read"]})
-            reader = rk.json().get("secret") or rk.json().get("key") or ""
-            r = await anon.get("/api/setup/github-suggestion",
-                               headers={"Authorization": f"Bearer {reader}"})
-            check("a read key cannot ask for the GitHub suggestion", r.status_code == 403,
-                  f"{rk.status_code} {r.status_code}")
+            check("the GitHub suggestion route answers 404", r.status_code == 404, r.text[:120])
 
 
 async def main():

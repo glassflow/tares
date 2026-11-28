@@ -252,9 +252,6 @@ async def main():
                "projects", "finished_count", "later_count", "crew", "plan", "plan_command", "start", "onboarding",
                "joiner", "now"}, sorted(h))
 
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
             h = await get_home(cx)
             ck("a claude_code source with nothing reported yet shows no crew member", h["crew"]["members"] == [], h["crew"])
 

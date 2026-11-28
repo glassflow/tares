@@ -83,10 +83,6 @@ async def main():
     H = {"Authorization": f"Bearer {AUTH}"}
     mk = lambda: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=dict(H))
     async with app.router.lifespan_context(app):
-        async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
         ck("only local is on the cell", app.state.store.only_local_person())
 
         async def push(lines):

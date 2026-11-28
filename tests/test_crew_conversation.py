@@ -119,9 +119,6 @@ async def main():
     mk = lambda: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=root)
     async with app.router.lifespan_context(app):
         async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
             r = await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in SESSION) + "\n",
                               headers={"Content-Type": "application/x-ndjson"})
             ck("the session is taken in", r.status_code < 300, r.text)

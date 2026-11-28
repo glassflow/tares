@@ -149,9 +149,6 @@ async def seed(app) -> dict:
     root = {"Authorization": f"Bearer {TOKEN}"}
     who, pid = {"root": root}, {}
     async with client(app, root) as cx:
-        r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}})
-        assert r.status_code < 300, r.text
         for name in ("kim", "lee", "mo", "ann", "bot"):
             body = {"name": f"{name}-laptop", "scopes": ["admin", "ingest", "read"]}
             if name != "bot":   # the bot's key has no person

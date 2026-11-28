@@ -411,9 +411,6 @@ async def licensed_cell():
         print("== a joiner's project step ==")
         r = await call("root", "PUT", "/api/crew/settings", {"autonomy": "L3-review"})
         assert r.status_code == 200, r.text
-        r = await call("root", "POST", "/api/sources", {
-            "name": "claude_code", "connector": "claude_code", "poll": "10s", "config": {"push": True}})
-        assert r.status_code < 300, r.text
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         lines = "".join(json.dumps(
             {"type": "session_station", "sessionId": f"s-lee-{role}", "cwd": "/w/crew", "timestamp": now,

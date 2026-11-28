@@ -90,9 +90,6 @@ async def main():
         print("== a cell with auth on, and two people with a key each ==")
         keys, pid = {}, {}
         async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
             for who, mail in (("ashish", "ashish@example.com"), ("kiran", "kiran-test@example.com")):
                 r = await cx.post("/api/keys", json={"name": f"{who}-laptop", "scopes": ["admin"],
                                                      "person": {"email": mail, "name": who}})
@@ -140,13 +137,11 @@ async def main():
              "station": "e2e-build", "role": "builder", "parent": ""},
             says("e2e-a1", f"teams-e2e: the {words} is ready", -50))])
         store.link_session(uid, "e2e-a1")
-        async with mk() as cx:
-            body = {"selector": {"session": "e2e-a1"}, "window": "1h", "include_payload": True}
-            mine = (await cx.post("/read", json=body, headers=keys["ashish"])).json()
-            theirs = (await cx.post("/read", json=body, headers=keys["kiran"])).json()
-        ck("set up: ashish reads the event", mine.get("count", 0) >= 1 and words in json.dumps(mine), mine)
-        ck("kiran's read of the session source shows no event of teams-e2e",
-           theirs.get("count", 0) == 0 and words not in json.dumps(theirs), theirs)
+        mine = await get("ashish", f"/api/projects/{uid}/sessions/e2e-a1")
+        theirs = await get("kiran", f"/api/projects/{uid}/sessions/e2e-a1")
+        ck("set up: ashish reads the session's line", mine.status_code == 200 and words in mine.text, mine.text[:300])
+        ck("kiran's read of the session shows nothing of teams-e2e",
+           theirs.status_code == 404 and words not in theirs.text, theirs.text[:300])
 
         print("== tickets across two repos make kiran a member ==")
         r = await post("ashish", f"/api/projects/{uid}/tickets",

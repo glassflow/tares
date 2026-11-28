@@ -71,7 +71,6 @@ test_project_self_join
 test_recording_person_team
 test_route_phase_metric
 test_sessions_readers
-test_setup_flow_team
 test_spec_questions
 test_state_indexes
 test_teams_e2e

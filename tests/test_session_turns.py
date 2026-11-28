@@ -40,7 +40,7 @@ PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
 SRC = "claude_code"
-HEAD = "0025_integration_keys_pr_events"
+HEAD = "0026_drop_catalog_sources"
 
 
 def ck(name, ok, detail=""):
@@ -525,19 +525,6 @@ def main():
     session_ingest.fill_turns(s)
     ck("the next fill writes it", [r["text"] for r in s.person_turns(SRC, ["sX"], at(0))] == ["lost for now"])
 
-    print("== purging a source removes its rows ==")
-    with s.sessions_db.begin() as c:
-        c.execute(insert(session_turns), [{"session": "k", "line_key": "k", "source": "keep",
-                                           "at": at(1), "person": None, "text": "t"}])
-        c.execute(insert(session_said), [{"session": "k", "line_key": "k", "source": "keep",
-                                          "at": at(1), "text": "t"}])
-        c.execute(insert(session_files), [{"session": "k", "path": "p", "source": "keep", "last_at": at(1)}])
-    s.purge_events(SRC)
-    left = dump(s)
-    ck("no row of the source is left in the three tables, another source's rows are kept",
-       [len(x) for x in left] == [1, 1, 1] and {x[0][2] for x in left} == {"keep"}, [len(x) for x in left])
-    ck("and the readers show none", s.person_turns(SRC, None, at(0)) == [] and s.last_said(SRC, "sA") is None
-       and s.files_touched(SRC, "sF") == [])
     s.con.close()
 
     print("== the fill ==")

@@ -115,9 +115,6 @@ async def main():
 
     async with app.router.lifespan_context(app):
         uid = json.loads(await m.create_project("Teams", "Share one cell"))["id"]
-        async with mk() as cx:
-            await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}, "project": uid})
         await ingest([{"type": "session_station", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(-60),
                        "station": "crew-orchestrator", "role": "orchestrator"}])
         as_station("crew-orchestrator", "orchestrator")

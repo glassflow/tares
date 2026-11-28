@@ -231,9 +231,6 @@ ck("Tares down: exit 1 and not a word", (r.returncode, r.stdout, r.stderr) == (1
 r = credential(question(), TARES_PLUGIN_DIR=str(SCRATCH / "no-plugin"))
 ck("what `tares factory` checks before a command is silent here too",
    (r.returncode, r.stdout, r.stderr) == (1, b"", b""), (r.returncode, r.stdout, r.stderr))
-r = credential(question(), NAVFLOW_DB="x")
-ck("and so is the check for old variable names",
-   (r.returncode, r.stdout, r.stderr) == (1, b"", b""), (r.returncode, r.stdout, r.stderr))
 for word in ("store", "erase", "capability"):
     r = credential(question() + "password=another-password\n", word=word)
     ck(f"{word}: exit 0, nothing printed, no request",

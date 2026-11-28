@@ -4,8 +4,8 @@ a fresh token; a token connection (no App webhooks) is polled for a moved head; 
 more sync while one runs; a push during the first index is synced once the repo is ready; a failed sync keeps
 the repo ready, records why, shows it on the card from the third failure in a row and is retried by the next
 push or poll. In process against the shared fake lore (ee/tests/fake_lore.py), fake GitHub heads and the
-real background task. Events go through core's `Runtime._store_envelopes`, the funnel every ingest uses, built
-from the real push mapping (`github_events.build`).
+real background task. Events go the way the GitHub App's webhook route sends them (stored, then told to core's
+GitHub hub, `app_delivery` below), built from the real push mapping (`github_events.build`).
 
 Covered: the push filter (default branch only, the App source only, ready repos only), the fresh token, the
 collapse, the pending push, the failure count and its card, the retry, the poll (ETag, App repos skipped,
@@ -35,8 +35,7 @@ import httpx
 
 import fake_lore
 from tares import github_credentials
-from tares.config import SourceCfg
-from tares.connectors import github_events as gh
+from tares import github_events as gh
 from tares.envelope import Envelope, now_utc
 from tares_ee.brain import index as index_mod
 from tares_ee.brain import repos as repos_mod
@@ -166,6 +165,17 @@ def unit():
     ck("removing a repo drops its history", s.list_brain_repo_updates("acme/api") == [] and "acme/api" not in s.last_brain_repo_updates())
 
 
+
+async def app_delivery(store, envs, source="github"):
+    """What the GitHub App's webhook route does with a delivery's events (daemon `_ingest_github`): store
+    them, then tell core's GitHub hub (github_webhook.after_store). Events of any other source are only
+    stored, as on every other ingest route."""
+    from tares import github_webhook
+    await asyncio.to_thread(store.append, list(envs))
+    if envs and source == "github":
+        github_webhook.after_store(store, source, list(envs))
+
+
 async def main():
     from tares.daemon import make_app
     sync_mod.TICK_SECONDS = 0.05
@@ -203,14 +213,12 @@ async def main():
     app = make_app()
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=H(ROOT))
-        store, runtime = app.state.store, app.state.runtime
+        store = app.state.store
         r = await cx.put("/api/licence", json={"key": licensed.test_licence()})
         ck("the licence is stored", r.status_code == 200, r.text[:200])
         store.upsert_github_credential("appcred", "", kind="app", config={"app_id": 7})
         store.upsert_github_credential("setup", T1)
         syncer = app.state.brain_syncer
-        runtime.catalog.sources["github"] = SourceCfg(name="github", type="event_stream", connector="github_app", poll_seconds=0)
-        runtime.catalog.sources["hook"] = SourceCfg(name="hook", type="event_stream", connector="webhook", poll_seconds=0)
 
         def row(repo):
             return store.get_brain_repo(repo) or {}
@@ -237,7 +245,7 @@ async def main():
         async def ingest(*envs, source="github"):
             # the store step tells core's GitHub hub for a GitHub source (TR-1807); the brain hears
             # nothing else
-            await runtime._store_envelopes(source, list(envs))
+            await app_delivery(store, envs, source)
 
         def syncs(sid=None):
             return [c for c in lore.calls("POST", "sync_repo") if sid is None or c.path == f"/v1/repos/{sid}/sync"]
@@ -250,9 +258,8 @@ async def main():
            and push("acme/web", SHA[1], default=False).labels.get("on_default_branch") == "false"
            and push("acme/web", SHA[1]).labels.get("repo") == "acme/web", str(push("acme/web", SHA[1]).labels))
         ck("the cell has one syncer and its task, listening to core's GitHub hub", syncer is not None and syncer.task is not None
-           and not syncer.task.done() and syncer.on_envelopes in HUB.subscribers
-           and syncer.on_envelopes not in runtime.envelope_listeners)
-        syncer2 = repos_mod.syncing.Syncer(syncer.indexer, runtime)
+           and not syncer.task.done() and syncer.on_envelopes in HUB.subscribers)
+        syncer2 = repos_mod.syncing.Syncer(syncer.indexer)
         syncer2.attach(app)
         ck("attaching a second syncer to the app is refused: one task, one listener", app.state.brain_syncer is syncer
            and HUB.subscribers.count(syncer.on_envelopes) == 1 and syncer2.on_envelopes not in HUB.subscribers)
@@ -622,7 +629,7 @@ async def main():
         heads["acme/flip"] = SHA[3]
         lore.sync_report["indexed_commit"] = SHA[3]
         sync_mod.SYNC_POLL_SECONDS = 0.1
-        own = repos_mod.syncing.Syncer(syncer.indexer, None)
+        own = repos_mod.syncing.Syncer(syncer.indexer)
         own.task = asyncio.create_task(own.run())
         ck("a syncer's own task polls and syncs the moved head", await until(lambda: row("acme/flip")["indexed_commit"] == SHA[3]), str(row("acme/flip")))
         own.task.cancel()
@@ -635,7 +642,7 @@ async def main():
 
         print("== an idle task sleeps: no brain, or a step that fails, never spins ==")
         sync_mod.TICK_SECONDS = 0.05
-        idle = repos_mod.syncing.Syncer(syncer.indexer, None)
+        idle = repos_mod.syncing.Syncer(syncer.indexer)
         looks = []
         idle.active = lambda: looks.append(1) or False
         idle.task = asyncio.create_task(idle.run())
@@ -646,7 +653,7 @@ async def main():
         except asyncio.CancelledError:
             pass
         ck("a task with the brain off looks once, not every 50 ms", len(looks) <= 2, str(len(looks)))
-        broken = repos_mod.syncing.Syncer(syncer.indexer, None)
+        broken = repos_mod.syncing.Syncer(syncer.indexer)
         steps = []
 
         def boom():
@@ -688,13 +695,14 @@ async def main():
 
         def boom(source, envs):
             raise RuntimeError("listener broke with " + T1)
-        runtime.envelope_listeners.insert(0, boom)
-        runtime.envelope_listeners.append(lambda source, envs: seen.append((source, len(envs))))
+        HUB.subscribe(boom)
+        HUB.subscribe(lambda source, envs: seen.append((source, len(envs))))
         await ingest(push("acme/off", SHA[4], default=False))
-        ck("a listener that raises does not fail the ingest and the next one still runs", seen == [("github", 1)], str(seen))
+        ck("a subscriber that raises does not fail the delivery and the next one still runs", seen == [("github", 1)], str(seen))
         await ingest()
-        ck("an empty batch calls no listener", seen == [("github", 1)])
-        runtime.envelope_listeners.remove(boom)
+        ck("an empty batch calls no subscriber", seen == [("github", 1)])
+        HUB.unsubscribe(boom)
+        HUB.subscribers.pop()
         heard = []
         HUB.subscribe(boom)
         hear = lambda source, envs: heard.append((source, len(envs)))   # noqa: E731

@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sqlalchemy import select  # noqa: E402
 
 from tares import factory_api, session_ingest, session_move  # noqa: E402
-from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
+from tares.session_map import ClaudeCodeLines  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store.tables import (challenges, session_commands,  # noqa: E402
                                         session_meters, session_moves, session_states,
@@ -61,7 +61,6 @@ def open_store(edition):
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
     s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
     s.set_setting("edition", edition)
-    s.upsert_catalog_source(SRC, "agent_session", SRC, "10s", {"push": True})
     return s
 
 
@@ -94,7 +93,7 @@ def duck(s, sql):
 def posted(edition):
     print(f"== a posted batch, {edition} edition ==")
     s = open_store(edition)
-    conn = ClaudeCodeConnector(SimpleNamespace(name=SRC, type="agent_session", config={}), store=s)
+    conn = ClaudeCodeLines(s, source=SRC, source_type="agent_session")
     no_id = {"type": "user", "uuid": "u9", "timestamp": when(9),
              "message": {"role": "user", "content": "no session"}}
     batch = [user("one", 1), user(ODD, 2), reply(ODD, 3), user("\x00\x00", 4), no_id,

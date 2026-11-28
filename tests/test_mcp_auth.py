@@ -64,9 +64,10 @@ async def main():
                 await s.initialize()
                 ck("MCP with token: initialized", True)
                 names = {t.name for t in (await s.list_tools()).tools}
-                ck("tools listed with token", "read" in names and "list_connectors" in names, str(sorted(names)))
-                res = await s.call_tool("list_connectors", {})
-                ck("token forwarded to taresd (call succeeds)", "postgres" in res.content[0].text, res.content[0].text[:80])
+                ck("tools listed with token", "list_projects" in names and "list_tickets" in names, str(sorted(names)))
+                res = await s.call_tool("list_projects", {})
+                ck("token forwarded to taresd (call succeeds)", res.content[0].text.strip().startswith("["),
+                   res.content[0].text[:80])
     finally:
         for proc in (mcpsrv, daemon):
             proc.send_signal(signal.SIGTERM)

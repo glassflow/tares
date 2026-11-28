@@ -657,9 +657,6 @@ async def main():
             set(p) == {"hidden", "lead"} for p in (await home_of("kim", "team"))["projects"] if p.get("hidden")))
 
         print("== part two: the crews ==")
-        r = await call("root", "POST", "/api/sources", {"name": "claude_code", "connector": "claude_code",
-                                                         "poll": "10s", "config": {"push": True}})
-        ck("the claude_code source is made", r.status_code < 300, r.text)
 
         def st_line(sid, station, role, ago_min, crew, machine, project=""):
             o = {"type": "session_station", "sessionId": sid, "cwd": "/w/crew",

@@ -114,9 +114,6 @@ async def main():
 
     async with app.router.lifespan_context(app):
         shop = json.loads(await m.create_project("Shop", "Sell things"))["id"]
-        async with mk() as cx:
-            await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}, "project": shop})
         as_station("crew-orchestrator", "orchestrator")
         await mf.write_milestone("Store", "A shop that takes orders",
                                  [{"check": "curl /cart", "expect": "an empty cart as JSON"}], project="Shop")
@@ -292,17 +289,6 @@ async def main():
         parsed.clear()
         again = store.coordination_calls("claude_code", ["b1", "b2"])
         ck("a new call is counted into its own session", again == {"b1": 5, "b2": 2} and not parsed, (again, parsed))
-        print("== a purged source leaves no stale count (TR-684) ==")
-        store.purge_events("claude_code")
-        gone = store.coordination_calls("claude_code", ["b1", "b2"])
-        ck("a session whose calls are all gone counts none", gone == {}, gone)
-        await ingest([tool_line("b2", "mcp__tares__get_ticket", {"ticket": "T3"}, 4)])
-        back = store.coordination_calls("claude_code", ["b2"])
-        ck("and counts again from what is there", back == {"b2": 1}, back)
-        store.purge_events("claude_code")
-        await ingest([tool_line("b2", "Bash", {"command": "ls"}, 3)])
-        swapped = store.coordination_calls("claude_code", ["b2"])
-        ck("purged calls replaced by calls that do not coordinate count none", swapped == {}, swapped)
     finally:
         factory.is_coordination = real
 

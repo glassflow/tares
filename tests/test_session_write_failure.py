@@ -786,9 +786,6 @@ async def route():
     store = app.state.store
     async with app.router.lifespan_context(app):
         async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": SRC, "connector": SRC, "poll": "10s",
-                                                    "config": {"push": True}})
-            assert r.status_code < 300, r.text
             for _ in range(200):
                 if session_ingest.caught_up(store):
                     break

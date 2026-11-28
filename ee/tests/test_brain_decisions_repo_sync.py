@@ -49,8 +49,7 @@ import httpx
 
 import fake_lore
 from tares import github_credentials
-from tares.config import SourceCfg
-from tares.connectors import github_events as gh_events
+from tares import github_events as gh_events
 from tares.envelope import Envelope
 from tares_ee.brain import decisions_repo as dr
 from tares_ee.brain import index as index_mod
@@ -159,6 +158,17 @@ def unit():
        and f({"commits": [{"added": [], "modified": []}]}) is None and f({"commits": ["x"]}) is None)
 
 
+
+async def app_delivery(store, envs, source="github"):
+    """What the GitHub App's webhook route does with a delivery's events (daemon `_ingest_github`): store
+    them, then tell core's GitHub hub (github_webhook.after_store). Events of any other source are only
+    stored, as on every other ingest route."""
+    from tares import github_webhook
+    await asyncio.to_thread(store.append, list(envs))
+    if envs and source == "github":
+        github_webhook.after_store(store, source, list(envs))
+
+
 async def main():
     from tares.daemon import make_app
     logs = Logs()
@@ -199,9 +209,6 @@ async def main():
         store = app.state.store
         rd = app.state.brain_repo_decisions
         syncer = app.state.brain_syncer
-        runtime = app.state.runtime
-        runtime.catalog.sources["github"] = SourceCfg(name="github", type="event_stream", connector="github_app", poll_seconds=0)
-        runtime.catalog.sources["hook"] = SourceCfg(name="hook", type="event_stream", connector="webhook", poll_seconds=0)
         store.upsert_github_credential("setup", GH_TOKEN)
 
         seq = [0]
@@ -221,7 +228,7 @@ async def main():
                             text=b["text"], event_time=b["event_time"], labels=b["labels"], payload=payload)
 
         async def ingest(*envs, source="github"):
-            await runtime._store_envelopes(source, list(envs))
+            await app_delivery(store, envs, source)
             await rd.wait()
 
         def docs(repo="acme/web"):

@@ -38,7 +38,6 @@ people = {"robin": "local", "sam": sam["person"]["id"]}
 
 call("PUT", "/api/crew/settings", {"autonomy": "L3-review", "releaser": False, "builders_max": 3, "challenger": True})
 
-call("POST", "/api/sources", {"name": "claude_code", "connector": "claude_code", "poll": "10s", "config": {"push": True}})
 stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 lines = []
 for role in ("orchestrator", "reviewer"):

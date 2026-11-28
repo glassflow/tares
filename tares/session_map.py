@@ -1,7 +1,6 @@
 """Claude Code session lines (Tares 2.0, TR-1804): how a line the Claude Code plugin pushes to
-/ingest/claude_code becomes a stored session line. The runtime slot's integrations call this; it reads
-no source catalog. (Moved from tares/connectors/claude_code.py, which re-exports it until the
-connectors go.)
+/ingest/claude_code becomes a stored session line. The runtime slot's integrations call this; there is
+no source catalog (TR-1811).
 
 Claude Code writes one structured JSONL event per line (user / assistant / tool_use / tool_result /
 summary, each with a timestamp, sessionId, cwd, gitBranch, and — for assistant turns — model + token
@@ -165,7 +164,7 @@ class ClaudeCodeLines:
     # mapped by map_payload(). There is no local file tail.
     ACCEPTS_PUSH = True
     # The cell labels every pushed event with the person of the credential that sent it
-    # (`tares_person`); see Runtime.ingest. Events the cell reads itself carry none.
+    # (`tares_person`): the runtime slot's push_lines does. Events the cell reads itself carry none.
     STAMPS_PERSON = True
     # The person of the credential of the push being mapped (set by the route before map_payload,
     # None for the system credential): the crew a station line belongs to is theirs.
@@ -251,12 +250,11 @@ class ClaudeCodeLines:
 
     def _link_project(self, o: dict) -> bool:
         """A `session_project` line (TR-405): the plugin saw the session work in a Tares project
-        (it created it, or a Tares tool named it). Tie the session to the project, and put this
-        source in the project so the session's lines read as the project's, the ones from before
-        the project existed included (they share the session key). An unknown project is
-        ignored: the line still lands on the session's timeline. A deleted private one gets the
-        tie too, so that the session's lines stay unread, and the answer is False as for an
-        unknown one."""
+        (it created it, or a Tares tool named it). Tie the session to the project, so the
+        session's lines read as the project's, the ones from before the project existed included
+        (they share the session key). An unknown project is ignored: the line still lands on the
+        session's timeline. A deleted private one gets the tie too, so that the session's lines
+        stay unread, and the answer is False as for an unknown one."""
         ref, sid = str(o.get("tares_project") or "").strip(), str(o.get("sessionId") or "")
         if not ref or not sid or self.store is None:
             return False
@@ -265,11 +263,7 @@ class ClaudeCodeLines:
             return False
         cwd = o.get("cwd")
         self.store.link_session(uid, sid, Path(str(cwd)).name if cwd else None)
-        if self.store.get_project(uid) is None:
-            return False
-        self.store.upsert_project_object(uid, "source", f"+source:{self.source}",
-                                         self.source)
-        return True
+        return self.store.get_project(uid) is not None
 
     # Claude Code (2.1.3xx) records each API request in the transcript: api-request,
     # api-request-shape, and api-request-blob, which holds a copy of the previous assistant message

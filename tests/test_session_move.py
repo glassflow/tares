@@ -435,15 +435,11 @@ def locks():
     s = open_store()
     s.create_project("gone-project", "custom", "Gone", {})
     s.create_project("uc_a", "software_factory", "A", {})
-    s.upsert_catalog_source("owned", "logs", "webhook", "1m", {})
-    s.set_owned_by("source", "owned", "uc_a")
     doc = s.create_doc("uc_a", "spec", "Spec", "# hi")
-    s.upsert_catalog_source("loose", "logs", "webhook", "1m", {})
     # the last three write the session store once the project tables are there (TR-1610)
     calls = [("create_person", lambda: s.create_person("Rosa")),
-             ("mark_customized", lambda: s.mark_customized("source", "owned")),
              ("remove_doc", lambda: s.remove_doc("uc_a", doc)),
-             ("put_in_project", lambda: s.put_in_project("source", "loose", "uc_a")),
+             ("upsert_project_object", lambda: s.upsert_project_object("uc_a", "doc", "doc:x", "x")),
              ("update_person", lambda: s.update_person("local", name="Sam")),
              ("delete_project", lambda: s.delete_project("gone-project"))]
     for i, (name, _) in enumerate(calls):
@@ -654,9 +650,9 @@ def revision():
            marks == ["other_mark"], marks)
         sdb.upgrade()
         ck("an upgrade builds it again", "session_moves" in inspect(sdb.engine).get_table_names()
-           and version(sdb) == ["0025_integration_keys_pr_events"])
+           and version(sdb) == ["0026_drop_catalog_sources"])
         sdb.upgrade()
-        ck("an upgrade at the head changes nothing", version(sdb) == ["0025_integration_keys_pr_events"])
+        ck("an upgrade at the head changes nothing", version(sdb) == ["0026_drop_catalog_sources"])
         sdb.close()
     finally:
         if PG:

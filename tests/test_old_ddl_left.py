@@ -1,6 +1,8 @@
-"""What the old DDL (`Store._ddl()`) still makes (TR-1618): the event tables, the tables only the
-platform uses (the SRE tables went with the AI SRE edition, TR-1809). Every other table is made by a revision of the session store, so
-a table added to the old DDL, or one moved without its line here, fails this test.
+"""What the old DDL (`Store._ddl()`) still makes (TR-1618): the events table alone (the SRE tables went
+with the AI SRE edition, TR-1809; the tables of the source catalog, triggers, agents, dispatch, Ask and
+the read log with the source catalog, TR-1811: an old database keeps them, a new one has none). Every
+other table is made by a revision of the session store, so a table added to the old DDL, or one moved
+without its line here, fails this test.
 
     python tests/test_old_ddl_left.py
 """
@@ -14,17 +16,11 @@ from tares import state_db                                      # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES        # noqa: E402
 from tares.store import Store                                   # noqa: E402
 
-# entity_counts and entity_label_state went in TR-1810: an old database keeps them, a new one has none
-EVENT_TABLES = {"events", "cursors", "source_stats"}
-ENTITY_TABLES = {"entity_counts", "entity_label_state"}
-PLATFORM_AND_EVENT_TABLES = EVENT_TABLES | {
-    # only the platform uses these
-    "trigger_state", "subscriptions", "dispatch_deliveries", "catalog_triggers", "catalog_agents",
-    "agent_runs", "mcp_servers", "ask_sessions", "query_log", "dispatch_log", "project_wiring",
-    "run_projects", "dispatch_projects",
-}
-# two tables of a removed feature: the old DDL only drops them
-DROPPED = {"catalog_reviews", "review_runs"}
+# state_db's event tables: the ones a move to Postgres leaves in DuckDB. entity_counts and
+# entity_label_state went in TR-1810, cursors and source_stats in TR-1811: an old database keeps them
+EVENT_TABLES = {"events"}
+GONE_EVENT_TABLES = {"cursors", "source_stats", "entity_counts", "entity_label_state"}
+PLATFORM_AND_EVENT_TABLES = EVENT_TABLES
 
 P = F = 0
 
@@ -72,13 +68,12 @@ def main():
     ck("and it makes every one of them", not PLATFORM_AND_EVENT_TABLES - set(made),
        sorted(PLATFORM_AND_EVENT_TABLES - set(made)))
     ck("each once", len(made) == len(set(made)), sorted(t for t in set(made) if made.count(t) > 1))
-    ck("no entity count table is made", not ENTITY_TABLES & set(made), sorted(ENTITY_TABLES & set(made)))
+    ck("no table that went is made", not GONE_EVENT_TABLES & set(made), sorted(GONE_EVENT_TABLES & set(made)))
     touched = set(found["alter"]) | set(found["index"])
     ck("no ALTER or index of the old DDL is for another table",
        not touched - PLATFORM_AND_EVENT_TABLES, sorted(touched - PLATFORM_AND_EVENT_TABLES))
-    ck("it drops only the two tables of a removed feature", set(found["drop"]) == DROPPED,
-       found["drop"])
-    ck("the event tables here are state_db's", EVENT_TABLES | ENTITY_TABLES == set(state_db.EVENT_TABLES),
+    ck("it drops no table", not found["drop"], found["drop"])
+    ck("the event tables here are state_db's", EVENT_TABLES | GONE_EVENT_TABLES == set(state_db.EVENT_TABLES),
        sorted(state_db.EVENT_TABLES))
     ck("none of them is also a table of the session store",
        not PLATFORM_AND_EVENT_TABLES & MOVED_TABLE_NAMES,

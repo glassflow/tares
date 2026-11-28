@@ -162,8 +162,8 @@ async def main():
     app.state.store.set_secret(uid, "LATER", ps.seal("added-after-cache-789"), "Ann")
     ck("a secret added later is replaced too (the cache follows changes)",
        "added-after-cache-789" not in json.dumps(ps.scrub("x added-after-cache-789 y", ps.scrub_pairs(app.state.store))))
-    from tares.connectors.claude_code import ClaudeCodeConnector
-    conn = ClaudeCodeConnector.__new__(ClaudeCodeConnector)
+    from tares.session_map import ClaudeCodeLines
+    conn = ClaudeCodeLines.__new__(ClaudeCodeLines)
     conn.store = app.state.store
     got = conn._scrub_secrets([{"type": "user", "message": {"content": "use replaced-value-456 now"}}])
     ck("the session connector scrubs before anything is stored", "replaced-value-456" not in json.dumps(got), json.dumps(got))

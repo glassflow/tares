@@ -85,13 +85,13 @@ def plugin():
         os.environ["FACTORY_CREW"] = "ana-mbp"
         stamped = ship.stamp_station([{"type": "user"}])
         ck("the crew's name is stamped on every shipped line (TR-541)", stamped[0].get("factory_crew") == "ana-mbp", stamped)
-        from tares.connectors.claude_code import ClaudeCodeConnector
-        lab = ClaudeCodeConnector.label_context(ClaudeCodeConnector.__new__(ClaudeCodeConnector),
+        from tares.session_map import ClaudeCodeLines
+        lab = ClaudeCodeLines.label_context(ClaudeCodeLines.__new__(ClaudeCodeLines),
                                                 {"sessionId": "s", "factory_station": "ana-mbp-reviewer",
                                                  "factory_crew": "ana-mbp"})
         ck("the transcript label crew comes from factory_crew", lab.get("crew") == "ana-mbp"
            and lab.get("station") == "ana-mbp-reviewer", lab)
-        ck("crew is a declared label axis", any(p["name"] == "crew" for p in ClaudeCodeConnector.PROVIDES))
+        ck("crew is a declared label axis", any(p["name"] == "crew" for p in ClaudeCodeLines.PROVIDES))
         sent.clear(); os.remove(ship.station_marker(cfg["data_dir"], "s-env"))
         ship.announce(cfg, hook, "")
         ck("the session_station line says the crew too",
@@ -144,11 +144,6 @@ async def main():
 
     async with app.router.lifespan_context(app):
         shop = json.loads(await m.create_project("Shop", "Sell things"))["id"]
-        async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True},
-                                                    "project": shop})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
 
         print("== stations from the sessions Tares receives ==")
         lines = [
@@ -187,18 +182,15 @@ async def main():
         ck("the builder sits under the orchestrator", "shop-build-m1" in by["crew-orchestrator"]["children"]
            and by["shop-build-m1"]["parent"] == "crew-orchestrator", by["crew-orchestrator"])
         ck("the builder is on its project", by["shop-build-m1"]["project_name"] == "Shop", by["shop-build-m1"])
-        async with mk() as cx:
-            ev = (await cx.get("/api/sources/claude_code/events", params={"limit": 200})).json()
+        ev, _where = app.state.store.key_events_from("claude_code", "g1", limit=200)
         warn = [e for e in ev if e.get("event_type") == "session_warning"]
         ck("a TARES_PROJECT naming no project is a warning on the session, no project made",
            warn and "Ghost" in warn[0]["text"] and not any(
                p["name"] == "Ghost" for p in json.loads(await m.list_projects())), warn)
-        async with mk() as cx:
-            rd = (await cx.post("/read", json={"selector": {"station": "shop-build-m1"},
-                                               "window": "2h", "include_payload": True})).json()
-        ck("lines carry the station label: a read by station finds the builder's lines",
-           rd.get("count") == 2 and "session=b1" in rd.get("payload", "")
-           and "station=shop-build-m1" in rd.get("payload", ""), rd)
+        lines, _where = app.state.store.key_events_from("claude_code", "b1", limit=200)
+        named = [e for e in lines if (e.get("labels") or {}).get("station") == "shop-build-m1"]
+        ck("lines carry the station label: the builder's station line and its reply name its station",
+           [e["event_type"] for e in named] == ["session_station", "assistant"], [e.get("labels") for e in lines])
         out = json.loads(await mf.list_crew())
         ck("list_crew: stations with state and earlier sessions",
            next(s for s in out if s["name"] == "crew-reviewer")["earlier_sessions"] == 1, out)

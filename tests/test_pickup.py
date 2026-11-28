@@ -70,8 +70,6 @@ async def main():
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                headers=root)
-        await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                            "poll": "10s", "config": {"push": True}})
 
         async def ingest(*lines):
             r = await cx.post("/ingest/claude_code", content="\n".join(json.dumps(o) for o in lines) + "\n",

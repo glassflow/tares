@@ -43,8 +43,7 @@ import httpx  # noqa: E402
 from sqlalchemy import delete, func, select, update  # noqa: E402
 
 from tares import session_archive, session_events  # noqa: E402
-from tares.config import SourceCfg  # noqa: E402
-from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
+from tares.session_map import ClaudeCodeLines  # noqa: E402
 from tares.envelope import Envelope, now_utc  # noqa: E402
 from tares.session_store.tables import session_archive_parts, session_lines, sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
@@ -72,7 +71,7 @@ def patched(obj, name, value):
 
 
 # ── the lines, as the connector maps them ────────────────────────────────────────────────────
-_CONNECTOR = ClaudeCodeConnector(SourceCfg(SRC, "agent_session", SRC, 10.0, {"push": True}), None)
+_CONNECTOR = ClaudeCodeLines(None, source=SRC, source_type="agent_session")
 _N = [0]
 
 
@@ -131,8 +130,6 @@ def other_lines() -> list:
 def open_store(edition):
     s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
     s.set_setting("edition", edition)
-    s.upsert_catalog_source(SRC, "agent_session", SRC, "10s", {"push": True})
-    s.upsert_catalog_source("web", "webhook", "webhook", "10s", {})
     s.link_session("uc_hidden", "H")
     return s
 
@@ -454,9 +451,6 @@ async def app_checks():
 
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as cx:
-            r = await cx.post("/api/sources", json={"name": SOURCE, "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            assert r.status_code < 300, r.text
 
             async def ingest(*lines):
                 r = await cx.post(f"/ingest/{SOURCE}", content="\n".join(lines) + "\n",
@@ -470,10 +464,9 @@ async def app_checks():
             projects = (await cx.get("/api/projects")).json()["projects"]
             ck("a challenger session no longer makes a project (TR-1810)",
                not any(p["template"] == "challenger_workflow" for p in projects), projects)
-            r = await cx.post("/read", json={"selector": {"session": "s1"}, "window": "30d"})
-            ck("a read of the session has its transcript", "a pricing page" in r.text, r.text[:300])
-            r = await cx.get(f"/api/sources/{SOURCE}/events")
-            ck("the source's recent events show the lines", "a pricing page" in r.text, r.text[:300])
+            lines, _where = st.store.key_events_from(SOURCE, "s1")
+            ck("a read of the session has its transcript", any("a pricing page" in e["text"] for e in lines),
+               [e["text"][:80] for e in lines])
 
 
 async def main():

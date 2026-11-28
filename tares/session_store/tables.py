@@ -2,7 +2,7 @@
 
 These are the five session tables, `settings`, the accounts (`people`, `api_keys`, `project_members`),
 the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skills`,
-`shared_skills`, `catalog_sources`, `github_credentials`, `model_usage`), the tickets (`tickets`,
+`shared_skills`, `github_credentials`, `model_usage`), the tickets (`tickets`,
 `ticket_history`, `ticket_numbers`), the milestones, checks and reviews (`milestones`,
 `milestone_check_results`, `milestone_acceptances`, `ticket_checks`, `challenges`, `reviews`,
 `review_findings`, `rule_proposals`) and the decisions, questions and crew tables (`assumptions`,
@@ -525,22 +525,6 @@ shared_skills = Table(
     Column("created_at", UTCDateTime),
     Column("updated_at", UTCDateTime),
     Column("updated_by", Text),
-)
-
-# The cell's sources. `config` is the connector's settings, JSON the Store parses.
-catalog_sources = Table(
-    "catalog_sources", metadata,
-    Column("name", Text, primary_key=True),
-    Column("type", Text),
-    Column("connector", Text),
-    Column("poll", Text),
-    Column("config", JSONText),
-    Column("paused", Boolean, server_default=false()),
-    Column("created_at", UTCDateTime),
-    Column("updated_at", UTCDateTime),
-    Column("ingest_key", Text),
-    Column("owned_by", Text),
-    Column("customized", Boolean),
 )
 
 # A GitHub token or App stored once and named by sources and MCP servers. `config` is JSON text the
@@ -1193,7 +1177,7 @@ brain_calls = Table(
 # `state_db.move`. Moving a table means adding it here and a revision that takes it over.
 MOVED_TABLES = (session_stations, session_states, project_sessions, session_usage, session_meters,
                 settings, people, api_keys, project_members, usecases, usecase_objects, usecase_log,
-                docs, skills, shared_skills, catalog_sources, github_credentials, model_usage,
+                docs, skills, shared_skills, github_credentials, model_usage,
                 tickets, ticket_history, ticket_numbers,
                 milestones, milestone_check_results, milestone_acceptances, ticket_checks,
                 challenges, reviews, review_findings, rule_proposals,

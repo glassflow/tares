@@ -3,7 +3,7 @@
 Who may see a project and who a key belongs to are decided in core (`_can_see`, `_key_person`,
 `_current_person`, `store.key_person_id` and the event filter), never by the licence or the team.
 This test keeps that true: one database written by a team cell (an owner, Ann and Bob, a key each,
-Ann leading a private project P that Bob and the owner are not on, an event labelled for P) is
+Ann leading a private project P that Bob and the owner are not on, a session that worked in P) is
 opened by a daemon in five states, and the same checks run in each:
 
   a. no TARES_LICENSE
@@ -17,9 +17,9 @@ opened by a daemon in five states, and the same checks run in each:
 In each state:
   - GET /api/whoami names the key's own person (never `local` for Ann's or Bob's key);
   - Bob: GET /api/projects/P is 404, the list shows P only as a hidden card (name and lead),
-    and a POST /read over P's source returns none of P's events but still the open ones;
-  - Ann sees P in full and its event;
-  - the owner, who is not on P, sees only the hidden card and none of P's events.
+    and a read of P's session is a 404;
+  - Ann sees P in full and its session's line;
+  - the owner, who is not on P, sees only the hidden card and not P's session.
 
 It uses no route that moves to ee (people, areas, project access), so it passes in the `mit`
 suite where tares_ee is deleted. The database is written with the daemon stopped (DuckDB has one
@@ -177,22 +177,17 @@ def make_project(cell: dict) -> bool:
                         json={"template": "custom", "name": "Secret", "objects": []})
             ck("set up: P is created with the system token", r.status_code in (200, 201), f"{r.status_code} {r.text[:200]}")
             cell["p"] = r.json()["id"]
-            r = cx.post(f"{base}/api/sources", headers=H(AUTH), json={
-                "name": "evts", "connector": "webhook", "config": {"labels": [
-                    {"name": "service", "field": "service", "primary": True},
-                    {"name": "tares_project", "field": "tares_project"}]}})
-            ck("set up: the source evts", r.status_code == 201, f"{r.status_code} {r.text[:200]}")
     finally:
         stop(proc)
     store = Store(DB, state_dsn="")
     try:
         now = now_utc() - timedelta(seconds=30)
         store.append([
-            Envelope("evts", "event_stream", "checkout", "evt", "SECRET event of P", now,
-                     {"text": "SECRET event of P"}, {"service": "checkout", "tares_project": cell["p"]}),
-            Envelope("evts", "event_stream", "checkout", "evt", "OPEN event of nobody", now,
-                     {"text": "OPEN event of nobody"}, {"service": "checkout"}),
+            Envelope("claude_code", "agent_session", "sess-p", "assistant", "SECRET event of P", now,
+                     {"type": "assistant", "sessionId": "sess-p", "message": {"role": "assistant", "content": [
+                         {"type": "text", "text": "SECRET event of P"}]}}, {"session": "sess-p"}),
         ])
+        store.link_session(cell["p"], "sess-p")
         store.set_project_lead(cell["p"], cell["ids"]["ann"])
         store.set_project_scope(cell["p"], "private")
     finally:
@@ -223,8 +218,7 @@ def check_state(label: str, base: str, cell: dict, crashing: bool = False) -> No
                r.status_code == 200 and (r.json().get("person") or {}).get("id") != "local", f"{r.status_code} {r.text[:200]}")
 
         def read(who):
-            r = cx.post(f"{base}/read", headers=H(keys[who]),
-                        json={"selector": {"service": "checkout"}, "window": "1h", "sources": ["evts"]})
+            r = cx.get(f"{base}/api/projects/{p}/sessions/sess-p", headers=H(keys[who]))
             return r.status_code, r.text
 
         def listed(who):
@@ -243,8 +237,8 @@ def check_state(label: str, base: str, cell: dict, crashing: bool = False) -> No
                and set(card) <= {"id", "name", "scope", "hidden", "lead"},
                f"{code} {json.dumps(card)[:300]}")
             code, text = read(who)
-            ck(f"{label}: {who}'s read of P's source has none of P's events, and the open one",
-               code == 200 and "SECRET" not in text and "OPEN event of nobody" in text, f"{code} {text[:300]}")
+            ck(f"{label}: {who}'s read of P's session is a 404, with nothing of it",
+               code == 404 and "SECRET" not in text, f"{code} {text[:300]}")
 
         r = cx.get(f"{base}/api/projects/{p}", headers=H(keys["ann"]))
         ck(f"{label}: ann gets P", r.status_code == 200 and r.json().get("id") == p, f"{r.status_code} {r.text[:200]}")
@@ -252,8 +246,8 @@ def check_state(label: str, base: str, cell: dict, crashing: bool = False) -> No
         card = cards.get(p) or {}
         ck(f"{label}: ann sees P in full in the list", code == 200 and card and not card.get("hidden"), f"{code} {json.dumps(card)[:300]}")
         code, text = read("ann")
-        ck(f"{label}: ann's read has P's event and the open one",
-           code == 200 and "SECRET event of P" in text and "OPEN event of nobody" in text, f"{code} {text[:300]}")
+        ck(f"{label}: ann's read has P's session line",
+           code == 200 and "SECRET event of P" in text, f"{code} {text[:300]}")
 
 
 STATES = [

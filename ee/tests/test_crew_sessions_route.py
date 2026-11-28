@@ -123,9 +123,6 @@ async def main():
                                                 headers=h or root, timeout=120, **kw)
     async with app.router.lifespan_context(app):
         async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            assert r.status_code < 300, r.text
             keys, pid = {}, {}
             for who in ("kim", "lee"):
                 r = await cx.post("/api/keys", json={"name": f"{who}-laptop", "scopes": ["admin", "ingest", "read"],

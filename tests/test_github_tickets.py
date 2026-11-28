@@ -655,8 +655,25 @@ async def main():
 
 
 async def api():
-    from tares.config import SourceCfg
-    from tares.connectors.github_issues import GitHubIssuesConnector
+
+    class GitHubIssuesPoll:
+        """What the 1.x GitHub Issues connector's poll did, kept here: every linked project synced
+        through tares.github_tickets.sync_project, the change events returned."""
+
+        def __init__(self, store):
+            self.store = store
+
+        async def poll(self):
+            out, errors = [], []
+            for uid, _link in self.store.github_projects():
+                try:
+                    out.extend(await gt.sync_project(self.store, uid))
+                except gt.GitHubTicketsError as e:
+                    errors.append(str(e))
+            if errors and not out:
+                raise gt.GitHubTicketsError(errors[0])
+            return out
+
     from tares.daemon import make_app
     reset()
     app = make_app()
@@ -689,8 +706,8 @@ async def api():
         ck("(A) the link records repo, issue label, url, credential and the sync",
            lk["repo"] == "acme/app" and lk["issue_label"] == "tares:p" and lk["url"] == "https://github.com/acme/app"
            and lk["credential"] == "cred-a" and lk["synced_at"] and lk["error"] is None and lk["issues"] == 4, lk)
-        ck("(A) linking makes no catalog source: the sync runner keeps the tickets in step (TR-1806)",
-           "github_issues" not in app.state.runtime.catalog.sources and not store.list_catalog_sources())
+        ck("(A) linking makes no source: the sync runner keeps the tickets in step (TR-1806)",
+           not hasattr(app.state, "runtime"))
         with store._lock:
             n = store.con.execute("SELECT count(*) FROM events WHERE source = 'github_issues'").fetchone()[0]
         ck("(A) the sync's change events are not stored", n == 0, n)
@@ -790,8 +807,7 @@ async def api():
         r = await cx.put(f"/api/projects/{second}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:q"}})
         ck("(D) a second project links with its own issue label", r.status_code == 200
            and [t["identifier"] for t in r.json()["tickets"]] == ["GH-21", "GH-22"], r.text)
-        conn = GitHubIssuesConnector(SourceCfg(name="github_issues", type="event_stream",
-                                               connector="github_issues", poll_seconds=60, config={}), store)
+        conn = GitHubIssuesPoll(store)
         ck("(D) a poll with nothing new emits nothing", await conn.poll() == [])
         gh(3).update(state="CLOSED", stateReason="NOT_PLANNED")
         gh(22)["labels"] = ["in progress", "tares:q"]

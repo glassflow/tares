@@ -102,11 +102,9 @@ ROUTES = [
     ("whoami", "/api/whoami", lambda d: d["person"]["name"] == "Sam" and d["edition"] == "factory"),
     ("licence", "/api/licence", lambda d: d["valid"] and d["ee_allowed"]),
     ("health", "/health", lambda d: d["status"] == "ok"),
-    ("connectors", "/api/connectors", lambda d: len(d) > 0),
     ("capabilities", "/api/capabilities", lambda d: d["version"] and d["slack_configured"]),
     ("brain", "/api/brain", lambda d: d["configured"] and d["repos"]),
     ("setup_progress", "/api/factory/setup/progress", lambda d: d["total"] > 0 and d["projects"] > 0),
-    ("source", "/api/sources/{source}", lambda d: d["connector"]),
     # Home (editions/factory/FactoryHome.api.ts)
     ("home", "/api/home", lambda d: d["projects"] and d["waiting_for_you"] and d["crew"]["members"]),
     ("answers", "/api/answers", lambda d: d["answers"]),
@@ -154,7 +152,6 @@ ROUTES = [
     ("settings_claude_usage", "/api/claude-code/usage?days=7", lambda d: d["projects"]),
     ("settings_keys", "/api/keys", lambda d: d["keys"]),
     ("projects_list", "/api/projects", lambda d: d["projects"]),               # the keys tab (ApiKeysPanel.tsx)
-    ("settings_mcp", "/api/settings/mcp", lambda d: "object_tools" in d),
     ("areas", "/api/areas", lambda d: d[0]["repo"]),
     ("slack_channels", "/api/slack/channels", lambda d: d["channels"]),        # MorningStatus.tsx
     # Setup and Integrations (FactorySetup.api.ts, FactorySetup.tsx, editions/settings/GithubPanel.tsx,
@@ -170,6 +167,7 @@ ROUTES = [
 
 _OLDER = "only an older page asks for it: "
 _GONE = "gone with Tares agents, Ask and triggers (TR-1810); the console stops asking in its own ticket"
+_NO_CATALOG = "gone with the source catalog (TR-1811); the console stops asking in its own ticket"
 # The GETs the build of the console can make that are not timed, and why.
 NOT_TIMED = [
     ("/api/ask/sessions", _GONE),
@@ -177,6 +175,9 @@ NOT_TIMED = [
     ("/api/triggers", _GONE),
     ("/api/settings/agents", _GONE),
     ("/api/settings/tracing", _GONE),
+    ("/api/connectors", _NO_CATALOG),
+    ("/api/sources/{name}", _NO_CATALOG),
+    ("/api/settings/mcp", _NO_CATALOG),
     ("/api/sources", _OLDER + "Sources, Connect Claude Code, Export, Resources, project setup"),
     ("/api/sources/{name}/events", _OLDER + "one source's page"),
     ("/api/sources/{name}/fields", _OLDER + "the source form, project setup"),
@@ -383,9 +384,6 @@ async def fixtures(cx, made: dict) -> dict:
     report.rebuild_all(STORE)
     to = fs.NOW.astimezone(timezone.utc).date()
     ids["from"], ids["to"] = (to - timedelta(weeks=8)).isoformat(), to.isoformat()
-
-    # a source, for the proposal card of the Ask overlay
-    ids["source"] = (await get("/api/sources/seed-source-0"))["name"]
 
     # an accepted milestone with its summary written (the seed accepts none)
     ms = (await get(f"/api/projects/{p}/milestones"))["milestones"][0]

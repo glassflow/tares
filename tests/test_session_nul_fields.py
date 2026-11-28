@@ -21,13 +21,13 @@ import tempfile
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sqlalchemy import delete, event, select  # noqa: E402
 
 from tares import session_drain, session_ingest, session_move  # noqa: E402
-from tares.connectors import claude_code  # noqa: E402
+from tares import session_map as claude_code  # noqa: E402
+from tares.session_map import ClaudeCodeLines  # noqa: E402
 from tares import session_map  # noqa: E402
 from tares.session_store.tables import (challenges, crews, metadata,  # noqa: E402
                                         project_sessions, session_archive_parts,
@@ -68,14 +68,12 @@ def new_store(edition, **kw):
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
     s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"), **kw)
     s.set_setting("edition", edition)
-    s.upsert_catalog_source(SRC, "agent_session", SRC, "10s", {"push": True})
     s.create_project(PROJECT, "custom", "proj", {})
     return s
 
 
 def connector(store):
-    return claude_code.ClaudeCodeConnector(
-        SimpleNamespace(name=SRC, type="agent_session", config={}), store=store)
+    return ClaudeCodeLines(store, source=SRC, source_type="agent_session")
 
 
 def when(sec):

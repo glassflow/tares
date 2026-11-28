@@ -130,9 +130,6 @@ async def main():
             def person(name):
                 return store.create_person(f"{name.title()} Example", f"{name}@example.test")["id"]
 
-            r = await cx.post("/api/sources", headers=root, json={
-                "name": "claude_code", "connector": "claude_code", "poll": "10s", "config": {"push": True}})
-            assert r.status_code < 300, r.text
 
             print("== not joining: the owner's four steps ==")
             ana, ben, cat, dee, eve = (person(n) for n in ("ana", "ben", "cat", "dee", "eve"))

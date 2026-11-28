@@ -94,10 +94,6 @@ async def main():
         shop = "uc_shop"
         app.state.store.create_project(shop, "custom", "Shop", {}, goal="Sell things")
         app.state.store.set_project_kind(shop, "software_factory")
-        async with cx() as c:
-            r = await c.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                   "poll": "10s", "config": {"push": True}})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
 
         print("== at work: nothing waits ==")
         await push(st_line("x1", "crew-releaser", "releaser", ago=20), hook("x1", "PostToolUse", 5),

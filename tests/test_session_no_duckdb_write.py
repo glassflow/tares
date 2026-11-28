@@ -2,8 +2,8 @@
 
 `Store.append` leaves the lines of a claude_code source out of the DuckDB events table when the cell's
 edition is factory and an archive backend exists (the folder archive always does on SQLite; a Postgres
-cell needs TARES_ARCHIVE_URL). The lines are still counted in `source_stats`, a challenger line is
-still kept in `challenges` (entity counts went in TR-1810; a new database has no table for them): the readers
+cell needs TARES_ARCHIVE_URL). A challenger line is still kept in `challenges` (entity counts went in
+TR-1810, and the per source counter `source_stats` in TR-1811; a new database has neither): the readers
 of `events` answer from the session store for them (TR-1647). Every other case writes to DuckDB as
 before, and a factory cell on Postgres with no archive says so once and keeps writing there.
 
@@ -70,12 +70,6 @@ def table_count(s):
         return c.execute(select(func.count()).select_from(session_lines)).scalar()
 
 
-def stats(s, source=SRC):
-    with s._lock:
-        r = s.con.execute("SELECT events, last_ingest FROM source_stats WHERE source = ?", [source]).fetchone()
-    return r
-
-
 def entity_tables(s):
     with s._lock:
         return [r[0] for r in s.con.execute(
@@ -112,9 +106,6 @@ def main():
             sessions.c.session == "s1")).first()
     ck("the session counts 50 lines, complete", got is not None and tuple(got) == (50, True), got)
     ck("challenges holds the challenge line", challenges(s) == 1, challenges(s))
-    st = stats(s)
-    ck("source_stats counts 50 for claude_code", st is not None and st[0] == 50, st)
-    ck("source_stats has the newest ingest time", st is not None and st[1] is not None, st)
     ck("the DuckDB counter did not move", counter() == before, (before, counter()))
     plat = open_store("platform")
     plat.append(batch)
@@ -122,9 +113,7 @@ def main():
        entity_tables(s) == [] and entity_tables(plat) == [] and duck_count(plat) == 50,
        (entity_tables(s), entity_tables(plat)))
     s.append([line("s1") for _ in range(5)])
-    st = stats(s)
-    ck("a second batch adds to source_stats", st[0] == 55, st)
-    ck("and to session_lines", table_count(s) == 55, table_count(s))
+    ck("a second batch adds to session_lines", table_count(s) == 55, table_count(s))
     other = line("s2", source="github")
     other.source_type = "event"
     s.append([other])
@@ -148,7 +137,6 @@ def main():
         session_ingest.caught_up = real_cu
     ck("the lines are in DuckDB", duck_count(s) == 4, duck_count(s))
     ck("and in session_lines", table_count(s) == 4, table_count(s))
-    ck("source_stats counts them once", (stats(s) or (0,))[0] == 4, stats(s))
     s.append([line("c1")])
     ck("once caught up, a line is held back again", duck_count(s) == 4, duck_count(s))
 
@@ -171,18 +159,6 @@ def main():
     ck("the old session is still complete after the reconcile", rows["old"] == (8, True), rows["old"])
     ck("so is the one the gate never touched", rows["old2"] == (3, True), rows["old2"])
     ck("and the new one", rows["new"] == (2, True), rows["new"])
-
-    print("== a line of another claude_code source than its session's keeps going to DuckDB ==")
-    s = open_store("factory")
-    s.upsert_catalog_source(SRC, "agent_session", SRC, "10s", {"push": True})
-    s.upsert_catalog_source("laptop", "agent_session", SRC, "10s", {"push": True})
-    s.append([line("two")])
-    s.append([line("two", source="laptop"), line("two")])
-    ck("the other source's line is in DuckDB", duck_count(s, "laptop") == 1, duck_count(s, "laptop"))
-    ck("the session's own source stays held", duck_count(s) == 0, duck_count(s))
-    s.append([line("mixed", source="laptop"), line("mixed")])
-    ck("a new session takes its first line's source", (duck_count(s, "laptop"), duck_count(s)) == (1, 1),
-       (duck_count(s, "laptop"), duck_count(s)))
 
     print("== a session id with a NUL byte does not stop the batch it is in ==")
     s = open_store("factory")
@@ -225,11 +201,9 @@ def main():
     ck("the append is refused", refused is not None)
     ck("nothing is in DuckDB or session_lines", (duck_count(s), table_count(s)) == (0, 0),
        (duck_count(s), table_count(s)))
-    ck("and nothing is counted", (stats(s) or (0,))[0] == 0, stats(s))
     s.append(batch)
     ck("sent again, the lines are held back as usual", (duck_count(s), table_count(s)) == (0, 3),
        (duck_count(s), table_count(s)))
-    ck("source_stats counts them once", (stats(s) or (0,))[0] == 3, stats(s))
 
     print("== the platform edition ==")
     s = open_store("platform")
@@ -237,7 +211,6 @@ def main():
     s.append([line("p1") for _ in range(10)])
     ck("lines are written to DuckDB", duck_count(s) == 10, duck_count(s))
     ck("and to session_lines", table_count(s) == 10, table_count(s))
-    ck("source_stats counts them", stats(s)[0] == 10, stats(s))
     ck("the DuckDB counter moved by 10", counter() == before + 10, (before, counter()))
     s = open_store(None)
     s.append([line("p2")])

@@ -160,14 +160,11 @@ def parity():
 
 
 def catalog_source():
-    print("== a claude_code source with another name ==")
+    print("== a line of another source is not a session line (TR-1811: claude_code alone) ==")
     s = fresh_store()
-    s.upsert_catalog_source("laptop", "claude_code", "claude_code", "", {})
-    s.append([line("a", 0, source="laptop"), line("a", 1, tool="Skill", source="laptop"),
-              line("b", 0, source="deploys")])
+    s.append([line("a", 0, source="laptop"), line("b", 0, source="deploys"), line("c", 0)])
     got = counts(s)
-    ck("its lines are counted", got.get("a") == (2, 1, 1), got)
-    ck("a source of another connector is not", "b" not in got, got)
+    ck("only the claude_code line is counted", "a" not in got and "b" not in got and "c" in got, got)
     s.close()
 
 
@@ -300,24 +297,6 @@ def coordination_text():
 def json_dumps(o):
     import json
     return json.dumps(o)
-
-
-def purge():
-    print("== purge_events drops the source's sessions rows ==")
-    s = fresh_store()
-    s.upsert_catalog_source("laptop", "claude_code", "claude_code", "", {})
-    batch = [line("a", 0, source="laptop"), line("a", 1, tool="Skill", source="laptop"), line("a", 2, source="laptop")]
-    s.append(batch + [line("keep", 0, tool="Skill")])
-    ck("the lines are counted", counts(s)["a"] == (3, 1, 1), counts(s))
-    n = s.purge_events("laptop")
-    ck("purge_events returns the events it removed", n == 3, n)
-    ck("the purged source's row is gone", "a" not in counts(s), counts(s))
-    ck("another source's row stays", counts(s).get("keep") == (1, 1, 1), counts(s))
-    s.append(batch)
-    ck("the same lines shipped again are counted once", counts(s)["a"] == (3, 1, 1), counts(s))
-    session_ingest.reconcile_sessions(s)
-    ck("and the reconcile agrees", counts(s)["a"] == (3, 1, 1), counts(s))
-    s.close()
 
 
 def lock_orders_record_and_reconcile():
@@ -459,7 +438,7 @@ def revision():
             v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
             kept = c.execute(select(sessions.c.line_count).where(sessions.c.session == "kept")).scalar()
         ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0025_integration_keys_pr_events"] and kept == 3, (v, kept))
+           v == ["0026_drop_catalog_sources"] and kept == 3, (v, kept))
         sdb.close()
     finally:
         if PG:
@@ -470,7 +449,7 @@ def revision():
 
 def main():
     for fn in (through_append, parity, catalog_source, reconcile, reconcile_extras, start_output,
-               coordination_text, purge, lock_orders_record_and_reconcile, concurrent, failure_is_quiet,
+               coordination_text, lock_orders_record_and_reconcile, concurrent, failure_is_quiet,
                revision):
         fn()
     if FAILS:

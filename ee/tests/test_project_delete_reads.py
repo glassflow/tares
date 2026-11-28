@@ -5,12 +5,10 @@ Zephyrvault is private to Lee; Mo is a member of it. Kim's crew has stations who
 in it, some tied to it by a link only. Ann, a key with no person and a key of the team project Atlas
 are not on it. Lee then deletes it.
 
-  [events]   the event reads;
   [stations] GET /api/crew, GET /api/crew/{name}, GET /api/crew/{name}/tool/{id} and
              GET /api/factory/crew/{crew}/{station}/sessions;
   [reuse]    the same once a new project takes the name;
   [waiting]  what waits for Kim;
-  [public]   the events of the team project Beacon, the same before and after its delete;
   [same]     what Kim, who owns the crew, reads of their stations' sessions;
   [cost]     the totals a delete leaves as they were, and where later replies count.
 
@@ -38,7 +36,6 @@ os.environ["TZ"] = "UTC"      # the events scan answers times in the machine's z
 time.tzset()
 _TMP = tempfile.mkdtemp(prefix="tares-deleted-private-reads-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
-os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-deleted-private-reads"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -48,7 +45,7 @@ import httpx
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-GROUPS = ("events", "stations", "reuse", "waiting", "public", "same", "cost", "source", "shared")
+GROUPS = ("stations", "reuse", "waiting", "same", "cost", "source", "shared")
 TALLY = {g: [0, 0] for g in GROUPS}          # group -> [passed, failed]
 SECRET = "zz-secret"                         # in every line and event of the private project
 NAME = "Zephyrvault"
@@ -72,7 +69,6 @@ HIDDEN = {"orc-0001": "crew-orchestrator", "rev-0001": "crew-reviewer", "hlp-000
 OWNERS_READ = ("orc-0001", "rev-0001", "hlp-0001", "mix-0001")   # their stations have another project
 PEOPLE = ("per-0001", "per-0002")   # a person's own sessions, no station, that joined the private one
 LINKED = {**HIDDEN, **dict.fromkeys(PEOPLE)}   # every session of it, as the event reads see them
-BEACON = ("beacon-by-id", "beacon-by-name", "beacon-in-payload", "beacon-by-session")
 STATUS_COSTS = {"orc-0001": 4.5, "mix-0001": 2.5}
 
 
@@ -143,27 +139,13 @@ async def make_project(app, world, owner, name):
         return r.json()["id"]
 
 
-def event(source, key, mark, labels, payload=None, age=timedelta(minutes=5)):
-    from tares.envelope import Envelope, now_utc
-    return Envelope(source, "event_stream", key, "evt", mark, now_utc() - age,
-                    {**(payload or {}), "text": mark}, labels)
-
-
 async def seed(app) -> dict:
     """The people, the projects, Kim's crew and the events."""
     store = app.state.store
     root = {"Authorization": f"Bearer {TOKEN}"}
     world = {"who": {"root": root}, "pid": {}}
     who = world["who"]
-    labels = [{"name": "service", "field": "service", "primary": True},
-              {"name": "tares_project", "field": "tares_project"}]
     async with client(app, root) as cx:
-        for source in ({"name": "claude_code", "connector": "claude_code", "poll": "10s",
-                        "config": {"push": True}},
-                       {"name": "evts", "connector": "webhook", "config": {"labels": labels}},
-                       {"name": "findings", "connector": "finding", "config": {}}):
-            r = await cx.post("/api/sources", json=source)
-            assert r.status_code < 300, r.text
         for name in ("kim", "lee", "mo", "ann", "bot"):
             body = {"name": f"{name}-laptop", "scopes": ["admin", "ingest", "read"]}
             if name != "bot":   # the bot's key has no person
@@ -183,14 +165,6 @@ async def seed(app) -> dict:
         r = await cx.patch(f"/api/projects/{vault}", json={"scope": "private"})
         assert r.status_code < 300 and store.get_project(vault)["scope"] == "private", r.text
     store.add_project_member(vault, world["pid"]["mo"])
-    async with client(app, who["lee"]) as cx:   # a source in the private project and no other,
-        for source in ("solo", "both"):          # and one a public project has too
-            r = await cx.post("/api/sources", json={"name": source, "connector": "webhook",
-                                                    "config": {"labels": labels}, "project": vault})
-            assert r.status_code < 300, r.text
-        store.put_in_project("source", "both", atlas)
-        assert store.source_memberships()["solo"] == [vault], store.source_memberships()
-        assert set(store.source_memberships()["both"]) == {vault, atlas}
     async with client(app, who["kim"]) as cx:
         r = await cx.post(f"/api/projects/{atlas}/keys", json={"name": "atlas-agent"})
         assert r.status_code < 300, r.text
@@ -235,50 +209,8 @@ async def seed(app) -> dict:
     for sid in ("rev-0001", "mix-0001"):
         store.set_session_state(sid, "waiting", f"{SECRET} permission", now)
 
-    store.append([
-        event("evts", "shop", f"{SECRET}-by-id", {"service": "shop", "tares_project": vault}),
-        event("evts", "shop", f"{SECRET}-by-name", {"service": "shop", "tares_project": NAME}),
-        event("findings", "shop", f"{SECRET}-in-payload", {"service": "shop"}, {"project": vault}),
-        event("evts", "rev-0001", f"{SECRET}-by-session", {"service": "shop"}),
-        event("solo", "shop", f"{SECRET}-by-source", {"service": "shop"}),
-        event("both", "shop", "open-both", {"service": "shop"}),
-        event("evts", "other", f"{SECRET}-label-value",
-              {"service": f"{SECRET}-svc", "tares_project": vault}),
-        event("evts", "shop", "open-atlas", {"service": "shop", "tares_project": atlas}),
-        event("evts", "shop", "open-unlabelled", {"service": "shop"}),
-        event("evts", "shop", "beacon-by-id", {"service": "shop", "tares_project": beacon}),
-        event("evts", "shop", "beacon-by-name", {"service": "shop", "tares_project": "Beacon"}),
-        event("findings", "shop", "beacon-in-payload", {"service": "shop"}, {"project": beacon}),
-        event("evts", "bea-0001", "beacon-by-session", {"service": "shop"}),
-    ])
     await asyncio.sleep(0.5)
     return world
-
-
-async def event_reads(app, world, who) -> dict:
-    """Every way to read events, as {route: response text}."""
-    out = {}
-    async with client(app, world["who"][who]) as cx:
-        for raw in (False, True):
-            r = await cx.post("/read", json={"selector": {"service": "shop"}, "window": "6h",
-                                             "include_payload": raw})
-            out["/read raw" if raw else "/read"] = r.text
-        for src in ("evts", "findings", "claude_code", "solo"):
-            out[f"events {src}"] = (await cx.get(f"/api/sources/{src}/events",
-                                                 params={"limit": 200})).text
-        out["fields evts"] = (await cx.get("/api/sources/evts/fields")).text
-        out["describe evts"] = (await cx.get("/catalog/source:evts")).text
-        out["describe claude_code"] = (await cx.get("/catalog/source:claude_code")).text
-        out["describe solo"] = (await cx.get("/catalog/source:solo")).text
-    return out
-
-
-async def selected(app, world, who, selector) -> tuple[int, str]:
-    """(rows, response text) of a read the caller asks for by this selector."""
-    async with client(app, world["who"][who]) as cx:
-        r = await cx.post("/read", json={"selector": selector, "window": "6h",
-                                         "include_payload": True})
-    return (r.json().get("count", 0) if r.status_code == 200 else 0), r.text
 
 
 def found(text, world, sessions=(), name=True) -> list[str]:
@@ -307,8 +239,6 @@ async def check_cost(app, world, before: dict):
     now = counted(store)
     ck("cost", "new replies count for the project joined next, else Other sessions",
        moved(was, now) == {"other": 1, LATER: 1}, (moved(was, now), now))
-    for who in ("ann", "bot"):
-        await check_events(app, world, who, "after new replies", "cost")
 
     # the session with no other project joins a second private one, which is then deleted too
     store.create_project(SECOND, "custom", "Quartzite", {})
@@ -324,8 +254,6 @@ async def check_cost(app, world, before: dict):
        moved(joined, counted(store)))
     ck("cost", "a session left with deleted projects only keeps no stored state",
        store.session_state("per-0001") is None, store.session_state("per-0001"))
-    for who in ("ann", "bot"):
-        await check_events(app, world, who, "after the second delete", "cost")
 
 
 def check_records(store):
@@ -370,21 +298,6 @@ async def check_shared(app, world, who, when):
        any(s["session"] == sid for s in app.state.store.project_sessions(pid))
        and sid not in listed and one.status_code == 404 and SECRET not in one.text,
        (listed, one.status_code))
-
-
-async def check_events(app, world, who, when, group="events", sessions=LINKED, name=True):
-    reads = await event_reads(app, world, who)
-    for route, text in reads.items():
-        got = found(text, world, sessions, name)
-        ck(group, f"{when}, {who}, {route}: nothing of it", not got, got)
-    ck(group, f"{when}, {who}: the open events are read",
-       who == "atlaskey" or ("open-unlabelled" in reads["/read"] and "open-atlas" in reads["/read"]),
-       reads["/read"])
-    for selector in ({"tares_project": world["vault"]}, {"session": "rev-0001"},
-                     *(({"tares_project": NAME},) if name else ())):
-        rows, text = await selected(app, world, who, selector)
-        ck(group, f"{when}, {who}: a read of {list(selector)[0]} gives no row of it",
-           rows == 0 and SECRET not in text, (rows, text))
 
 
 async def get(app, world, who, path, **params):
@@ -491,17 +404,6 @@ def check_waiting(world, fx, when, owner_reads=False):
     ck("waiting", f"{when}: and nothing of the private project reaches ann", not got, (got, s))
 
 
-async def beacon_reads(app, world) -> dict:
-    reads = await event_reads(app, world, "ann")
-    out = {route: sorted(m for m in (*BEACON, world["beacon"], "Beacon") if m in text)
-           for route, text in reads.items()}
-    for selector in ({"tares_project": world["beacon"]}, {"tares_project": "Beacon"},
-                     {"session": "bea-0001"}):
-        rows, text = await selected(app, world, "ann", selector)
-        out[str(selector)] = (rows, sorted(m for m in BEACON if m in text))
-    return out
-
-
 async def main():
     from tares import factory_api, session_ingest
     fx = {}
@@ -534,18 +436,8 @@ async def main():
         world["crew"] = crew["shop-build-m1"]["crew_id"]
         vault = world["vault"]
 
-        # before the delete: the project is private, and the seed shows in the reads of its people
-        reads = await event_reads(app, world, "lee")
-        for mark in ("by-id", "by-name", "in-payload", "by-session", "by-source"):
-            ck("same", f"before, lee reads the event {mark}",
-               f"{SECRET}-{mark}" in reads["/read raw"], reads["/read raw"])
-        for who in ("ann", "bot", "kim"):
-            await check_events(app, world, who, "before the delete")
         for who in ("ann", "bot"):
             await check_shared(app, world, who, "before the delete")
-        beacon_before = await beacon_reads(app, world)
-        ck("public", "Beacon's events are read before any delete",
-           all(m in beacon_before["/read raw"] for m in BEACON), beacon_before["/read raw"])
 
         async def before(path_name):
             for who in ("ann", "bot"):
@@ -560,9 +452,6 @@ async def main():
             r = await cx.delete(f"/api/projects/{vault}")
             assert r.status_code < 300 and store.get_project(vault) is None, r.text
 
-        for who in ("ann", "bot", "atlaskey", "kim", "lee", "root"):
-            await check_events(app, world, who, "after the delete")
-
         async def after(path_name):
             for who in ("ann", "bot", "mo", "lee"):
                 await check_stations(app, world, who, f"after, {path_name}", HIDDEN)
@@ -571,20 +460,6 @@ async def main():
         await on_both_paths(after)
         for who in ("ann", "bot"):
             await check_shared(app, world, who, "after the delete")
-        # the source it alone had stays, in the default project: what it records now is read
-        ck("source", "the source is in the default project now",
-           store.source_memberships().get("solo") == [store.default_project_id()],
-           store.source_memberships().get("solo"))
-        store.append([event("solo", "shop", "open-solo-later", {"service": "shop"},
-                            age=timedelta(0))])
-        await asyncio.sleep(0.5)
-        for who in ("ann", "bot", "root"):
-            reads = await event_reads(app, world, who)
-            for route in ("/read", "events solo"):
-                ck("source", f"{who}, {route}: a line recorded after the delete is read",
-                   "open-solo-later" in reads[route] and SECRET not in reads[route], reads[route])
-            ck("source", f"{who}: what a source shared with a public project had is still read",
-               "open-both" in reads["/read"], reads["/read"])
         check_waiting(world, fx["fx"], "after the delete")
         check_records(store)
         await check_cost(app, world, counted_before)
@@ -601,9 +476,6 @@ async def main():
         late += turn("rev-0002", 105, "open-work", "rev-0002", usage=False)
         await ingest(app, world, late)
         hidden = {**HIDDEN, "late-0001": LATE}
-        linked = {**LINKED, **hidden}
-        for who in ("ann", "bot"):
-            await check_events(app, world, who, "after later lines", sessions=linked)
 
         async def after_late(path_name):
             for who in ("ann", "bot"):
@@ -625,18 +497,7 @@ async def main():
         again.append(station_line("shop-build-m3", "builder", "new-0001", 112, NAME))
         again += turn("new-0001", 112, "open-work", "new-0001", project=NAME)
         await ingest(app, world, again)
-        store.append([event("evts", "shop", "open-fresh", {"service": "shop", "tares_project": NAME},
-                            age=timedelta(0))])   # dated after the new project was made
         await asyncio.sleep(0.5)
-        # the old sessions' lines above name it and still count as its own: no source joins it again
-        joined = [n for n, uids in store.source_memberships().items() if vault in uids]
-        ck("reuse", "a later line of the deleted project's session puts no source in it",
-           not joined, joined)
-        for who in ("ann", "bot"):
-            await check_events(app, world, who, "the name taken again", "reuse", linked, name=False)
-        rows, text = await selected(app, world, "ann", {"tares_project": NAME})
-        ck("reuse", "ann reads the event recorded for the new project",
-           rows == 1 and "open-fresh" in text, (rows, text))
 
         async def reused(path_name):
             for who in ("ann", "bot"):
@@ -670,19 +531,6 @@ async def main():
            own.get("new-0001") == new, (own, new))
         ck("reuse", "a reply line of the deleted project's session still counts for it",
            own.get("rev-0001") == vault, (own, vault))
-
-        # a team project's events read the same after another delete, and after its own
-        now = await beacon_reads(app, world)
-        keys = [k for k in beacon_before if k != "describe evts"]   # its sample is the 3 newest
-        ck("public", "Beacon's events read the same after the private project's delete",
-           all(now[k] == beacon_before[k] for k in keys),
-           {k: (beacon_before[k], now[k]) for k in keys if now[k] != beacon_before[k]})
-        async with client(app, world["who"]["kim"]) as cx:
-            r = await cx.delete(f"/api/projects/{world['beacon']}")
-            assert r.status_code < 300 and store.get_project(world["beacon"]) is None, r.text
-        after_own = await beacon_reads(app, world)
-        ck("public", "Beacon's events read the same after its own delete",
-           after_own == now, {k: (now[k], after_own[k]) for k in now if after_own[k] != now[k]})
 
     for group in GROUPS:
         print(f"[{group}] {TALLY[group][0]} passed, {TALLY[group][1]} failed")

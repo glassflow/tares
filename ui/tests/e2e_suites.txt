@@ -7,8 +7,6 @@ brain-decisions
 brain-folders
 brain-repos
 capped-runs
-catalog-export
-catalog-import
 choose-edition
 component-gallery
 connect
@@ -50,13 +48,7 @@ raise-limit
 reads
 redirects
 report
-resources
 session-picker
 settings-people
 source-claude-code
-source-detail
-source-discover
-source-form
-source-new
-sources
 team-home

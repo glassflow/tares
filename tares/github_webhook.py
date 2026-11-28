@@ -1,32 +1,26 @@
 """GitHub App webhook deliveries (Tares 2.0, TR-1807): every event of a GitHub App installation,
-delivered by the App's webhook to /ingest/<key>. The ci_github integration owns them; this module
-reads no source catalog. (Moved from tares/connectors/github_app.py, which re-exports it until the
-connectors go.)
+delivered by the App's webhook to /ingest/<key>. The ci_github integration owns them; the key is
+an `integration_keys` row made with the App credential. There is no source catalog (TR-1811): the
+route stores the events under the key's `source` name and then calls `after_store`.
 
-What happens to a delivery, besides the platform's ingest tail the route still runs (TR-1811 removes it):
+What happens to a stored delivery:
 - a `pull_request` event is kept in `pr_events` (repo, number, branch, action, when), 30 days, which
   the factory reads to link a ticket's pull request by its `factory/<ref>` branch;
 - every event is handed to the subscribers of `HUB` (the brain sync takes pushes there).
 
-The rest of this docstring is the connector's, kept as it was:
+All repositories of all the App's installations arrive on the one key: pull requests, pushes,
+reviews, comments, issues, releases, workflow runs.
 
-One source per App credential, created with the credential (the "Create GitHub App" flow, or
-Connect GitHub on Tares Cloud), never added by hand. All repositories of all the App's
-installations arrive here: pull requests, pushes, reviews, comments, issues, releases, workflow
-runs. Projects use the one source and narrow it with trigger filters (`repo`, `event_type`,
-`action`), so nothing is configured per repository.
-
-Deliveries are signature-checked before they reach this connector (`X-Hub-Signature-256` with the
-App's webhook secret; see webhook_verify.py), which is what lets GitHub post here without a Tares
-key. The event name and delivery id only travel in headers, so this connector takes them
-(`WANTS_HEADERS`). They are stamped into the stored payload (`_github_event`, `_github_delivery`) so
-a relabel from stored payloads reproduces the labels.
+Deliveries are signature-checked before they get here (`X-Hub-Signature-256` with the App's webhook
+secret; see webhook_verify.py), which is what lets GitHub post without a Tares key; a refused one is
+counted (`count_rejected`). The event name and delivery id only travel in headers, so `map_payload`
+takes them. They are stamped into the stored payload (`_github_event`, `_github_delivery`).
 
 Lifecycle deliveries update the credential instead of the timeline: `installation` (created,
 deleted, suspend), `installation_repositories` (repo list changed), `ping`. A delivery for an
 installation the credential does not know is dropped and counted, never stored.
 
-Events follow the GitHub event contract in github_events.py, shared with the polling connector.
+Events follow the GitHub event contract in github_events.py.
 """
 from __future__ import annotations
 
@@ -43,6 +37,8 @@ DEDUPE_MAX = 10_000
 _seen: dict[str, OrderedDict] = {}
 # per source: what the console shows next to the credential ("last delivery 2 min ago")
 STATS: dict[str, dict] = {}
+# per source: deliveries refused for a bad or missing signature since start
+REJECTED: dict[str, int] = {}
 
 
 def _stats(source: str) -> dict:
@@ -51,10 +47,16 @@ def _stats(source: str) -> dict:
                                      "last_event": None})
 
 
+def count_rejected(source: str, reason: str) -> None:
+    """A delivery refused for its signature: counted on the source, one log line, never the body
+    or the secret."""
+    REJECTED[source] = REJECTED.get(source, 0) + 1
+    print(f"taresd: refused a delivery to {source!r}: {reason}")
+
+
 class Hub:
-    """Who hears of every GitHub App event the cell takes: callables (source, envelopes), the same
-    shape core's runtime listeners had, so the brain sync moved over unchanged. A subscriber must
-    return at once and never raise into the delivery."""
+    """Who hears of every GitHub App event the cell takes: callables (source, envelopes). A
+    subscriber must return at once and never raise into the delivery."""
 
     def __init__(self):
         self.subscribers: list = []
@@ -103,12 +105,9 @@ def pr_rows(envelopes: list) -> list[dict]:
     return out
 
 
-GITHUB_CONNECTORS = ("github_app", "github")   # whose events are told to HUB and kept in pr_events
-
-
 def after_store(store, source: str, envelopes: list) -> None:
-    """What every stored batch of a GitHub source goes through (the App's webhook, or a token's poll):
-    its pull requests kept in pr_events, then the batch told to HUB. A pr_events write that fails is
+    """What every stored batch of a GitHub App's webhook goes through: its pull requests kept in
+    pr_events, then the batch told to HUB. A pr_events write that fails is
     logged and never fails the batch (the delivery is already counted as seen)."""
     if not envelopes:
         return
@@ -123,10 +122,9 @@ def after_store(store, source: str, envelopes: list) -> None:
 
 
 class GithubAppDeliveries:
-    """Maps one App credential's webhook deliveries. `source` names them (the 1.x catalog source
-    name, `github`, until the catalog goes); `credential` is the App credential's name."""
-    WANTS_HEADERS = True
-    PROVIDES = gh.CONTRACT_LABELS
+    """Maps one App credential's webhook deliveries. `source` names them (the key's `source`:
+    `github`, or `github_<credential>` for a second App); `credential` is the App credential's
+    name."""
 
     def __init__(self, store, source: str, credential: str):
         self.store = store
@@ -138,12 +136,6 @@ class GithubAppDeliveries:
     def _cred(self) -> dict | None:
         name = self.credential
         return self.store.get_github_credential(name) if name else None
-
-    def signature(self) -> tuple[str, str] | None:
-        """(scheme, secret) every delivery must be signed with. A missing secret is returned as
-        an empty string, which refuses every delivery: an App source never takes unsigned posts."""
-        cred = self._cred() or {}
-        return "github", str((cred.get("config") or {}).get("webhook_secret") or "")
 
     @staticmethod
     def _may_add(cred: dict, iid, account: str) -> bool:
@@ -232,25 +224,11 @@ class GithubAppDeliveries:
             seen.popitem(last=False)
         return delivery in seen
 
-    def label_context(self, payload: dict | None) -> dict:
-        p = payload or {}
-        built = gh.build(p.get("_github_event") or "", p)
-        return (built or {}).get("labels", {})
-
-    def labels_for(self, context: dict | None = None) -> dict:
-        return dict(context or {})   # the contract's labels (no catalog labels in 2.0)
-
-    def _primary_label(self):
-        return None
-
     def _envelope(self, stored: dict) -> Envelope | None:
         built = gh.build(stored["_github_event"], stored)
         if built is None:
             return None
-        labels = self.labels_for(built["labels"])
-        key = built["key"]
-        if self._primary_label():          # a person who marked a primary label keys by it
-            key = labels.get(self._primary_label()) or key
-        return Envelope(source=self.source, source_type=self.source_type, key_value=key,
+        labels = dict(built["labels"])   # the contract's labels
+        return Envelope(source=self.source, source_type=self.source_type, key_value=built["key"],
                         event_type=built["event_type"], text=built["text"],
                         event_time=built["event_time"], payload=stored, labels=labels)

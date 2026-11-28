@@ -151,36 +151,6 @@ const where = (page) => { const u = new URL(page.url()); return u.pathname + u.s
       ck("not found: no page errors", !errors.length, errors.join(" | "));
     }
 
-    // ── a connection's page, straight from one to another ───────────────────────────────────────────
-    {
-      const yaml = ["alpha-conn", "beta-conn"].map((n) => `  - name: ${n}\n    connector: docker_logs\n    poll: 30s\n    config: {container: ${n}-1}\n`).join("");
-      const r = await fetch(`${d.base}/api/catalog/import`, { method: "POST", headers: { "content-type": "application/json" },
-                                                              body: JSON.stringify({ yaml: `sources:\n${yaml}`, mode: "merge" }) });
-      ck("connection: two connections to move between", r.ok, String(r.status));
-      const { ctx, page, errors } = await open("/sources/alpha-conn");
-      const h1 = page.getByRole("heading", { level: 1 });
-      await page.waitForFunction(() => document.querySelector("h1")?.textContent?.includes("alpha-conn"), null, { timeout: 10000 }).catch(() => {});
-      ck("connection: opens by name", (await h1.innerText()).includes("alpha-conn"), await h1.innerText());
-      await page.evaluate(() => { history.pushState({}, "", "/sources/beta-conn"); dispatchEvent(new PopStateEvent("popstate")); });
-      await page.waitForFunction(() => document.querySelector("h1")?.textContent?.includes("beta-conn"), null, { timeout: 10000 }).catch(() => {});
-      ck("connection: moving to another shows the other", (await h1.innerText()).includes("beta-conn"), await h1.innerText());
-      const text = await page.evaluate(MAIN_TEXT);
-      ck("connection: and nothing of the first", !text.includes("alpha-conn"), text.slice(0, 200));
-      // What the page itself holds (the open tab) starts over too: the raw tab buttons mark the open one
-      // with .active, the kit's Tabs with aria-selected.
-      const active = (label) => page.evaluate((l) => [...document.querySelectorAll("main button, main [role=tab]")]
-        .some((b) => b.textContent.trim() === l && (b.classList.contains("active") || b.getAttribute("aria-selected") === "true")), label);
-      await page.evaluate(() => { history.pushState({}, "", "/sources/alpha-conn"); dispatchEvent(new PopStateEvent("popstate")); });
-      await page.waitForFunction(() => document.querySelector("h1")?.textContent?.includes("alpha-conn"), null, { timeout: 10000 }).catch(() => {});
-      await page.getByText("Configuration", { exact: true }).click();
-      ck("connection: a tab can be opened", await active("Configuration"));
-      await page.evaluate(() => { history.pushState({}, "", "/sources/beta-conn"); dispatchEvent(new PopStateEvent("popstate")); });
-      await page.waitForFunction(() => document.querySelector("h1")?.textContent?.includes("beta-conn"), null, { timeout: 10000 }).catch(() => {});
-      ck("connection: the other opens on its first tab, not the one left open", !(await active("Configuration")) && await active("Fields"));
-      await ctx.close();
-      ck("connection: no page errors", !errors.length, errors.join(" | "));
-    }
-
     // ── sre words ─────────────────────────────────────────────────────────────────────────────────
     {
       const { ctx, page } = await open("/triggers/gone-rule", { edition: "sre" });

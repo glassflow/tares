@@ -143,12 +143,7 @@ def _cx(timeout: float = 10):
 # stdio (default) is what a local agent spawns. For remote agents (the demo / a server), run with
 # TARES_MCP_TRANSPORT=streamable-http (or sse) and the server listens on MCP_HOST:MCP_PORT — at
 # /mcp (streamable-http) or /sse (sse), proxying tool calls to taresd as usual.
-# What each edition's agent sees (TR-757). The low-level building-block tools stay off a factory
-# cell unless an admin turns them on; the crew's tools stay on everywhere.
-OBJECT_TOOLS = frozenset({
-    "read", "stats", "catalog_list", "catalog_describe", "list_connectors", "discover_source",
-    "discover_docker", "test_source", "create_source", "list_sources", "source_fields"})
-# The outcome tools, listed first on a factory cell (tares/mcp_outcomes.py registers them).
+# What each edition's agent sees (TR-757); the crew's tools stay on everywhere. The outcome tools, listed first on a factory cell (tares/mcp_outcomes.py registers them).
 # The two that read the home page need the factory home, so they stay off platform.
 FACTORY_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
                            "hand_project_to_crew"})
@@ -161,26 +156,21 @@ _LICENCE_TEXT = ("licence_required: This needs an enterprise licence. "
                  "https://docs.glassflow.ai/tares/enterprise")
 # what a Tares Cloud cell says instead (tares.licence.CLOUD_WORDS): no licence words, no link
 _CLOUD_TEXT = "This is not available on this workspace right now."
-_OFF = ("This tool is off on this Tares. An admin can turn on the building-block tools under "
-        "Settings, Access and API keys, Agent tools.")
-
 
 
 def _off_text(name: str, edition: str) -> str:
-    if name in OBJECT_TOOLS:
-        return _OFF
     return f"This tool is not part of the {edition} edition of this Tares."
 
 
 # A tidy tool list, not a permission boundary: the daemon checks every call with the caller's own
 # key, and X-Tares-Role is a plain header any client can send. Hiding a tool only keeps the list
 # short for a person; it never decides what a caller may do.
-_SURFACES: dict[str, tuple[float, tuple[str, bool]]] = {}
+_SURFACES: dict[str, tuple[float, str]] = {}
 
 
-async def _surface() -> tuple[str, bool]:
-    """(edition, object tools on) as the daemon says for this caller's token, kept for
-    TARES_MCP_SURFACE_TTL seconds (30). Any error gives ("", True): an unknown edition shows every tool."""
+async def _surface() -> str:
+    """The edition as the daemon says for this caller's token, kept for TARES_MCP_SURFACE_TTL
+    seconds (30). Any error gives "": an unknown edition shows every tool."""
     tok = _caller("token")
     now = time.monotonic()
     hit = _SURFACES.get(tok)
@@ -195,9 +185,9 @@ async def _surface() -> tuple[str, bool]:
             r = await cx.get(f"{TARESD}/api/whoami")
         r.raise_for_status()
         who = r.json()
-        out = (str(who["edition"]), bool(who["mcp_object_tools"]))
+        out = str(who["edition"])
     except Exception:
-        return ("", True)
+        return ""
     if len(_SURFACES) > 256:
         _SURFACES.clear()
     _SURFACES[tok] = (now, out)
@@ -247,14 +237,12 @@ async def _refusal_text() -> str:
     return _CLOUD_TEXT
 
 
-def _visible(name: str, edition: str, object_tools: bool, station: bool, ee_on: bool = True) -> bool:
+def _visible(name: str, edition: str, station: bool, ee_on: bool = True) -> bool:
     """Whether a tool is listed (and runs) for this caller on this edition."""
     if name in EE_TOOLS and not ee_on:
         return False
     if station or edition not in ("factory", "sre", "platform"):   # unknown edition: every tool
         return True
-    if name in OBJECT_TOOLS:
-        return object_tools
     if name in FACTORY_ONLY:
         return edition == "factory"
     if name in FACTORY_TOOLS:
@@ -270,8 +258,8 @@ class TaresMCP(FastMCP):
         ee_on = await _ee_on() if EE_TOOLS else True
         if _caller("role"):   # a crew station sees every tool but the ee ones without a licence
             return [t for t in tools if t.name not in EE_TOOLS or ee_on]
-        edition, object_tools = await _surface()
-        tools = [t for t in tools if _visible(t.name, edition, object_tools, False, ee_on)]
+        edition = await _surface()
+        tools = [t for t in tools if _visible(t.name, edition, False, ee_on)]
         first = FACTORY_TOOLS if edition == "factory" else frozenset()
         return sorted(tools, key=lambda t: t.name not in first)   # stable: outcome tools first
 
@@ -279,8 +267,8 @@ class TaresMCP(FastMCP):
         if name in EE_TOOLS and not await _ee_on():
             return types.CallToolResult(content=[TextContent(type="text", text=await _refusal_text())])
         if not _caller("role"):
-            edition, object_tools = await _surface()
-            if not _visible(name, edition, object_tools, False):
+            edition = await _surface()
+            if not _visible(name, edition, False):
                 # A CallToolResult skips the output check the server runs on a listed tool.
                 return types.CallToolResult(content=[TextContent(type="text", text=_off_text(name, edition))])
         return await super().call_tool(name, arguments)
@@ -298,52 +286,6 @@ def writable():
 
 
 @mcp.tool()
-async def read(selector: dict, window: str = "15m", include_payload: bool = False,
-               project: str = "", sources: list[str] | None = None) -> str:
-    """Read one correlated, time-ordered timeline of everything matching `selector` across all
-    sources, or only a `project`'s sources, or only the `sources` you name. `selector` is a
-    {label: value} conjunction, matched with strict AND, e.g. {"repo": "frontend"} or
-    {"service": "api-server", "endpoint": "/login"}. An event matches only if it carries every
-    named label with that value, so adding a label narrows and removing one widens. Use this to
-    investigate any entity on the fly. Set `include_payload` when the one-line summaries aren't enough and you need each
-    event's full lossless record: the return becomes JSON {timeline, events[]} where each event
-    carries `raw`. With a project key the read covers that project only, its findings
-    included."""
-    body = {"selector": selector, "window": window, "client": "mcp",
-            "include_payload": include_payload}
-    if project:
-        body["project"] = project
-    if sources:
-        body["sources"] = sources
-    async with _cx(30) as cx:
-        r = await cx.post(f"{TARESD}/read", json=body)
-    data = r.json()
-    if r.status_code >= 400:
-        return r.text
-    if include_payload:
-        return json.dumps({"timeline": data["payload"], "events": data["rows"]}, default=str)
-    return data["payload"]
-
-
-@mcp.tool()
-async def catalog_list() -> str:
-    """List available sources, triggers and projects."""
-    async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/catalog")
-    return r.text
-
-
-@mcp.tool()
-async def catalog_describe(handle: str) -> str:
-    """Describe one catalog entry in full: schema (event types + typed fields, inferred from
-    stored events), freshness, lineage, and sample records. Handles look like source:logs or
-    trigger:error_spike. Use this to discover label names before reading an unfamiliar source."""
-    async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/catalog/{handle}")
-    return r.text
-
-
-@mcp.tool()
 async def set_session_flow(flow: str = "challenger") -> str:
     """Mark this Claude Code session as running a named flow, e.g. "challenger" (a second model
     challenges your plan and every commit; Tares keeps the whole exchange and writes the session
@@ -354,86 +296,6 @@ async def set_session_flow(flow: str = "challenger") -> str:
     if flow:
         return f"noted: the Tares plugin will mark this session as a {flow} session"
     return "noted: the Tares plugin will clear this session's flow"
-
-
-# ── setup surface: an agent can wire up its own data sources ─────────────────
-
-@mcp.tool()
-async def list_connectors() -> str:
-    """List the connector types you can create a source with, each with its config fields, mode
-    (poll | push), and whether it supports discovery. Read this first to learn what you can ingest
-    and how to configure it."""
-    async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/connectors")
-    return r.text
-
-
-@writable()
-async def discover_source(connector: str, config: dict) -> str:
-    """Introspect an upstream and get a proposed source config — no commitment. Works for
-    connectors that can introspect: e.g. prometheus given {"url": "http://..."}, or github given
-    {"repo": "owner/name"}. The returned `proposed_config` can be passed straight to create_source.
-    (Use list_connectors to see which connectors support discovery.)"""
-    async with _cx(20) as cx:
-        r = await cx.post(f"{TARESD}/api/sources/discover",
-                          json={"connector": connector, "config": config})
-    return r.text
-
-
-@writable()
-async def discover_docker() -> str:
-    """Scan the local Docker environment and get a list of proposed sources (one per container's
-    logs, plus a detected Prometheus). Each item's `config` is ready to pass to create_source."""
-    async with _cx(20) as cx:
-        r = await cx.get(f"{TARESD}/api/discover/environment", params={"provider": "docker"})
-    return r.text
-
-
-@writable()
-async def test_source(name: str, connector: str, config: dict, poll: str = "5s") -> str:
-    """Dry-run a source config without creating it: poll connectors do one live poll and return a
-    sample; push connectors return their ingest endpoint. Use before create_source to check the
-    config works."""
-    async with _cx(20) as cx:
-        r = await cx.post(f"{TARESD}/api/sources/test",
-                          json={"name": name, "connector": connector, "poll": poll, "config": config})
-    return r.text
-
-
-@writable()
-async def create_source(name: str, connector: str, config: dict, poll: str = "5s",
-                        project: str = "") -> str:
-    """Create a data source so Tares starts ingesting it immediately (no restart). `config` is
-    the connector's config (see list_connectors / discover_source); push connectors ignore `poll`.
-    `project` is the project id the source joins (default: the default project); other projects
-    can use it too. Returns {ok, name} or an error detail. After creating, use list_sources to
-    watch it ingest and catalog_describe("source:<name>") to see its labels."""
-    body = {"name": name, "connector": connector, "poll": poll, "config": config}
-    if project:
-        body["project"] = project
-    async with _cx(15) as cx:
-        r = await cx.post(f"{TARESD}/api/sources", json=body)
-    return r.text
-
-
-@mcp.tool()
-async def list_sources() -> str:
-    """List every configured source with its live health (status, events ingested, last error).
-    Use it to confirm a source you created is actually ingesting."""
-    async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/sources")
-    return r.text
-
-
-@mcp.tool()
-async def source_fields(name: str, limit: int = 500) -> str:
-    """Profile a source's real fields from recent events: every candidate field with its coverage,
-    distinct count, and top values, plus which are already declared as labels/keys. Call this BEFORE
-    choosing labels for a source — a label's `field` MUST be one of these exact field names (never
-    invent one). The `labels` block echoes the source's current declared axes."""
-    async with _cx(15) as cx:
-        r = await cx.get(f"{TARESD}/api/sources/{name}/fields", params={"limit": limit})
-    return r.text
 
 
 # ── joining a project (TR-336): an outside agent works inside one project ────
@@ -482,28 +344,9 @@ async def list_projects() -> str:
 
 
 @mcp.tool()
-async def stats(by: str, window: str = "30m", where: dict | None = None, top: int = 20,
-                sources: list[str] | None = None, project: str = "") -> str:
-    """Counts per value of the label `by` over the project's sources, the last `window` against
-    the window before, largest change first. `where` {label: value} narrows the events counted,
-    `sources` narrows the sources. Use it to see what moved before reading one entity."""
-    body = {"by": by, "window": window, "top": top}
-    if where:
-        body["where"] = where
-    if sources:
-        body["sources"] = sources
-    async with _cx(30) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/stats", json=body)
-    return r.json()["stats"] if r.status_code == 200 else r.text
-
-
-@mcp.tool()
 async def project_timeline(limit: int = 20, project: str = "") -> str:
-    """What happened in the project, newest first: each firing with the runs it woke and their
-    findings, and the findings recorded without a firing (external agents' among them)."""
+    """What happened in the project, newest first: the hand-overs pushed through without every
+    area owner's sign-off."""
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:

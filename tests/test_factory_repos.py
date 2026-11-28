@@ -354,9 +354,6 @@ async def main():
                   "timestamp": "2026-10-12T10:01:00.000Z", "factory_station": "shop-build-m1-web",
                   "message": {"role": "assistant", "content": "Opening the PR for T2"}}]
         async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True},
-                                                    "project": shop})
             r = await cx.post("/ingest/claude_code",
                               content="\n".join(json.dumps(x) for x in lines) + "\n",
                               headers={"Content-Type": "application/x-ndjson"})

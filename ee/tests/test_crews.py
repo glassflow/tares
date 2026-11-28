@@ -97,7 +97,7 @@ def plugin():
         host = ship.machine_name()
         ck("without FACTORY_MACHINE it is the short host name", host and "." not in host
            and ship.stamp_station([{"type": "user"}])[0].get("factory_machine") == host, host)
-        from tares.connectors.claude_code import ClaudeCodeConnector as C
+        from tares.session_map import ClaudeCodeLines as C
         lab = C.label_context(C.__new__(C), {"sessionId": "s", "factory_machine": "m1"})
         ck("the transcript label machine comes from factory_machine", lab.get("machine") == "m1", lab)
         ck("machine is a declared label axis", any(p["name"] == "machine" for p in C.PROVIDES))
@@ -121,9 +121,6 @@ async def main():
 
     async with app.router.lifespan_context(app):
         async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
             keys, pid = {}, {}
             for who, mail in (("P", "pat@example.com"), ("Q", "quinn@example.com")):
                 r = await cx.post("/api/keys", json={

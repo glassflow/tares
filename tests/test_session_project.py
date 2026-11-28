@@ -241,9 +241,6 @@ async def tares(shipped):
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                headers={"Authorization": f"Bearer {TOKEN}"})
-        r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}})
-        ck("claude_code source", r.status_code in (200, 201), r.text)
         uid = (await cx.post("/api/projects", json={"template": "custom", "name": "Invoices",
                                                     "objects": []})).json()["id"]
         nd = "\n".join(json.dumps(o) for o in shipped) + "\n"
@@ -273,7 +270,9 @@ async def tares(shipped):
         ck("once the lines are complete the same session reads from the table, with the same text",
            r2.json().get("lines_from") == "table" and [x["text"] for x in r2.json()["lines"]] == texts,
            r2.json().get("lines_from"))
-        ck("the claude_code source is in the project", "claude_code" in store.project_sources(uid))
+        ck("the session is tied to the project, and no source row is added to it (TR-1811)",
+           SID in [x["session"] for x in store.project_sessions(uid)]
+           and not [o for o in store.list_project_objects(uid) if o["kind"] == "source"])
         print("== Tares: session state ==")
         ck("no state before the plugin reports one", ss[0]["state"] is None, ss[0])
         said = {"type": "assistant", "sessionId": SID, "timestamp": at(1, 0),

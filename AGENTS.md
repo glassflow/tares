@@ -6,9 +6,9 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 ## Layout
 
 - `tares/` the package: `daemon.py` (HTTP API + console), `cli.py` (`tares up`, `tares mcp`),
-  `store.py` (DuckDB), `connectors/`, `providers.py` and `models.py` (the model provider layer the
+  `store.py` (DuckDB), `providers.py` and `models.py` (the model provider layer the
   standup, milestone and report summaries call), `mcp*.py` (the MCP proxy),
-  `projects/` (projects and the Tares templates they start from).
+  `projects/` (a project's row: custom projects and the cell's default project).
 - `ui/` the console, a Vite + React app. The daemon serves `ui/dist` and the wheel bundles it.
 - `ee/` the enterprise code, the package `tares_ee`, under `ee/LICENSE`. It is loaded through the
   `tares.ee` entry point group and never imported by `tares/`.
@@ -33,7 +33,7 @@ A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `
 `tests/test_*.py` in neither file.
 
 ```bash
-uv venv && uv pip install -e ".[otlp-grpc]"
+uv venv && uv pip install -e .
 python tests/test_cli.py
 ```
 
@@ -94,7 +94,7 @@ from `ui/src/pages`, whose inline styles predate the kit.
   remove some, `npm run words-baseline` lowers the count in the same PR.
 - **Time** comes from `ui/src/lib/time.ts`: a UTC stamp (`formatStampUTC`) with "3h ago" in its
   tooltip (`formatDistance`), a day as `Nov 12, 2026` (`formatDayUTC`), a length in words
-  (`ageWords`, `spanWords`, `durationWords`, the same ladder as the server's `goal.py`). A grouped
+  (`ageWords`, `spanWords`, `durationWords`). A grouped
   number is `formatCount` from `ui/src/lib/number.ts`. The legacy pages keep their locale calls at
   the count in `ui/time-contract.baseline.json`, lowered with `npm run time-baseline`. Tests:
   `npm run test:time`.
@@ -136,7 +136,6 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARESD_URL` | where `tares-mcp` finds the daemon |
 | `TARES_AUTH_TOKEN` | turns auth on; also the token `tares-mcp` presents |
 | `TARES_KEYRING` | `on` lets `tares login` keep its key in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of `login.json`; off by default, because the plugin's MCP header helper and `ship.py` still read the file |
-| `TARES_CATALOG` | a catalog file to import on first boot (only while the catalog is empty) |
 | `ANTHROPIC_API_KEY` | model key for the cell's summaries (standup, milestones, report); a key saved in the console wins |
 | `ANTHROPIC_AUTH_TOKEN` | a bearer token instead of the key, for a gateway that wants `Authorization: Bearer`; beats the key when both are set |
 | `ANTHROPIC_BASE_URL` | an Anthropic-compatible gateway (LiteLLM, Portkey, a Bedrock or Vertex proxy) instead of api.anthropic.com; `TARES_ANTHROPIC_BASE` is the old name, still read |
@@ -147,16 +146,15 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_ARCHIVE_URL` | where the hourly job archives sessions idle for a week, and the one-time move writes older ones: `file:///path` or `s3://bucket/prefix/`; unset gives `<data dir>/archive/` on SQLite and nothing on Postgres |
 | `TARES_ARCHIVE_ENDPOINT`, `TARES_ARCHIVE_REGION`, `TARES_ARCHIVE_ACCESS_KEY_ID`, `TARES_ARCHIVE_SECRET_ACCESS_KEY` | the S3 endpoint, region and keys for the archive (needs the `archive-s3` extra); unset, boto3's own credential chain applies |
 | `TARES_MAX_DB_SIZE` | storage limit `/api/usage` and `/health` measure against; unset = the volume the database sits on |
-| `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507) and polls pause; default 95 |
+| `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507); default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
 | `TARES_EDITION` | the cell's edition on its first start: factory, sre or platform; after that the value saved in the cell wins and Settings, Edition changes it |
-| `TARES_SEED_PROJECT` | template of the project to seed on a brand-new cell, one with no projects yet; otherwise skipped (`TARES_SEED_USECASE` still read) |
+| `TARES_SEED_PROJECT` | `custom` seeds an empty project on a brand-new cell, one with no projects yet; otherwise skipped (`TARES_SEED_USECASE` still read) |
 | `TARES_WEBHOOK_ALLOW_PRIVATE` | let an integration's URL point at an internal address (loopback, private, link-local); off by default |
 | `TARES_TRACING_ENABLED` | station telemetry on/off: where the crew stations' Claude Code sends its OTLP logs, traces and metrics (the monitoring choice saved on the cell wins over it) |
 | `TARES_TRACING_PROVIDER`, `TARES_TRACING_ENDPOINT` | the station telemetry backend: `rius` (endpoint preset) or `otlp` (any OTLP/HTTP endpoint) |
 | `TARES_TRACING_API_KEY`, `TARES_TRACING_HEADERS` | bearer key, or `k=v,k2=v2` headers, the stations send to that backend |
-| `TARES_PUBLIC_URL` | the address people reach the cell at, for the ingest URLs the guided setup shows; default the request's own |
-| `TARES_MCP_URL` | the MCP address the guided setup gives an outside agent; default `TARES_PUBLIC_URL` plus `/mcp` |
+| `TARES_PUBLIC_URL` | the address people reach the cell at, for a GitHub App's webhook URL and the links in Slack; default the request's own |
 | `TARES_FACTORY_MCP_URL` | the crew's shared MCP endpoint, set by `tares factory` for stations and the spec session; the plugin connects there (default: local Tares gives 127.0.0.1:8788/mcp, a remote one its own `/mcp`) |
 | `TARES_FACTORY_CRED_FILE` | path of the crew's token file, read by the plugin's MCP header helper (`claude-plugin/scripts/mcp_headers.py`); same file as `TARES_FACTORY_TOKEN_FILE` |
 | `TARES_METRICS_TOKEN` | when set, `/metrics` wants `Authorization: Bearer <token>` and answers 401 without it; unset keeps it public (the cell's auth token is not accepted there) |

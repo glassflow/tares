@@ -1,9 +1,6 @@
-"""The GitHub event contract: what a GitHub event looks like on a Tares timeline, whichever way it
-arrived (the App's webhooks, `github_app`, or a personal token's polling, `github`).
-
-Both connectors build events through these functions, so a pull request merged by webhook and the
-same merge seen by polling carry the same event type, key, labels and text. A trigger written
-against a token source keeps working when the person switches to the App.
+"""The GitHub event contract: what a GitHub App's webhook delivery looks like on a Tares timeline
+(github_webhook.py builds its events through these functions; the token polling connector went with
+the source catalog, TR-1811).
 
 * event_type: the GitHub event name (`pull_request`, `push`, `issues`, `issue_comment`,
   `pull_request_review`, `pull_request_review_comment`, `release`, `workflow_run`); polling adds
@@ -98,7 +95,7 @@ def pr_text(f: dict) -> str:
 
 def build(event: str, payload: dict) -> dict | None:
     """One webhook delivery -> `{event_type, key, labels, text, event_time}`; None for an event that
-    is not stored (lifecycle events are handled by the connector before this)."""
+    is not stored (lifecycle events are handled by github_webhook before this)."""
     p = payload or {}
     repo = ((p.get("repository") or {}).get("full_name")) or ""
     action = p.get("action") or ""

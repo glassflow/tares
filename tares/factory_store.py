@@ -1152,6 +1152,13 @@ class FactoryStore:
                 t.c.integration == integration, t.c.credential == credential)).first()
         return None if r is None else {"key": r[0], "source": r[1]}
 
+    def integration_key_sources(self, integration: str) -> set[str]:
+        """The names the events of `integration`'s webhook keys go under."""
+        t = integration_keys_table
+        with self.sessions_db.read() as conn:
+            return {r for r in conn.execute(select(t.c.source).where(
+                t.c.integration == integration)).scalars() if r}
+
     def factory_ref_elsewhere(self, uid: str, repo: str, ref: str) -> bool:
         """Another project has a ticket called `ref` in the work whose PRs live in `repo`: a
         branch named after the ref could be either's, so it is not linked by name."""

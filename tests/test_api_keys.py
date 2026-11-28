@@ -1,5 +1,5 @@
 """Scoped API keys — create/list/revoke via /api/keys, and scope enforcement across the surface:
-read (reads, catalog reads), ingest (/ingest, /v1/*, remember), admin (CRUD, credentials,
+read (reads), ingest (/ingest/claude_code and the crew's own writes), admin (CRUD, credentials,
 keys). Env tokens act as implicit root keys. Revoking a key stops it at once.
 """
 import asyncio, os, subprocess, sys
@@ -13,19 +13,6 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-SEED = "/tmp/keys_catalog.yaml"
-with open(SEED, "w") as fh:
-    fh.write("""sources:
-  - name: evt
-    connector: webhook
-    poll: 5s
-    config: {}
-triggers:
-  - name: t_evt
-    sources: [evt]
-    key_field: key_value
-    condition: {aggregate: max, field: value, predicate: "> 1.0", window: 1m}
-""")
 DB, PORT = "/tmp/keys.duckdb", "8806"
 AUTH = "root-token"
 
@@ -48,8 +35,7 @@ def H(tok):
 
 async def main():
     remove_db(DB)
-    env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
-           "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": AUTH}
+    env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": PORT, "TARES_AUTH_TOKEN": AUTH}
     proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     B = f"http://127.0.0.1:{PORT}"
@@ -74,44 +60,28 @@ async def main():
                (await cx.get(f"{B}/api/keys", headers=H(read_key))).status_code == 403)
 
             # ── read scope ──
-            ck("read key: /read ok",
-               (await cx.post(f"{B}/read", json={"selector": {"key_value": "k"}},
-                              headers=H(read_key))).status_code == 200)
-            ck("read key: catalog ok", (await cx.get(f"{B}/catalog", headers=H(read_key))).status_code == 200)
-            ck("read key: sources list ok", (await cx.get(f"{B}/api/sources", headers=H(read_key))).status_code == 200)
-            ck("read key: create source denied -> 403",
-               (await cx.post(f"{B}/api/sources", json={"name": "n", "connector": "webhook", "config": {}},
-                              headers=H(read_key))).status_code == 403)
+            ck("read key: projects ok", (await cx.get(f"{B}/api/projects", headers=H(read_key))).status_code == 200)
             # every write outside a short read list is admin (the read scope used to reach these)
             for m, path, body in (("POST", "/api/projects", {"template": "custom", "name": "x", "objects": []}),
                                   ("DELETE", "/api/projects/uc_nope", None),
-                                  ("POST", "/api/mcp-servers", {"name": "m", "url": "http://x"}),
-                                  ("POST", "/api/integrations/github", {"name": "g", "token": "t"}),
-                                  ("PUT", "/api/ask/sessions/s1", {}),
-                                  ("POST", "/api/projects/templates/custom/detect", {})):
+                                  ("POST", "/api/integrations/github", {"name": "g", "token": "t"})):
                 r = await cx.request(m, f"{B}{path}", json=body, headers=H(read_key))
                 ck(f"read key: {m} {path} -> 403", r.status_code == 403, f"{r.status_code} {r.text[:120]}")
             ck("read key: cannot ingest -> 403 (authenticated, lacks ingest scope)",
-               (await cx.post(f"{B}/ingest/evt", json={"m": 1}, headers=H(read_key))).status_code == 403)
-            ck("read key: /read narrowed to sources ok",
-               (await cx.post(f"{B}/read", json={"selector": {"key_value": "k"}, "sources": ["evt"]},
-                              headers=H(read_key))).status_code == 200)
+               (await cx.post(f"{B}/ingest/claude_code", json=[], headers=H(read_key))).status_code == 403)
 
             # ── ingest scope ──
             ck("ingest key: ingest ok",
-               (await cx.post(f"{B}/ingest/evt", json={"m": 1}, headers=H(ing_key))).status_code == 202)
-            ck("ingest key: remember ok",
-               (await cx.post(f"{B}/remember", json={"key": "k", "content": "obs"}, headers=H(ing_key))).status_code == 202)
-            ck("ingest key: /read denied -> 403",
-               (await cx.post(f"{B}/read", json={"selector": {"key_value": "k"}},
-                              headers=H(ing_key))).status_code == 403)
+               (await cx.post(f"{B}/ingest/claude_code", json=[], headers=H(ing_key))).status_code == 202)
+            ck("ingest key: a read denied -> 403",
+               (await cx.get(f"{B}/api/projects", headers=H(ing_key))).status_code == 403)
             ck("read+ingest key: both work",
-               (await cx.post(f"{B}/ingest/evt", json={"m": 2}, headers=H(both_key))).status_code == 202
-               and (await cx.get(f"{B}/catalog", headers=H(both_key))).status_code == 200)
+               (await cx.post(f"{B}/ingest/claude_code", json=[], headers=H(both_key))).status_code == 202
+               and (await cx.get(f"{B}/api/projects", headers=H(both_key))).status_code == 200)
 
             # ── env auth token is still root (admin) ──
             ck("env auth token: admin ok", (await cx.get(f"{B}/api/keys", headers=H(AUTH))).status_code == 200)
-            ck("unknown token -> 401", (await cx.get(f"{B}/catalog", headers=H("nope"))).status_code == 401)
+            ck("unknown token -> 401", (await cx.get(f"{B}/api/projects", headers=H("nope"))).status_code == 401)
 
             # ── whoami ──
             w = (await cx.get(f"{B}/api/whoami", headers=H(read_key))).json()
@@ -121,12 +91,12 @@ async def main():
             r = await cx.post(f"{B}/api/keys", json={"name": "revoke-me", "scopes": ["read"]}, headers=H(AUTH))
             rk, rk_id = r.json()["secret"], r.json()["id"]
             ck("revoke -> 200", (await cx.delete(f"{B}/api/keys/{rk_id}", headers=H(AUTH))).status_code == 200)
-            ck("revoked key -> 401", (await cx.get(f"{B}/catalog", headers=H(rk))).status_code == 401)
+            ck("revoked key -> 401", (await cx.get(f"{B}/api/projects", headers=H(rk))).status_code == 401)
             ck("revoke twice -> 404", (await cx.delete(f"{B}/api/keys/{rk_id}", headers=H(AUTH))).status_code == 404)
             ck("revoke ingest key of producer works",
                (await cx.delete(f"{B}/api/keys/{ing_id}", headers=H(AUTH))).status_code == 200)
             ck("revoked producer cannot ingest -> 401",
-               (await cx.post(f"{B}/ingest/evt", json={"m": 4}, headers=H(ing_key))).status_code == 401)
+               (await cx.post(f"{B}/ingest/claude_code", json=[], headers=H(ing_key))).status_code == 401)
     finally:
         proc.terminate()
         proc.wait(timeout=10)

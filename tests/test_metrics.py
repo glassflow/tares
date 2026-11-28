@@ -1,6 +1,7 @@
 """The daemon's /metrics endpoint (tares/metrics.py, TR-308): public, Prometheus text format,
-and every hook counted where it fires: ingest, polls, source state, model usage, storage gauges,
-event loop lag (agent runs and trigger evaluations went in TR-1810).
+and every hook counted where it fires: ingest, model usage, storage gauges, event loop lag (agent
+runs and trigger evaluations went in TR-1810, polls and source state with the source catalog in
+TR-1811).
 
 Run: .venv/bin/python tests/test_metrics.py   (in-process daemon, no external services)
 """
@@ -15,7 +16,6 @@ from _env import remove_db
 DB = "/tmp/metrics_test.duckdb"
 remove_db(DB)
 os.environ["TARES_DB"] = DB
-os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = "metrics-test-token"
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "TARES_CATALOG"):
@@ -61,24 +61,26 @@ async def main():
             ck("prometheus text format", r.headers["content-type"].startswith("text/plain") and "# HELP tares_" in r.text)
             ck("build info", sample(r.text, "tares_info") == 1.0)
             ck("storage gauges present", sample(r.text, "tares_db_bytes") is not None and sample(r.text, "tares_ingest_paused") == 0.0)
-            r2 = await cx.get("/api/sources")
+            r2 = await cx.get("/api/projects")
             ck("the API itself still needs the token", r2.status_code == 401, str(r2.status_code))
 
-            print("== ingest and sources ==")
-            store.upsert_catalog_source("evt", "webhook", "webhook", "5s",
-                                        {"labels": [{"name": "service", "field": "service", "primary": True}]},
-                                        ingest_key="ik_evt")
-            store.upsert_catalog_trigger("errors", ["evt"], {"field": "service", "aggregate": "count", "predicate": ">= 2", "window": "5m"}, {}, "5m")
-            app.state.runtime.reload_catalog()
-            for i in range(3):
-                r = await cx.post("/ingest/ik_evt", json={"service": "checkout", "message": f"e{i}"},
-                                  headers={"Authorization": "Bearer metrics-test-token"})
-                assert r.status_code == 202, r.text
+            print("== ingest ==")
+            import json as _json
+            body = "\n".join(_json.dumps({
+                "sessionId": "m1", "type": "assistant", "cwd": "/w", "timestamp": f"2026-11-27T10:00:0{i}Z",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": f"e{i}"}]}})
+                for i in range(3))
+            r = await cx.post("/ingest/claude_code", content=body,
+                              headers={"Authorization": "Bearer metrics-test-token",
+                                       "content-type": "application/x-ndjson"})
+            assert r.status_code == 202, r.text
             body = (await cx.get("/metrics")).text
-            ck("events counted per source", sample(body, "tares_events_ingested_total", source="evt") == 3.0, str(sample(body, "tares_events_ingested_total", source="evt")))
-            ck("a push source reads as push", sample(body, "tares_source_state", source="evt", state="push") == 1.0 and sample(body, "tares_source_state", source="evt", state="error") == 0.0)
+            ck("events counted per source", sample(body, "tares_events_ingested_total", source="claude_code") == 3.0,
+               str(sample(body, "tares_events_ingested_total", source="claude_code")))
+            ck("no poll or source state series (TR-1811)", "tares_polls_total" not in body
+               and "tares_source_state" not in body)
             ck("no trigger or agent counters (TR-1810)", "tares_trigger_" not in body and "tares_agent_run" not in body)
-            ck("stored events gauge", (sample(body, "tares_events_stored") or 0) >= 3)
+            ck("stored events gauge", sample(body, "tares_events_stored") is not None)
 
             # a scrape reads only the disk and the DuckDB file, never the state database (Postgres
             # on a cloud cell): an idle cell must not open a connection on every scrape
@@ -95,23 +97,6 @@ async def main():
                 store.sc = real_sc
             ck("a scrape leaves the state database alone", r.status_code == 200 and not state_reads,
                str(state_reads))
-
-            print("== a poll source that fails ==")
-            store.upsert_catalog_source("bad", "http_poll", "http_poll", "1s",
-                                        {"url": "http://127.0.0.1:1/nothing", "labels": [{"name": "service", "field": "service", "primary": True}]})
-            app.state.runtime.reload_catalog()
-            for _ in range(60):
-                await asyncio.sleep(0.1)
-                body = (await cx.get("/metrics")).text
-                if (sample(body, "tares_polls_total", source="bad", outcome="error") or 0) >= 1:
-                    break
-            ck("poll errors counted and the source reads as error",
-               (sample(body, "tares_polls_total", source="bad", outcome="error") or 0) >= 1
-               and sample(body, "tares_source_state", source="bad", state="error") == 1.0, body[:0])
-            store.delete_catalog_source("bad") if hasattr(store, "delete_catalog_source") else None
-            app.state.runtime.reload_catalog()
-            body = (await cx.get("/metrics")).text
-            ck("a removed source drops out of the state gauge", sample(body, "tares_source_state", source="bad", state="error") is None)
 
             print("== model usage ==")
             store.record_model_usage("agent", "sre", "run_1", "gpt-4.1", 2, 1000, 100, cost_usd=0.0028, provider="openai")

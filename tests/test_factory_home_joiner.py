@@ -189,9 +189,6 @@ async def main():
                                      list(scopes), person_id=person)
                 return {"Authorization": f"Bearer {token}"}
 
-            r = await cx.post("/api/sources", headers=root, json={
-                "name": "claude_code", "connector": "claude_code", "poll": "10s", "config": {"push": True}})
-            assert r.status_code < 300, r.text
 
             print("== a cell of one person ==")
             h = await home()

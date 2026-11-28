@@ -88,9 +88,6 @@ async def main():
 
     async with app.router.lifespan_context(app):
         async with mk() as cx:
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
             keys, pid = {}, {}
             for who in ("P", "Q", "R"):
                 r = await cx.post("/api/keys", json={

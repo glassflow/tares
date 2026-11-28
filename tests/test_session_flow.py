@@ -2,7 +2,6 @@
 session_flow line (and a `flow` stamp on any line) into a `flow` label triggers and views can use.
 TR-196: challenge_plan / challenge_commit / challenge_waived lines carry verdict, sha and counts as labels."""
 import asyncio
-from types import SimpleNamespace
 
 P = F = 0
 def ck(l, c, d=""):
@@ -11,11 +10,10 @@ def ck(l, c, d=""):
 
 
 def main():
-    from tares.connectors.claude_code import ClaudeCodeConnector
+    from tares.session_map import ClaudeCodeLines
     from tares import mcp_server
 
-    cfg = SimpleNamespace(name="claude_code", type="claude_code", config={})
-    c = ClaudeCodeConnector(cfg, store=None)
+    c = ClaudeCodeLines(None, source="claude_code", source_type="claude_code")
     flow_line = {"sessionId": "s1", "type": "session_flow", "flow": "challenger",
                  "cwd": "/tmp/proj", "timestamp": "2026-08-26T10:00:00Z"}
     envs = c.map_payload([flow_line])
@@ -38,7 +36,7 @@ def main():
     ck("no flow, no label", "flow" not in e.labels, str(e.labels))
     cleared = c.map_payload({"sessionId": "s1", "type": "session_flow", "flow": ""})[0]
     ck("cleared flow renders", cleared.text == "session flow: cleared", cleared.text)
-    ck("flow is a declared axis", any(p["name"] == "flow" for p in ClaudeCodeConnector.PROVIDES))
+    ck("flow is a declared axis", any(p["name"] == "flow" for p in ClaudeCodeLines.PROVIDES))
 
     commit = {"sessionId": "s1", "type": "challenge_commit", "flow": "challenger", "cwd": "/tmp/proj",
               "timestamp": "2026-08-26T10:05:00Z",
@@ -73,7 +71,7 @@ def main():
     ck("challenge_waived text", e.text == "Challenger finding waived\n[P2] Missing test", e.text)
 
     async def _no_cell():   # no daemon here: list every tool without asking one
-        return ("", True)
+        return ""
     mcp_server._surface = _no_cell
     tools = asyncio.run(mcp_server.mcp.list_tools())
     ck("set_session_flow is an MCP tool", any(t.name == "set_session_flow" for t in tools))

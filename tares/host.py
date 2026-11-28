@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 # the helpers make_app() passes in; each is a method of Host with the same name
 HELPERS = (
     "err", "caller", "current_person", "is_admin", "is_system", "project_key", "by",
-    "can_see", "hidden_ids", "read_exclude", "hidden_sources", "project_or_404", "resolve_project",
+    "can_see", "hidden_ids", "read_exclude", "project_or_404", "resolve_project",
     "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out", "area_owner",
     "hidden_project", "projects", "licence_state", "licence_required", "auth_off",
 )
@@ -34,15 +34,14 @@ HELPERS = (
 class Host:
     """What a screen or a module needs from the daemon. Built once, by `make_app()`.
 
-    `store` is the Store, `runtime` the Runtime. The rest are helper callables passed by keyword
+    `store` is the Store. The rest are helper callables passed by keyword
     (see HELPERS); a name that is not a helper raises TypeError, so a typo cannot go unnoticed."""
 
-    def __init__(self, store: Any, runtime: Any, **helpers: Callable):
+    def __init__(self, store: Any, **helpers: Callable):
         unknown = sorted(set(helpers) - set(HELPERS))
         if unknown:
             raise TypeError(f"Host has no helper named {', '.join(unknown)}")
         self.store = store
-        self.runtime = runtime
         self._helpers = helpers
 
     def _call(self, name: str, *args, **kw):
@@ -110,10 +109,6 @@ class Host:
         when no project is hidden from them."""
         return self._call("read_exclude")
 
-    def hidden_sources(self) -> set[str]:
-        """The names of the sources that belong only to projects hidden from the caller."""
-        return self._call("hidden_sources")
-
     def hidden_project(self, p: dict) -> dict:
         """A private project as someone not on it sees it: {id, name, scope, hidden, lead} and
         nothing of what is in it."""
@@ -134,7 +129,7 @@ class Host:
         return self._call("resolve_project", ref)
 
     def cc_source(self) -> str:
-        """The name of the cell's claude_code source (`claude_code` when it has none)."""
+        """The source every session line is stored under: `claude_code` (session_map.SOURCE)."""
         return self._call("cc_source")
 
     def global_ids(self, create: bool = False) -> dict[str, str]:

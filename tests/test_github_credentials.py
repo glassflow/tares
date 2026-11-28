@@ -3,17 +3,15 @@
 Run: .venv/bin/python tests/test_github_credentials.py   (no network: GitHub is faked in-process)
 
 Covers: CRUD with the token never returned and blank-to-keep, the test endpoint, repo listing
-with pagination and query filter, a `github` source resolving `credential:` at poll time (and
-picking up a rotation), discover through a credential, MCP server headers stored/merged, an MCP
-`credential:github/<name>` reference resolved to a bearer header, and YAML export/import of both.
+with pagination and query filter, the credential's token resolved where it is used (and picking up
+a rotation), and the delete. Nothing in the cell names a credential since the source catalog went
+(TR-1811): its row lists no sources and no MCP servers.
 """
 import asyncio
-import json
 import os
 from _env import remove_db
 
 os.environ["TARES_DB"] = "/tmp/tares-ghcred-test.duckdb"
-os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
 
 import httpx
 
@@ -127,102 +125,34 @@ async def main():
             check("query filters", [x["full_name"] for x in r.json()["repos"]] == ["acme/last-one"], r.text)
             check("second listing served from cache", STATE["repos_pages"] == pages_before)
 
-            print("== github source through a credential ==")
-            r = await cx.post("/api/sources", json={
-                "connector": "github", "name": "app_commits", "poll": "1h",
-                "config": {"repo": "acme/app", "credential": "gh",
-                           "labels": [{"name": "repo", "field": "repo", "primary": True}]}})
-            check("source created with credential (no token)", r.status_code in (200, 201), r.text)
-            r = await cx.get("/api/sources/app_commits")
-            cfg = r.json().get("config") or r.json().get("source", {}).get("config") or {}
-            check("source config keeps the credential name, no token",
-                  cfg.get("credential") == "gh" and not cfg.get("token"), json.dumps(cfg))
-            r = await cx.get("/api/integrations/github")
-            check("credential usage lists the source",
-                  r.json()["credentials"][0]["sources"] == ["app_commits"], r.text)
-
-            # poll once through the runtime object; the token must come from the credential
-            from tares.connectors import REGISTRY
-            from tares.config import _source_from_dict
+            print("== the token where it is used ==")
+            from tares.github_credentials import get_token
             store = app.state.store
-            src_cfg = _source_from_dict({"name": "app_commits", "connector": "github", "poll": "1h",
-                                         "config": cfg})
-            conn = REGISTRY["github"](src_cfg, store)
-            STATE["calls"].clear()
-            envs = await conn.poll()
-            # the source's own poll, started when it was created, may have taken the two commits
-            # first (requests run in threads, so it gets the loop meanwhile); either way they came
-            # in once, through the credential's token
-            for _ in range(100):                # the source's own poll may still be storing them
-                stored = [r for r in store.event_stats() if r["source"] == "app_commits"]
-                n_stored = stored[0]["events"] if stored else 0
-                if envs or n_stored >= 2:
-                    break
-                await asyncio.sleep(0.1)
-            check("poll ingests commits with the credential token",
-                  (len(envs) == 2 or (not envs and n_stored == 2)) and all(t == "tok-1" for _, t in STATE["calls"]),
-                  f"{STATE['calls']} polled={len(envs)} stored={stored}")
-            check("api_url from the credential (GHE) is used",
-                  all(p.startswith("/repos/acme/app") for p, _ in STATE["calls"]), str(STATE["calls"]))
+            check("the credential's token resolves", await get_token(store, "gh", "acme/app") == "tok-1")
+            r = await cx.get("/api/integrations/github")
+            row = r.json()["credentials"][0]
+            check("its row lists no sources and no MCP servers",
+                  row["sources"] == [] and row["mcp_servers"] == [], r.text[:200])
 
             print("== rotation ==")
             r = await cx.put("/api/integrations/github/gh", json={"name": "gh", "token": "tok-2"})
             check("rotate -> ok", r.status_code == 200, r.text)
-            STATE["calls"].clear()
-            conn._etags = {}    # a 304 would hide which token was sent
-            await conn.poll()
-            check("next poll uses the rotated token",
-                  STATE["calls"] and all(t == "tok-2" for _, t in STATE["calls"]), str(STATE["calls"]))
+            check("the rotated token resolves", await get_token(store, "gh", "acme/app") == "tok-2")
             r = await cx.put("/api/integrations/github/gh", json={"name": "gh", "token": ""})
             r2 = await cx.post("/api/integrations/github/gh/test")
-            check("blank token on update keeps the stored one", r2.json().get("ok"), r2.text)
-
-            print("== discover through a credential ==")
-            r = await cx.post("/api/sources/discover", json={"connector": "github",
-                                                             "config": {"repo": "acme/app", "credential": "gh"}})
-            check("discover ok, proposal keeps credential and no token",
-                  r.status_code == 200 and r.json()["proposed_config"].get("credential") == "gh"
-                  and "token" not in r.json()["proposed_config"], r.text[:300])
-            r = await cx.post("/api/sources/discover", json={"connector": "github",
-                                                             "config": {"repo": "acme/app", "credential": "nope"}})
-            check("discover with unknown credential -> 404", r.status_code == 404, r.text)
-
-            print("== an MCP server row with a credential reference (catalog only since TR-1810) ==")
-            store.upsert_mcp_server("github", "https://mcp.github.test/mcp", "",
-                                    "credential:github/gh", {"X-MCP-Toolsets": "repos"})
-            r = await cx.get("/api/integrations/github")
-            check("credential usage lists the MCP server",
-                  r.json()["credentials"][0]["mcp_servers"] == ["github"], r.text)
-
-            print("== catalog export / import ==")
-            r = await cx.get("/api/catalog/export")
-            text = r.text
-            check("export carries the credential ref (not a secret) and headers",
-                  "credential:github/gh" in text and "X-MCP-Toolsets" in text, text[-600:])
-            check("export never carries the token", "tok-2" not in text)
-            import yaml
-            doc = yaml.safe_load(text)
-            src = [s for s in doc.get("sources", []) if s["name"] == "app_commits"][0]
-            check("exported source keeps credential name",
-                  src["config"].get("credential") == "gh" and "token" not in src["config"], str(src))
-            from tares.config import import_yaml_to_db
-            store.delete_mcp_server("github")
-            import_yaml_to_db(store, text)
-            m = store.get_mcp_server("github")
-            check("re-import restores headers and credential ref",
-                  m and m["headers"] == {"X-MCP-Toolsets": "repos"}
-                  and m["auth_value"] == "credential:github/gh", str(m))
+            check("blank token on update keeps the stored one", r2.json().get("ok")
+                  and await get_token(store, "gh", "acme/app") == "tok-2", r2.text)
 
             print("== delete ==")
             r = await cx.delete("/api/integrations/github/gh")
-            check("delete reports what referenced it",
-                  r.status_code == 200 and r.json()["sources"] == ["app_commits"]
-                  and r.json()["mcp_servers"] == ["github"], r.text)
+            check("delete reports nothing that referenced it",
+                  r.status_code == 200 and r.json()["sources"] == [] and r.json()["mcp_servers"] == [],
+                  r.text)
             try:
-                await conn.poll()
-                check("poll after delete raises a named error", False)
+                await get_token(store, "gh", "acme/app")
+                check("the token after delete raises a named error", False)
             except ValueError as e:
-                check("poll after delete raises a named error", "gh" in str(e), str(e))
+                check("the token after delete raises a named error", "gh" in str(e), str(e))
 
     print(f"\n{PASS} passed, {FAIL} failed")
     raise SystemExit(1 if FAIL else 0)

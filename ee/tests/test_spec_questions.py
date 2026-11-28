@@ -261,10 +261,6 @@ async def main():
         await ticket("ashish", ov, "web ov", "acme/web")
         t0 = datetime.now(timezone.utc) - timedelta(days=10)
         hours = lambda n: t0 + timedelta(hours=n)
-        for i, h in enumerate((10, 20, 30)):   # three threads: runs started at +10h, +20h, +30h
-            rid = f"ov-run-{i}"
-            store.start_agent_run(rid, "watcher", "t", "", "k", "h", project=ov)
-            store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [hours(h), rid])
         repos = [{"path": os.path.join(_TMP, "r"), "name": "acme/api"}]
         # +5h older than every thread, +15h and +25h between them, +35h newer than all
         for h, who, why_ in ((5, "ashish", "first, old"), (15, "lee", "second, by lee"),
@@ -280,27 +276,11 @@ async def main():
            and store.get_handover(ov)["override"]["reason"] == "fourth, newest")
         r = await call("ashish", "GET", f"/api/projects/{ov}/timeline")
         ev = r.json().get("events") or []
-        ck("one page with room for all threads carries all four events", [e["reason"] for e in ev]
+        ck("its one page carries all four events", [e["reason"] for e in ev]
            == ["first, old", "second, by lee", "third", "fourth, newest"]
            and "lee" in (ev[1]["by"] or "") and "ashish" in (ev[0]["by"] or ""), r.text)
-        pages, before, seen_ev = [], None, []
-        for _ in range(8):
-            params = {"limit": 1}
-            if before:
-                params["before"] = before
-            r = await call("ashish", "GET", f"/api/projects/{ov}/timeline", **params)
-            body = r.json()
-            pages.append(([t["id"] for t in body["threads"]], [e["reason"] for e in body.get("events") or []]))
-            seen_ev += [e["reason"] for e in body.get("events") or []]
-            before = body["next_before"]
-            if not before:
-                break
-        ck("paged one thread at a time: three threads then an empty last page", len(pages) == 4
-           and [len(t) for t, _ in pages] == [1, 1, 1, 0], str(pages))
-        ck("each event sits on the page whose window holds it", [e for _, e in pages] ==
-           [["fourth, newest"], ["third"], ["second, by lee"], ["first, old"]], str(pages))
-        ck("none repeats and none is lost across the pages", sorted(seen_ev) == sorted(
-            ["first, old", "second, by lee", "third", "fourth, newest"]), str(seen_ev))
+        ck("the timeline has no thread (runs and firings went, TR-1810, TR-1811) and nothing older",
+           r.json().get("threads") == [] and r.json().get("next_before") is None, r.text[:200])
 
         print("== a private project's questions stay out of a person's my_work who cannot see it ==")
         store.add_spec_question(priv, pid["kiran"], "acme/web", "private question", pid["ashish"],

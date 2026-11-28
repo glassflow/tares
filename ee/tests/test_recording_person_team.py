@@ -1,13 +1,13 @@
 # Tares enterprise licence, see ee/LICENSE
 """A recording carries the person of the key that shipped it (TR-620), with two people on the cell:
-the cell sets `tares_person=<person id>` on every claude_code event pushed to /ingest, from the
-credential and never from what the sender wrote, so a line that names the other person still
+the cell sets `tares_person=<person id>` on every claude_code line pushed to /ingest/claude_code, from
+the credential and never from what the sender wrote, so a line that names the other person still
 carries the key's own. The root token (no person) leaves no label. Runs on a licensed daemon; the
 auth-off half is tests/test_recording_person.py.
 
 Run: .venv/bin/python ee/tests/test_recording_person_team.py
 """
-import asyncio, hashlib, hmac, json, os, subprocess, sys
+import asyncio, json, os, subprocess, sys
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,8 +20,6 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 AUTH = "root-token"
-SECRET = "whsec"
-WEBHOOK_LABELS = [{"name": "app", "field": "app", "primary": True}]
 
 
 async def _wait(url):
@@ -63,20 +61,22 @@ async def push(cx, B, tok, body, **headers):
 
 
 async def persons(cx, B, tok, session, text):
-    """The tares_person label of each stored event with `text` in `session`, read back through
-    /read: the id, or None when the event has no such label."""
-    rd = (await cx.post(f"{B}/read", headers=H(tok) if tok else {}, json={
-        "selector": {"session": session}, "window": "3650d", "include_payload": True})).json()
-    return [(r.get("labels") or {}).get("tares_person") for r in rd.get("rows", [])
+    """The tares_person label of each stored line with `text` in `session`, read back through the
+    project's session route (the session is tied to the project `Rec` by its first line): the id, or
+    None when the line has no such label."""
+    hd = H(tok) if tok else {}
+    uid = next(p["id"] for p in (await cx.get(f"{B}/api/projects", headers=hd)).json()["projects"]
+               if p["name"] == "Rec")
+    rd = (await cx.get(f"{B}/api/projects/{uid}/sessions/{session}", headers=hd,
+                       params={"limit": 1000})).json()
+    return [(r.get("labels") or {}).get("tares_person") for r in rd.get("lines", [])
             if (r.get("text") or "") == text]
 
 
-async def webhook_labels(cx, B, source):
-    """The label dicts of every event stored for a webhook source, read back through /read."""
-    rd = (await cx.post(f"{B}/read", headers=H(AUTH), json={
-        "selector": {"app": "a"}, "sources": [source], "window": "3650d",
-        "include_payload": True})).json()
-    return [r.get("labels") or {} for r in rd.get("rows", [])]
+def tie(sid):
+    """The line that ties session `sid` to the project `Rec`."""
+    return json.dumps({"type": "session_project", "sessionId": sid, "cwd": "/tmp/proj",
+                       "timestamp": "2026-10-21T09:59:00Z", "tares_project": "Rec"}) + "\n"
 
 
 async def auth_on():
@@ -87,8 +87,6 @@ async def auth_on():
         if not await _wait(f"{B}/health"):
             ck("daemon up (auth on)", False); return
         async with httpx.AsyncClient() as cx:
-            await cx.post(f"{B}/api/sources", headers=H(AUTH),
-                          json={"name": "claude_code", "connector": "claude_code", "config": {}})
             keys, pid = {}, {}
             for who, mail in (("P", "pat@example.com"), ("Q", "quinn@example.com")):
                 r = await cx.post(f"{B}/api/keys", headers=H(AUTH), json={
@@ -96,6 +94,11 @@ async def auth_on():
                     "person": {"email": mail, "name": who}})
                 keys[who], pid[who] = r.json()["secret"], r.json()["person"]["id"]
             ck("two people with bound keys", pid["P"] != pid["Q"] and all(keys.values()), str(pid))
+            r = await cx.post(f"{B}/api/projects", headers=H(AUTH), json={"template": "custom", "name": "Rec"})
+            ck("a project to tie the sessions to", r.status_code == 201, r.text)
+            for sid in ("sp", "sq", "sr"):
+                r = await push(cx, B, AUTH, tie(sid))
+                ck(f"session {sid} is tied to it", r.status_code == 202, r.text)
 
             # a line shipped with P's key carries P, whatever the line says
             r = await push(cx, B, keys["P"], line("sp", "from-p-plain") + "\n")
@@ -126,33 +129,6 @@ async def auth_on():
             lr = await persons(cx, B, AUTH, "sr", "from-root-spoof")
             ck("root token, line says Q: still no label", lr == [None], str(lr))
 
-            # only claude_code records people: other push sources get no label, whoever pushes
-            await cx.post(f"{B}/api/sources", headers=H(AUTH), json={
-                "name": "plain", "connector": "webhook", "config": {"text_template": "{note}", "labels": WEBHOOK_LABELS}})
-            await cx.post(f"{B}/api/sources", headers=H(AUTH), json={
-                "name": "signed", "connector": "webhook", "config": {
-                    "text_template": "{note}", "labels": WEBHOOK_LABELS, "signature_scheme": "hmac_sha256",
-                    "signing_secret": SECRET, "signature_header": "X-Signature"}})
-            r = await cx.post(f"{B}/ingest/plain", headers=H(keys["P"]),
-                              json={"app": "a", "note": "plain-from-p", "tares_person": pid["Q"]})
-            ck("P's key ingests to a webhook source", r.status_code == 202, r.text)
-            lw = await webhook_labels(cx, B, "plain")
-            ck("a webhook source: a person-bound key leaves no tares_person label",
-               len(lw) == 1 and all("tares_person" not in l for l in lw), str(lw))
-            body = json.dumps({"app": "a", "note": "signed-no-key"}).encode()
-            sig = hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
-            r = await cx.post(f"{B}/ingest/signed", content=body, headers={
-                "content-type": "application/json", "X-Signature": sig})
-            ck("a signed webhook (auth on, no key) ingests", r.status_code == 202, r.text)
-            lw = await webhook_labels(cx, B, "signed")
-            ck("a signed webhook: no tares_person label",
-               len(lw) == 1 and all("tares_person" not in l for l in lw), str(lw))
-
-            # the label is filterable like any other: a read by tares_person
-            rd = (await cx.post(f"{B}/read", headers=H(AUTH), json={
-                "selector": {"tares_person": pid["P"]}, "window": "3650d"})).json()
-            ck("a read by tares_person=P finds P's two lines and nothing else",
-               rd.get("count") == 2, str(rd)[:300])
     finally:
         proc.terminate(); proc.wait(timeout=10)
 

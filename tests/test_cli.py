@@ -23,7 +23,7 @@ def test_up_wires_data_home(tmp):
     cli._up(args)
     ck("creates the data home", Path(tmp).is_dir())
     ck("points DB at the data home", os.environ["TARES_DB"] == str(Path(tmp) / "tares.duckdb"), os.environ.get("TARES_DB"))
-    ck("points catalog at the data home", os.environ["TARES_CATALOG"] == str(Path(tmp) / "catalog.yaml"))
+    ck("no catalog file is pointed at (the source catalog went, TR-1811)", "TARES_CATALOG" not in os.environ)
     ck("sets host/port for the daemon", os.environ["TARES_PORT"] == "9999")
     ck("starts the daemon", started.get("ran") is True)
 
@@ -226,49 +226,6 @@ test_first_run_edition()
 test_ask_edition()
 
 
-
-# ── 1.0 renamed every env var, with NO fallback ──────────────────────────────
-# Deliberately breaking. What must NOT happen is a SILENT break: a daemon started with only
-# NAVFLOW_DB set would ignore it, open a DuckDB file somewhere else, and come up healthy and EMPTY
-# — indistinguishable from data loss. So it refuses, and names the variable to set instead.
-from tares.config import reject_legacy_db, reject_legacy_env  # noqa: E402
-
-ck("no legacy vars -> starts normally", reject_legacy_env({"TARES_DB": "/tmp/x.duckdb"}) is None)
-
-try:
-    reject_legacy_env({"NAVFLOW_DB": "/tmp/x.duckdb"})
-    ck("a legacy var refuses to start", False, "it started anyway")
-except SystemExit as e:
-    ck("a legacy var refuses to start", True)
-    ck("...and names the variable to use instead", "TARES_DB" in str(e), str(e)[:120])
-    ck("...and says the data is still there", "data is where you left it" in str(e), str(e)[:200])
-
-try:
-    reject_legacy_env({"NAVFLOW_AUTH_TOKEN": "t", "NAVFLOW_PORT": "8787"})
-    ck("every legacy var is listed, not just the first", False, "it started anyway")
-except SystemExit as e:
-    ck("every legacy var is listed, not just the first",
-       "TARES_AUTH_TOKEN" in str(e) and "TARES_PORT" in str(e), str(e)[:200])
-
-# ── the DuckDB file was renamed too, and DuckDB would happily create a new empty one ─────────
-import tempfile as _tf  # noqa: E402
-
-with _tf.TemporaryDirectory() as _d:
-    _new = os.path.join(_d, "tares.duckdb")
-    _old = os.path.join(_d, "navflow.duckdb")
-
-    ck("a genuinely fresh install starts", reject_legacy_db(_new) is None)
-
-    open(_old, "w").close()          # upgraded install: old file present, new one absent
-    try:
-        reject_legacy_db(_new)
-        ck("a pre-1.0 database next door refuses to start", False, "it started anyway")
-    except SystemExit as e:
-        ck("a pre-1.0 database next door refuses to start", True)
-        ck("...and gives the exact mv command", f"mv {_old} {_new}" in str(e), str(e)[:200])
-
-    open(_new, "w").close()          # already migrated: both present, new one wins
-    ck("once migrated it starts normally", reject_legacy_db(_new) is None)
 
 print(f"\n{P} passed, {F} failed")
 raise SystemExit(1 if F else 0)
