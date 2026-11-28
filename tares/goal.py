@@ -967,21 +967,9 @@ def _what(what_changed: str | None, headline: str | None) -> str:
     return _cut(text, WHAT_MAX) or ""
 
 
-def service_name(key: str | None, settings: dict | None) -> str:
-    """The service a finding is about, as the cell shows it (TR-742): the key followed through
-    its merges, in its display name when it has one; the key as it is when it is no service."""
-    from .sre import canonical
-    key = str(key or "").strip()
-    if not key:
-        return ""
-    settings = settings or {}
-    return (settings.get(canonical(key, settings)) or {}).get("display") or canonical(key, settings)
-
-
-def service_key(key: str | None, settings: dict | None) -> str:
-    """The service a key is merged into, by its own name (service_name gives the display name)."""
-    from .sre import canonical
-    return canonical(str(key or "").strip(), settings or {})
+def service_name(key: str | None, settings: dict | None = None) -> str:
+    """The entity a finding is about, as the title names it: the key, trimmed."""
+    return str(key or "").strip()
 
 
 def title_parts_of(key: str | None, what_changed: str | None, headline: str | None,
@@ -1046,19 +1034,6 @@ def outcome_of(run: dict, is_watcher: bool) -> str:
     if is_watcher:
         return "raised"
     return "note_written"
-
-
-def raised_by(path: list, outcome: str, practice: bool, scheduled: set | None) -> dict | None:
-    """The watcher run that raised what the last run of `path` (root first) holds, else None:
-    the nearest scheduled check on the line of parents, and only for something that was raised.
-    A quiet run and a practice result raised nothing, and a watcher's own run counts when its
-    outcome is "raised" (its finding sent nothing on and says there is nothing to do: not raised)."""
-    if practice or outcome == "quiet" or not path:
-        return None
-    root = next((r for r in reversed(path) if is_watcher_run(r, scheduled)), None)
-    if root is not None and root["id"] == path[-1]["id"] and outcome != "raised":
-        return None
-    return root
 
 
 # ── results ──────────────────────────────────────────────────────────────────
@@ -1141,9 +1116,7 @@ def result_for(thread: dict, run: dict, parent: dict, scheduled: set | None = No
             "duration_ms": sum(int(r.get("duration_ms") or 0) for r in path),
             "handled": handled, "external": run.get("woken_by") == "external",
             # a run the guided setup's "Try it" started, or what it led to: shown, never counted
-            "practice": practice,
-            # whether a person can answer "Was this worth raising?" on it (TR-746)
-            "can_answer": raised_by(path, outcome, practice, scheduled) is not None}
+            "practice": practice}
 
 
 def thread_result(thread: dict, scheduled: set | None = None, settings: dict | None = None,
@@ -1238,56 +1211,12 @@ def project_results(store, uid: str, limit: int = 20, before=None, scheduled: se
     scheduled = scheduled or set()
     # "today" is since midnight UTC: the cell does not know the viewer's time zone
     midnight = utc_midnight(now)
-    settings = store.service_settings()
     results, next_before, quiet, found = _page(
         _threads(store, uid, before, scheduled),
-        lambda t: thread_result(t, scheduled, settings, now), limit, show, before is None, midnight)
+        lambda t: thread_result(t, scheduled, None, now), limit, show, before is None, midnight)
     today = {"looked_at": store.project_threads_since(uid, midnight), "found": found,
              "spent_usd": round(store.project_spend_since(uid, midnight), 6)}
     return {"results": results, "next_before": next_before, "today": today, "quiet": quiet}
-
-
-def _merged_threads(store, before, scheduled: set, hide=()):
-    """The threads of every project, newest first, except the projects in `hide`. One that two
-    projects share comes twice, with the same runs: the caller drops the second result it makes."""
-    import heapq
-    gens = [_threads(store, p["id"], before, scheduled) for p in store.list_projects()
-            if p["id"] not in hide]
-    return heapq.merge(*gens, key=lambda t: _aware(t["at"]), reverse=True)
-
-
-def cell_results(store, scheduled: set | None = None, limit: int = 20, before=None,
-                 show: str = "worth", service: str = "", now=None, hide=()) -> dict:
-    """The AI SRE findings list: the results of every project (but the ones in `hide`, the
-    private projects the caller cannot see), newest first, practice results
-    left out, paged like project_results (`before` = the previous page's `next_before`).
-    show="worth" (the default) leaves out the quiet checks and counts them in `quiet`, "all"
-    keeps them. `service` keeps the findings about that service (its display name or its key)."""
-    limit = max(1, min(int(limit), 100))
-    scheduled = scheduled or set()
-    midnight = utc_midnight(now)
-    settings = store.service_settings()
-    want = (service or "").strip().lower()
-    seen: set = set()
-
-    def make(t):
-        r = thread_result(t, scheduled, settings, now)
-        if r is None or r["id"] in seen:
-            return None
-        seen.add(r["id"])
-        return r
-
-    def keep(r):
-        if r["practice"]:
-            return False
-        if not want:
-            return True
-        return want in (r["title_parts"]["service"].lower(), service_key(r["entity"], settings).lower())
-
-    results, next_before, quiet, _found = _page(
-        _merged_threads(store, before, scheduled, hide), make, limit,
-        "worth" if show == "worth" else "", before is None, midnight, keep)
-    return {"findings": results, "quiet": quiet, "next_before": next_before}
 
 
 def _root_of(store, run: dict, uid: str | None = None) -> tuple | None:
@@ -1435,8 +1364,7 @@ def result_detail(store, catalog, uid: str, run_id: str, scheduled: set | None =
     if target is None:
         target = {**run, "children": [], "firings": []}
         parent = {run_id: None}
-    out = result_for(thread, {**target, "finding": run.get("finding")}, parent, scheduled,
-                     store.service_settings())
+    out = result_for(thread, {**target, "finding": run.get("finding")}, parent, scheduled)
     out["note"] = run.get("finding") or ""
     out["steps"] = steps_of(store, catalog, thread, run_id)
     return out

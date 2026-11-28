@@ -23,7 +23,6 @@ from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
 from .factory import DONE_STATUSES, OPEN_STAGES, state_of
 from .factory_store import FACTORY_SCHEMA, FactoryStore
 from .request_memo import kept
-from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
@@ -700,7 +699,7 @@ class StoreUnavailable(RuntimeError):
         self.path = path
 
 
-class Store(FactoryStore, ClaudeUsageStore, SreStore):
+class Store(FactoryStore, ClaudeUsageStore):
     def __init__(self, path: str = "tares.duckdb", state_dsn: str | None = None):
         # One DuckDB connection, used under self._lock from whichever thread a request runs on.
         # State (every table but state_db.EVENT_TABLES) is read through self.sc: the same DuckDB
@@ -850,7 +849,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # not here: its CREATE and ALTER statements below stay as the record of the old schema
         # (tests/old_ddl.py keeps them as text) and are left out of what runs
         return _unmoved([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
-                        + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA) + list(SRE_SCHEMA))
+                        + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA))
 
     def _state_tables(self) -> list[str]:
         return sorted(t for t in self._tables_of(self.con)
@@ -874,7 +873,6 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._challenges_fill()
         self._init_source_stats()
         self._init_entity_counts()
-        self._incidents_backfill()
 
     def _ticket_pr_columns(self) -> None:
         """tickets.pr_repo and pr_number say what `pr` says (TR-1614). A release before them writes
@@ -882,16 +880,6 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         repairs the rows that differ. After the copy from DuckDB, which has `pr` only."""
         with self._swrite, self.sessions_db.begin() as conn:
             fill_pr_columns(conn)
-
-    def _incidents_backfill(self) -> None:
-        """Give the notes written before incidents were tracked their incidents (TR-744). Writes
-        the incident tables only; once per rule version, so a start with nothing to do is one
-        settings read. A failure is printed and never stops the start."""
-        try:
-            from . import incidents
-            incidents.backfill(self)
-        except Exception as e:
-            print(f"taresd: incident backfill: {type(e).__name__}: {e}")
 
     @staticmethod
     def _tables_of(con) -> set:

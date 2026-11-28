@@ -22,18 +22,6 @@ SCREENS = [
 
     "start",                 # TR-756
 
-    "sre_home_actions",      # TR-748
-
-    "sre_services",          # TR-750
-
-    "sre_incidents",           # TR-751
-
-    "sre_timeline",            # TR-752
-
-    "sre_runbooks",            # TR-753
-
-    "sre_settings",          # TR-764
-
     "factory_people",          # TR-1011
 
     "factory_merge_queue",   # TR-1094

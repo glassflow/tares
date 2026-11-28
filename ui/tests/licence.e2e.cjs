@@ -14,7 +14,7 @@
  *   - key in the environment (valid, then not valid): the panel says where the key comes from, shows the reason
  *     for a key that does not check out, and says the environment wins.
  *   - Tares Cloud (TARES_WORKSPACE_API_URL set, expired key): no banner, no Enterprise licence tab, no panel behind
- *     ?tab=licence, no row or link in the factory and sre settings; the same pages on a self-hosted cell have them.
+ *     ?tab=licence, no row or link in the factory settings; the same pages on a self-hosted cell have them.
  *     GET /api/licence answers as before (display only).
  *   - the cell does not answer: GET /api/licence fails, so a team home shows its plain rows instead of the
  *     placeholder for good, and the licence panel says "The cell did not answer."; /api/whoami fails, so the panel
@@ -22,7 +22,6 @@
  *   - removing the licence takes the Areas tab away without a reload.
  *   - /health slow: until it answers, no licence screen shows on a Cloud cell or a self-hosted one (the five
  *     cloud.ready guards); a self-hosted cell shows them once it has answered. At 390 the tab list is a select.
- *   - the sre edition's banner on a self-hosted cell with an ended licence, and its link.
  * Not covered: a cell with no auth reading "Only an admin" (an open cell has no non-admin).
  * Set SHOTS_DIR to keep screenshots at 1440 and 390 px: licence-<state>-<width>.png for none, valid, expired,
  * over_seats, env-invalid and source-env, and licence-banner-<expired|over_seats>-<width>.png.
@@ -398,7 +397,6 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
       const t = (s) => `cloud: ${s}`;
       const cloudUrl = `http://127.0.0.1:${nextPort}/api/nope`;   // answers 404, so the Workspace tab says "no access" and the page stays up
       const cloud = await start({ dataDir: tmp("cloud"), edition: "factory", licence: "expired", env: { TARES_WORKSPACE_API_URL: cloudUrl } });
-      const sreCloud = await start({ dataDir: tmp("cloud-sre"), edition: "sre", licence: "expired", env: { TARES_WORKSPACE_API_URL: cloudUrl } });
       const st = (await api(cloud, "/api/licence", { token: null })).body;
       ck(t("the cell still answers valid and expired"), st.valid === true && st.expired === true, JSON.stringify(st));
       ck(t("and /health says it is a Cloud cell"), !!(await api(cloud, "/health", { token: null })).body.workspace_api_url);
@@ -414,20 +412,8 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
           if (p === "/settings/advanced?tab=licence") await shot(page, "licence-cloud", w);
           await ctx.close();
         }
-        const { ctx, page } = await open(sreCloud, "/settings", w);
-        await page.waitForLoadState("networkidle"); await page.waitForTimeout(1500);
-        ck(t(`sre /settings @${w}: no Enterprise licence link, no banner`), (await page.getByTestId("licence-link").count()) === 0 && (await page.getByTestId("licence-banner").count()) === 0);
-        await ctx.close();
       }
       // the same pages on a self-hosted cell have them, so the checks above are not vacuous
-      const selfSre = await start({ dataDir: tmp("self-sre"), edition: "sre", licence: "expired" });
-      const { ctx, page } = await open(selfSre, "/settings", 1440);
-      await page.getByTestId("licence-link").waitFor({ timeout: 15000 }).catch(() => {});
-      ck(t("control: a self-hosted sre cell shows the Enterprise licence link"), (await page.getByTestId("licence-link").count()) === 1);
-      await page.getByTestId("licence-link").click();
-      await page.getByTestId("licence-panel").waitFor({ timeout: 15000 }).catch(() => {});
-      ck(t("control: and the link opens the panel"), (await page.getByTestId("licence-panel").count()) === 1, page.url());
-      await ctx.close();
       const selfF = await open(expired, "/settings", 1440);
       await selfF.page.getByTestId("group-open-workspace").click();
       await selfF.page.getByTestId("nav-licence").waitFor({ timeout: 15000 }).catch(() => {});
@@ -442,21 +428,6 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
         const { ctx, page } = await open(expired, "/settings/advanced", w);
         await page.waitForLoadState("networkidle"); await page.waitForTimeout(1500);
         ck(t(`control @${w}: a self-hosted cell lists the Enterprise licence tab`), await hasTab(page, w), (await tabNames(page, w)).join(","));
-        await ctx.close();
-      }
-
-      // the sre edition's banner, on a self-hosted cell with an ended licence
-      for (const w of WIDTHS) {
-        const { ctx, page, errors } = await open(selfSre, "/", w);
-        const words = await banner(page);
-        ck(t(`sre / @${w}: the banner says when the licence ended`), /The enterprise licence ended on .* adding people is paused until it is renewed\./.test(words), words);
-        if (!words) { await ctx.close(); continue; }
-        ck(t(`sre / @${w}: one banner, its link goes to the licence tab`), (await page.getByTestId("licence-banner").count()) === 1
-           && (await page.getByTestId("licence-banner-link").getAttribute("href")) === "/settings/advanced?tab=licence");
-        await page.getByTestId("licence-banner-link").click();
-        await page.getByTestId("licence-panel").waitFor({ timeout: 15000 }).catch(() => {});
-        ck(t(`sre / @${w}: the link opens the panel`), (await page.getByTestId("licence-panel").count()) === 1, page.url());
-        ck(t(`sre / @${w}: no page error, no sideways scroll`), errors.length === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
         await ctx.close();
       }
 
@@ -476,10 +447,9 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
       for (const w of WIDTHS) {
         for (const [d, p, name, selfHosted, wants] of [
           [cloud, "/", "cloud /", false, "banner"], [cloud, "/settings", "cloud /settings", false, "row"],
-          [cloud, "/settings/advanced?tab=licence", "cloud licence tab", false, "panel"], [sreCloud, "/settings", "sre cloud /settings", false, "link"],
+          [cloud, "/settings/advanced?tab=licence", "cloud licence tab", false, "panel"],
           [expired, "/", "self-hosted /", true, "banner"], [expired, "/settings", "self-hosted /settings", true, "row"],
           [expired, "/settings/advanced", "self-hosted tabs", true, "tab"], [expired, "/settings/advanced?tab=licence", "self-hosted licence tab", true, "panel"],
-          [selfSre, "/settings", "self-hosted sre /settings", true, "link"],
         ]) {
           const { ctx, page, errors } = await open(d, p, w, undefined, slow);
           await page.waitForTimeout(8000);   // past the sign-in gate's 6 s wait, /health still unanswered

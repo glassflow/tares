@@ -57,7 +57,6 @@ test_private_admin_routes
 test_private_raw_routes
 test_private_reads
 test_private_routes
-test_private_services
 test_private_session_reads
 test_private_session_reads_open
 test_private_station_reads
@@ -74,8 +73,6 @@ test_route_phase_metric
 test_sessions_readers
 test_setup_flow_team
 test_spec_questions
-test_sre_private_screens
-test_sre_start_team
 test_state_indexes
 test_teams_e2e
 test_ticket_assignee

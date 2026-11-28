@@ -1,8 +1,7 @@
 """The Start checklist (TR-756): the few steps that take a new cell from empty to working.
 
 `factory_steps(ctx)` is the checklist of the software factory home, and `joiner_steps(ctx)`
-(TR-1314) the one it gives a person joining a factory someone else set up; `sre_steps` (TR-765) is
-the one of the AI SRE home. A step is {key, title, gets, done, actions, detail?}: `gets` says what
+(TR-1314) the one it gives a person joining a factory someone else set up. A step is {key, title, gets, done, actions, detail?}: `gets` says what
 the person gains, `actions` is a list of buttons (empty once done), each a link inside the console
 (`to`), a link out (`href`) or a command to copy (`copy`). Every string is shown as it is, so
 tests/test_factory_start.py checks them against tares/words.py.
@@ -38,17 +37,6 @@ class StartCtx:
     crew_text: str = ""                 # "Running on <machine>"
     own_settings_set: bool = False      # joiner only: the person saved crew settings of their own
     member_of_project: bool = False     # joiner only: they lead or belong to an open project
-
-
-@dataclass
-class SreStartCtx:
-    model: bool = False             # a model provider is configured (or the trial credit is on)
-    signals: bool = False           # a logs or metrics connector exists
-    services: bool = False          # the cell sees at least one service
-    watching: bool = False          # at least one service is watched
-    slack: bool = False             # notes have a Slack channel to land in
-    demo: bool = False              # the demo project exists
-    demo_finding: bool = False      # the demo project has at least one finding
 
 
 def _ctx(ctx, cls=StartCtx):
@@ -121,44 +109,6 @@ def joiner_steps(ctx) -> list[dict]:
                      c.member_of_project,
                      [{"label": "See the team's projects", "to": "/projects"}]), "workspace"),
     ]
-
-
-SRE_SIGNAL_CONNECTORS = ("loki", "prometheus", "prometheus_alerts", "alertmanager", "otlp",
-                         "docker_logs", "vercel", "http_poll")
-
-
-def sre_steps(ctx) -> list[dict]:
-    """The steps of the AI SRE home, in order: five, and a sixth once the demo project exists."""
-    c = _ctx(ctx, SreStartCtx)
-    steps = [
-        _step("model", "Add a model provider",
-              "The agents that watch and investigate need an AI model.", c.model,
-              [{"label": "Add a provider", "to": "/settings/advanced"}]),
-        _step("signals", "Connect logs or metrics", "Tares sees how your services behave.",
-              c.signals or c.demo,
-              [{"label": "Connect", "to": SETTINGS_LINK},
-               {"label": "Try the demo service", "do": "start_demo"}]),
-        _step("services", "See your services appear", "Each of your services, with its state.",
-              c.services, [{"label": "Open services", "to": "/services"}]),
-        _step("watching", "Turn on watching",
-              "An agent looks at every change and tells you when something breaks.",
-              c.watching, [{"label": "Turn on watching", "to": "/settings#watching"}]),
-        _step("slack", "Choose the Slack channel for notes",
-              "Incident notes land where your team talks.", c.slack,
-              [{"label": "Choose a channel", "to": "/settings#notes"}]),
-    ]
-    if c.demo:
-        steps.append(_step("test_incident", "Cause a test incident on the demo",
-                           "See a full incident note written in about a minute.", c.demo_finding,
-                           [{"label": "Open the demo", "to": "/incidents"}]))
-    return steps
-
-
-def person_key(person: dict | None, credential_name: str | None) -> str:
-    """Who a hide belongs to: the person's id, so a rename keeps it and two people of one name
-    keep their own; a key with no person falls back to its own name, a cell with nobody to name
-    to "console"."""
-    return (person or {}).get("id") or credential_name or "console"
 
 
 def hidden(store, who: str) -> bool:

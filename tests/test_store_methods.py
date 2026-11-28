@@ -1,6 +1,6 @@
 """No method name is defined twice among Store and the classes it is built from.
 
-Store is FactoryStore + ClaudeUsageStore + SreStore. Two of them defining the same name do not fail
+Store is FactoryStore + ClaudeUsageStore (SreStore went with the AI SRE edition, TR-1809). Two of them defining the same name do not fail
 anywhere: the first in the order wins and the other's callers get the wrong method. This happened once:
 the Slack reader's `mark_told(person, items, sent, at)` in FactoryStore replaced the watch's
 `mark_told(services, at, where)` in SreStore, and the watch's Slack notice raised a TypeError.

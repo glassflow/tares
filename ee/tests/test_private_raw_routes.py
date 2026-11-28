@@ -1,13 +1,10 @@
 # Tares enterprise licence, see ee/LICENSE
-"""A private project stays out of the raw routes behind the AI SRE screens (TR-903).
+"""A private project stays out of the raw routes (TR-903).
 
 Lee leads Zephyrwatch, a private project that holds a source (zephyr-logs), a watcher, a skill, a
-doc, an incident and findings on the service zephyr-api. Kim is a teammate with an admin key who
-is not on it. Every route below answers for the person asking: the incidents list and its counts
-leave the incident out, the single incident and its actions answer 404 as for an incident that
-does not exist, the raw timeline and the runbooks' memory notes leave out its rows, the findings,
-the hit rate and the feedback export leave out its results, the worth answer on its run is a 404,
-usage does not count its source, the dependents of its source and trigger are unknown, and a use
+doc and findings on the service zephyr-api. Kim is a teammate with an admin key who is not on it.
+Every route below answers for the person asking (the AI SRE routes this test also covered went
+with the edition, TR-1809): usage does not count its source, the dependents of its source and trigger are unknown, and a use
 of its skill or doc is a 404. Lee and the cell's own key still see all of it, and an object shared
 with a project Kim can see stays visible to her.
 
@@ -28,18 +25,16 @@ TMP = tempfile.mkdtemp(prefix="tares-private-raw-routes-")
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-private-raw"
-os.environ["TARES_EDITION"] = "sre"
+os.environ["TARES_EDITION"] = "platform"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_SCHEDULE_CLOCK_SECONDS"] = "3600"
-os.environ["TARES_WATCH_SECONDS"] = "3600"
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
 import httpx
 
 from fixtures.sre_cell import build
-from tares import incidents, sre_home
 from tares.connectors import source_type_for
 from tares.envelope import Envelope
 
@@ -73,13 +68,11 @@ async def main():
             return await cx.request(method, path, json=body, params=params or None)
 
     async def get(who, path, **params):
-        sre_home.clear_cache()
         return await call(who, "GET", path, **params)
 
     async with app.router.lifespan_context(app):
         runtime = app.state.runtime
         base = datetime.now(UTC).replace(microsecond=0)
-        incidents.clock = lambda: base
         for who in ("kim", "lee"):
             r = await call("root", "POST", "/api/keys", {
                 "name": f"{who}-laptop", "scopes": ["admin"],
@@ -159,14 +152,9 @@ async def main():
                 store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [at, rid])
             return at
 
-        at = run("r-zephyr", "zephyr-seer", "watch-zephyr", "zephyr-api",
-                 "Zephyrwatch broke the queue.", vault, 30)
-        secret = store.create_incident("zephyr-api", vault, at)["id"]
-        store.add_incident_note(secret, "r-zephyr", at)
-        at = run("r-edge", "edge-seer", "watch-edge", "edge-proxy", "502s on edge-proxy.",
-                 open_uid, 20)
-        shown = store.create_incident("edge-proxy", open_uid, at)["id"]
-        store.add_incident_note(shown, "r-edge", at)
+        run("r-zephyr", "zephyr-seer", "watch-zephyr", "zephyr-api",
+            "Zephyrwatch broke the queue.", vault, 30)
+        run("r-edge", "edge-seer", "watch-edge", "edge-proxy", "502s on edge-proxy.", open_uid, 20)
         # a result a shared watcher raised for both projects, and one the private watcher raised
         # with no project of its own
         run("r-shared", "edge-seer", "watch-edge", "edge-proxy", "shared result on edge-proxy.",
@@ -178,90 +166,12 @@ async def main():
         ck("the fixture ties the run to the private project", store.run_projects("r-zephyr") == [vault],
            str(store.run_projects("r-zephyr")))
 
-        # answers on a finding: one on the private watcher, one on the open watcher
-        store.set_feedback("r-zephyr", "p-lee", "Lee", True, "Zephyr note", "console", "zephyr-seer",
-                           "r-zephyr", None, vault)
-        store.set_feedback("r-edge", "p-lee", "Lee", False, "edge note", "console", "edge-seer",
-                           "r-edge", None, open_uid)
-        store.set_feedback("r-zephyr-np", "p-lee", "Lee", True, "Zephyr bare note", "console",
-                           "zephyr-seer", "r-zephyr-np", None, None)
-
         # a skill and a doc only Zephyrwatch has
         store.upsert_skill(vault, "zephyr-playbook", "Zephyr steps", "Restart the zephyr queue.")
         doc = store.create_doc(vault, "notes", "Zephyr notes", "The zephyr notes.")
         # and a skill both projects have
         store.upsert_skill(vault, "shared-playbook", "Shared steps", "Check the logs.")
         store.use_skill(open_uid, "shared-playbook")
-
-        print("== incidents ==")
-        r = await get("kim", "/api/incidents")
-        ck("the list answers", r.status_code == 200, r.text[:120])
-        ck("the list leaves the private incident out", secret not in json.dumps(r.json()) and not mentions(r.json()),
-           r.text[:300])
-        ck("the open one is there", shown in json.dumps(r.json()))
-        ck("the counts leave the private one out", r.json()["counts"]["open"] == 1, str(r.json()["counts"]))
-        r = await get("kim", f"/api/incidents/{secret}")
-        gone = await get("kim", "/api/incidents/inc_doesnotexist")
-        ck("the single incident is a 404", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
-        ck("and says what an unknown incident says",
-           r.text.replace(secret, "X") == gone.text.replace("inc_doesnotexist", "X"), f"{r.text} vs {gone.text}")
-        for act in ("on_it", "resolve", "reopen"):
-            r = await call("kim", "POST", f"/api/incidents/{secret}/{act}")
-            ck(f"{act} is a 404", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
-        ck("and changed nothing", store.get_incident(secret)["state"] == "open")
-        r = await get("kim", f"/api/incidents/{shown}")
-        ck("the open incident opens", r.status_code == 200, r.text[:120])
-
-        print("== the raw timeline ==")
-        r = await get("kim", "/api/sre/timeline/raw", service="zephyr-api")
-        ck("a source only the private project owns gives no rows", r.status_code in (200, 404)
-           and not mentions(r.json()), f"{r.status_code} {r.text[:200]}")
-        r = await get("kim", "/api/sre/timeline/raw", service="service-a")
-        ck("a shared source leaves out the private project's rows",
-           r.status_code == 200 and not mentions(r.json()) and "plain line" in json.dumps(r.json()),
-           f"{r.status_code} {r.text[:300]}")
-
-        print("== the runbooks' memory notes ==")
-        r = await get("kim", "/api/sre/runbooks")
-        ck("the runbooks hold no private note", r.status_code == 200 and "ZEPHYR note" not in r.text
-           and "private-only note" not in r.text, r.text[:300])
-        ck("and keep the open note", "plain note about retries" in json.dumps(r.json()), r.text[:300])
-
-        print("== findings and feedback ==")
-        r = await get("kim", "/api/findings", show="all")
-        ck("the findings leave out the private result", r.status_code == 200 and not mentions(r.json())
-           and "r-edge" in json.dumps(r.json()), f"{r.status_code} {r.text[:300]}")
-        r = await get("kim", "/api/watchers/hit-rate")
-        ck("the hit rate leaves out the private watcher", r.status_code == 200 and not mentions(r.json())
-           and "edge-seer" in json.dumps(r.json()), f"{r.status_code} {r.text[:300]}")
-        r = await get("kim", "/api/feedback/export")
-        ck("the feedback export leaves out its answers", r.status_code == 200 and not mentions(r.json())
-           and "edge note" in json.dumps(r.json()), f"{r.status_code} {r.text[:300]}")
-        r = await call("kim", "PUT", "/api/findings/r-zephyr/worth", {"worth": True})
-        unknown = await call("kim", "PUT", "/api/findings/r-nothing/worth", {"worth": True})
-        ck("an answer on the private run is a 404, as for an unknown run",
-           r.status_code == 404 and r.text.replace("r-zephyr", "X") == unknown.text.replace("r-nothing", "X"),
-           f"{r.status_code} {r.text[:120]} vs {unknown.status_code} {unknown.text}")
-        r = await call("kim", "DELETE", "/api/findings/r-zephyr/worth")
-        ck("taking one back is a 404", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
-        ck("and the stored answer stays", len(store.feedback_for(["r-zephyr"])["r-zephyr"]) == 1)
-        r = await call("kim", "PUT", "/api/findings/r-edge/worth", {"worth": True})
-        ck("an answer on the open run works", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
-        r = await call("kim", "PUT", "/api/findings/r-shared/worth", {"worth": True})
-        ck("and on a run the open project shares with the private one", r.status_code == 200,
-           f"{r.status_code} {r.text[:120]}")
-        before = len(store.feedback_for(["r-zephyr-np"]).get("r-zephyr-np", []))
-        r = await call("kim", "PUT", "/api/findings/r-zephyr-np/worth", {"worth": True})
-        ck("an answer on a result the private watcher raised with no project is a 404 as well",
-           r.status_code == 404 and r.text.replace("r-zephyr-np", "X") == unknown.text.replace("r-nothing", "X"),
-           f"{r.status_code} {r.text[:120]} vs {unknown.status_code} {unknown.text}")
-        r = await call("kim", "DELETE", "/api/findings/r-zephyr-np/worth")
-        ck("so is taking one back", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
-        ck("and the stored answers stay", len(store.feedback_for(["r-zephyr-np"])["r-zephyr-np"]) == before,
-           str(before))
-        r = await call("kim", "PUT", "/api/findings/r-edge-np/worth", {"worth": True})
-        ck("a visible watcher's result with no project can be answered", r.status_code in (200, 409),
-           f"{r.status_code} {r.text[:120]}")
 
         print("== usage ==")
         r = await get("kim", "/api/usage")
@@ -304,28 +214,10 @@ async def main():
 
         print("== the people who can see Zephyrwatch ==")
         for who in ("lee", "root"):
-            r = await get(who, "/api/incidents")
-            ck(f"{who}: the list has the incident and counts it", secret in json.dumps(r.json())
-               and r.json()["counts"]["open"] == 2, r.text[:200])
-            ck(f"{who}: the incident opens", (await get(who, f"/api/incidents/{secret}")).status_code == 200)
-            r = await get(who, "/api/sre/timeline/raw", service="zephyr-api")
-            ck(f"{who}: the raw timeline has its rows", "ZEPHYR queue stuck" in json.dumps(r.json()), r.text[:200])
-            r = await get(who, "/api/sre/timeline/raw", service="service-a")
-            ck(f"{who}: and the private row on the shared source", "ZEPHYR private line" in json.dumps(r.json()), r.text[:200])
-            r = await get(who, "/api/sre/runbooks")
-            ck(f"{who}: the runbooks have the private note", "ZEPHYR note" in json.dumps(r.json()), r.text[:200])
-            r = await get(who, "/api/findings", show="all")
-            ck(f"{who}: the findings have it", "r-zephyr" in json.dumps(r.json()), r.text[:200])
-            r = await get(who, "/api/watchers/hit-rate")
-            ck(f"{who}: the hit rate has it", "zephyr-seer" in json.dumps(r.json()), r.text[:200])
-            r = await get(who, "/api/feedback/export")
-            ck(f"{who}: the export has it", "Zephyr note" in json.dumps(r.json()), r.text[:200])
             r = await get(who, "/api/usage")
             ck(f"{who}: usage counts the source", "zephyr-logs" in [s["name"] for s in r.json()["sources"]], r.text[:200])
             r = await get(who, "/api/catalog/dependents", kind="source", name="zephyr-logs")
             ck(f"{who}: the dependents answer", r.status_code == 200 and "watch-zephyr" in json.dumps(r.json()), r.text[:200])
-        r = await call("lee", "PUT", "/api/findings/r-zephyr/worth", {"worth": False})
-        ck("Lee answers on her own run", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
 
     print(f"\n{P} passed, {F} failed")
     return F

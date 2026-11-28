@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 # the helpers make_app() passes in; each is a method of Host with the same name
 HELPERS = (
-    "err", "caller", "current_person", "is_admin", "is_system", "project_key", "start_who", "by",
+    "err", "caller", "current_person", "is_admin", "is_system", "project_key", "by",
     "can_see", "hidden_ids", "read_exclude", "hidden_sources", "project_or_404", "resolve_project",
     "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out", "area_owner",
     "hidden_project", "projects", "licence_state", "licence_required", "auth_off",
@@ -85,10 +85,6 @@ class Host:
     def project_key(self, request: Request) -> str | None:
         """The id of the project the request's key belongs to, or None for any other credential."""
         return self._call("project_key", request)
-
-    def start_who(self, request: Request) -> str:
-        """The key of whose Start checklist hide applies to this request."""
-        return self._call("start_who", request)
 
     def by(self, request: Request, body: dict | None = None) -> str:
         """Who made a change, as a name: the `by` field of `body` when it has one, else the

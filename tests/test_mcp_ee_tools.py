@@ -149,7 +149,7 @@ print("== an ee team with one tool ==")
 team_mod._set_ee_for_tests(FakeTeam([ee_ping]))
 ms._register_ee_tools()
 ck("EE_TOOLS is {ee_ping}", ms.EE_TOOLS == {"ee_ping"}, str(ms.EE_TOOLS))
-ck("ee_ping is in no core set", not ({"ee_ping"} & (ms.FACTORY_TOOLS | ms.FACTORY_ONLY | ms.SRE_TOOLS | ms.OBJECT_TOOLS)))
+ck("ee_ping is in no core set", not ({"ee_ping"} & (ms.FACTORY_TOOLS | ms.FACTORY_ONLY | ms.OBJECT_TOOLS)))
 
 ALLOWED = False
 n = names()
