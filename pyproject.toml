@@ -25,6 +25,7 @@ dependencies = [
     "pydantic>=2",
     "mcp>=1.2,<2",   # 2.0 renamed FastMCP->MCPServer and dropped mcp.server.fastmcp (see mcp_server.py)
     "pytz>=2024.1",   # DuckDB needs it to bind tz-aware datetimes to TIMESTAMPTZ
+    "tzdata; sys_platform == 'win32'",   # DuckDB reads Etc/UTC through zoneinfo; Windows has no tz database
     "asyncpg>=0.29",  # Postgres connector driver — base so the connector works on `tares up`
     "anthropic>=0.40",  # the model provider layer (models.py): the summaries and the setup planner
     # /metrics (metrics.py): Prometheus text format for the daemon's own counters. Pure Python and
