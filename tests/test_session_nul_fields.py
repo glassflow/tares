@@ -1,16 +1,13 @@
 """A NUL byte in any text field of a claude_code line (TR-1707; the session id: TR-1703).
 
 Postgres text holds no NUL. A posted line loses every NUL, dict keys included, before anything
-counts or stores it, so SQLite and Postgres keep the same text. DuckDB may hold lines from before:
-the fills, the one-time move, the drain and the first start with a state database drop their NULs
-on the way into the sessions tables and the state tables. Both engines are checked against the same
-expected rows.
+counts or stores it, so SQLite and Postgres keep the same text. Both engines are checked against
+the same expected rows.
 
 Plain:                python tests/test_session_nul_fields.py
 With the Postgres harness (every Store keeps its state in Postgres):
     TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres PYTHONPATH=tests/pg_harness:. \\
         python tests/test_session_nul_fields.py
-The first start with a state database needs TARES_TEST_PG and is skipped without it.
 """
 import contextlib
 import io
@@ -18,26 +15,19 @@ import json
 import os
 import sys
 import tempfile
-import threading
-import uuid
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from sqlalchemy import delete, event, select  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
-from tares import session_drain, session_ingest, session_move  # noqa: E402
 from tares import session_map as claude_code  # noqa: E402
 from tares.session_map import ClaudeCodeLines  # noqa: E402
-from tares import session_map  # noqa: E402
 from tares.session_store.tables import (challenges, crews, metadata,  # noqa: E402
-                                        project_sessions, session_archive_parts,
-                                        session_commands, session_files, session_ingest_marks,
+                                        project_sessions, session_commands, session_files,
                                         session_lines, session_messages, session_meters,
-                                        session_moves, session_said, session_states,
-                                        session_stations, session_turns, session_usage, sessions)
+                                        session_said, session_states, session_stations,
+                                        session_turns, session_usage)
 from tares.store import Store  # noqa: E402
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _old_cell import append_duckdb_first, forget_fills  # noqa: E402
 
 SRC = "claude_code"
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
@@ -123,15 +113,8 @@ def want(name, got, expected):
     ck(name, got == sorted(expected, key=repr), got)
 
 
-def duck(s, sql, args=()):
-    with s._lock:
-        return s.con.execute(sql, list(args)).fetchall()
-
-
 def commands(s):
-    """(command, output) of every command row. A block with no id gets a stand-in made from the
-    line's time as written, which is UTC at ingest and the machine's zone when a fill reads DuckDB,
-    so off UTC a fill adds that row again (so for any block with no id): counted once here."""
+    """(command, output) of every command row, a stand-in id (a block with no id) counted once."""
     c = session_commands.c
     got = rows(s, c.tool_use_id, c.command, c.output_tail)
     named = [r[1:] for r in got if not r[0].startswith(("s:", "old:"))]
@@ -289,264 +272,9 @@ def posted():
     ck("the meter reading", bool(name) and name["model"]["display_name"] == "Claude", got)
     no_nul_in_sessions_db(s)
 
-    # the passes of a start over what was just posted add nothing
-    attempt("the turns fill completes", lambda: session_ingest.fill_turns(s, chunk=2))
-    attempt("the facts fill completes", lambda: session_ingest.fill_facts(s))
-    attempt("the sessions reconcile completes", lambda: session_ingest.reconcile_sessions(s))
-    attempt("the usage fill completes", s._claude_usage_fill)
-    attempt("the challenger fill completes", s._challenges_fill)
-    s.close()
-
-
-# ── lines DuckDB holds from before ───────────────────────────────────────────
-def old_lines():
-    return [
-        line("user", "old", 1, uuid=f"u{Z}1", gitBranch=f"br{Z}anch",
-             message={"role": "user", "content": f"tu{Z}rn one"}),
-        reply("old", 2, f"ms{Z}g1", [{"type": "text", "text": f"wo{Z}rds"}],
-              tares_project=f"pr{Z}oj", subagent=f"su{Z}b"),
-        reply("old", 3, Z),
-        line("assistant", "old", 4, uuid="a4", message=said([
-            call(f"tu{Z}bash", "Bash", {"command": f"ls{Z} -la"}),
-            call(f"tu{Z}msg", "SendMessage",
-                 {"to": f"rev{Z}iewer", "message": f"[TF:REPORT] hel{Z}lo"}),
-            call(f"tu{Z}edit", "Edit", {"file_path": f"/a/fi{Z}le.py"}),
-            call(Z, "Bash", {"command": "echo no id"})])),
-        line("user", "old", 5, uuid="u5", message={"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": f"tu{Z}bash",
-             "content": [{"type": "text", "text": f"out{Z}put"}]},
-            {"type": "tool_result", "tool_use_id": Z, "content": "orphan"}]}),
-        line("challenge_commit", "old", 6, gitBranch=f"factory/TR-{Z}1",
-             tares_project=f"pr{Z}oj", challenge={"verdict": "PASS", "sha": "abc123"}),
-        line("user", "old", 7, uuid="u7", message={"role": "user", "content": Z}),
-        *good_lines(),
-    ]
-
-
-def hold_in_duckdb(s):
-    """The lines above as a version before TR-1707 mapped them, in DuckDB alone: how a cell holds
-    them after a write of its sessions tables failed (tests/_old_cell.py, record=False)."""
-    real = session_map._without_nul
-    session_map._without_nul = lambda o: o
-    try:
-        envs = connector(None).map_payload(old_lines())      # no store: nothing else is recorded
-    finally:
-        session_map._without_nul = real
-    assert any(Z in (e.text or "") for e in envs) and any(Z in e.labels.get("branch", "")
-                                                          for e in envs), "the lines lost their NULs"
-    keep = s._keep_challenges
-    s._keep_challenges = lambda *a, **k: None
-    try:
-        append_duckdb_first(s, envs, record=False)
-    finally:
-        s._keep_challenges = keep
-    forget_fills(s)                    # the fills of the next start read them
-    return envs
-
-
-def check_old_facts(s, say):
-    t = session_turns.c
-    # the turn whose text is only a NUL is a turn with no words
-    want(f"{say}the turns", rows(s, t.session, t.text),
-         [("good", "turn 40"), ("old", "turn one"), ("old", "")])
-    ck(f"{say}with their keys", {"u1", "u7", "g40"} <= {r[0] for r in rows(s, t.line_key)},
-       rows(s, t.line_key))
-    want(f"{say}the said lines", rows(s, session_said.c.session, session_said.c.text),
-         [("good", "words 41"), ("old", "words")])
-    t = session_commands.c
-    got = rows(s, t.tool_use_id)
-    want(f"{say}the commands and the output", commands(s),
-         [("ls -la", "output"), ("echo no id", None)])
-    ck(f"{say}their ids", any(r[0] == "tubash" for r in got)
-       and any(r[0].startswith("old:") for r in got), got)
-    t = session_messages.c
-    want(f"{say}the crew message", rows(s, t.tool_use_id, t.to_station, t.type, t.text),
-         [("tumsg", "reviewer", "REPORT", "[TF:REPORT] hello")])
-    want(f"{say}the files", rows(s, session_files.c.path), [("/a/file.py",)])
-
-
-def held_by_duckdb():
-    print("== lines DuckDB already holds with NULs: the fills of a start ==")
-    s = new_store()
-    hold_in_duckdb(s)
-    for turn in (1, 2):
-        attempt(f"the turns fill completes, pass {turn}",
-                lambda: session_ingest.fill_turns(s, chunk=2))
-        attempt(f"the facts fill completes, pass {turn}", lambda: session_ingest.fill_facts(s))
-        attempt(f"the sessions reconcile completes, pass {turn}",
-                lambda: session_ingest.reconcile_sessions(s))
-        attempt(f"the usage fill completes, pass {turn}", s._claude_usage_fill)
-        attempt(f"the challenger fill completes, pass {turn}", s._challenges_fill)
-    ck("the turns fill set its watermark", session_ingest._turns_mark(s) is not None)
-    ck("the facts fill set its watermark", session_ingest._facts_mark(s) is not None)
-    check_old_facts(s, "")
-    t = session_usage.c
-    want("the replies' usage", rows(s, t.session, t.message, t.model, t.project, t.subagent),
-         [("good", "m41", "claude-sonnet-4-5", None, None),
-          ("old", "msg1", "claude-sonnet-4-5", PROJECT, "sub")])
-    ck("priced", all(r[0] for r in rows(s, t.cost_usd)), rows(s, t.cost_usd))
-    t = challenges.c
-    want("the challenger line", rows(s, t.key_value, t.branch, t.tares_project),
-         [("old", "factory/TR-1", "proj")])
-    n = rows(s, metadata.tables["sessions"].c.session, metadata.tables["sessions"].c.line_count)
-    ck("every session is counted", n == [("good", 2), ("old", 7)], n)
-    s.close()
-
-
-def counted_before():
-    """SQLite takes a NUL, so a version before TR-1707 stored such a reply and challenger line as
-    they were. The fills, which read them again at a start, do not add them twice."""
-    s = new_store()
-    if s.sessions_db.dialect != "sqlite":
-        s.close()
-        return
-    print("== rows an older version stored on SQLite ==")
-    envs = hold_in_duckdb(s)
-    s.record_reply_usage("old", f"ms{Z}g1", T0 + timedelta(seconds=2), "claude-sonnet-4-5", None,
-                         None, {"input_tokens": 3, "output_tokens": 5})
-    s._keep_challenges([e for e in envs if e.event_type == "challenge_commit"])
-    attempt("the usage fill completes", s._claude_usage_fill)
-    attempt("the challenger fill completes", s._challenges_fill)
-    got = rows(s, session_usage.c.session, session_usage.c.message)
-    want("the reply is counted once", got, [("good", "m41"), ("old", f"ms{Z}g1")])
-    got = rows(s, challenges.c.key_value, challenges.c.branch)
-    want("the challenger line is kept once", got, [("old", f"factory/TR-{Z}1")])
-    # the look for what is already there only reads: it takes no write lock, so ingest never waits
-    reply = {"session": "old", "message": f"ms{Z}g1", "model": None, "project": None,
-             "subagent": None}
-    got = begins(s, lambda: s._usage_without_nul([dict(reply)]))
-    want("the reply is looked up without a write lock", got, ["BEGIN"])
-    line = ("claude_code", "old", T0, "challenge_commit", f"factory/TR-{Z}1", None, "{}")
-    got = begins(s, lambda: s._challenges_without_nul([line]))
-    want("the challenger line is looked up without a write lock", got, ["BEGIN"])
-    s.close()
-
-
-def begins(s, call):
-    """Each BEGIN `call` sent to the SQLite session store."""
-    seen = []
-
-    def after(conn, cursor, statement, *a):
-        if statement.startswith("BEGIN"):
-            seen.append(statement)
-
-    engine = s.sessions_db.engine
-    event.listen(engine, "after_cursor_execute", after)
-    try:
-        call()
-    finally:
-        event.remove(engine, "after_cursor_execute", after)
-    return seen
-
-
-def moved(age, target):
-    """The move writes a session whose last line is inside the archive window into `session_lines`,
-    an older one into the archive: both with lines `age` old, taken from now."""
-    global T0
-    print(f"== the one-time move of a factory cell that holds them, to the {target} ==")
-    was, T0 = T0, (datetime.now(timezone.utc) - age).replace(microsecond=0)
-    try:
-        _moved(target)
-    finally:
-        T0 = was
-
-
-def _moved(target):
-    s = new_store()
-    envs = hold_in_duckdb(s)
-    with contextlib.redirect_stdout(io.StringIO()):
-        attempt("the sessions reconcile completes", lambda: session_ingest.reconcile_sessions(s))
-    out = io.StringIO()
-    stop = threading.Event()
-    timer = threading.Timer(60, stop.set)      # a move that never ends fails the checks below
-    timer.start()
-    with contextlib.redirect_stdout(out):
-        session_move.run(s, stop, pause=0, old_pause=0)
-    timer.cancel()
-    ck("the move runs to its end", "session move stopped" not in out.getvalue(), out.getvalue())
-    ck("and is complete", session_move.complete(s), out.getvalue())
-    got = rows(s, session_moves.c.session, session_moves.c.state)
-    ck("both sessions are moved and verified",
-       got == [("good", session_move.VERIFIED), ("old", session_move.VERIFIED)],
-       (got, out.getvalue()))
-    got = rows(s, session_moves.c.session, session_moves.c.target)
-    ck(f"to the {target}", got == [("good", target), ("old", target)], got)
-    in_table = len(rows(s, session_lines.c.session, session_lines.c.seq))
-    archived = sum(r[1] for r in rows(s, session_archive_parts.c.session,
-                                      session_archive_parts.c.lines))
-    expected = (len(envs), 0) if target == session_move.TARGET else (0, len(envs))
-    ck("with every line", (in_table, archived) == expected, (in_table, archived, len(envs)))
-    check_old_facts(s, "")
-    if target == session_move.TARGET:
-        drained(s, len(envs))
-    s.close()
-
-
-def drained(s, n):
-    """The M1 drain reads the same DuckDB lines again for a session with the todo mark."""
-    with s.sessions_db.begin() as c:
-        for table in (session_lines, session_turns, session_said, session_commands,
-                      session_messages, session_files):
-            c.execute(delete(table))
-    session_ingest.mark_drain_todo(s, ["good", "old"])
-    ck("the drain takes both sessions", attempt("the drain runs",
-                                                lambda: session_drain.drain(s)) == 2)
-    got = len(rows(s, session_lines.c.session, session_lines.c.seq))
-    ck("every line is back", got == n, (got, n))
-    got = rows(s, sessions.c.session, sessions.c.lines_complete, sessions.c.line_count)
-    ck("and the sessions are complete", got == [("good", True, 2), ("old", True, 7)], got)
-    got = rows(s, session_ingest_marks.c.name)
-    ck("with no drain mark left", not [r for r in got if r[0].startswith("session_drain")], got)
-    check_old_facts(s, "after the drain, ")
-
-
-def first_state_start():
-    """A cell that ran without a state database holds the NULs in its own sessions tables too; its
-    first start with Postgres copies them over and fills from DuckDB."""
-    print("== the first start with a state database ==")
-    if not PG:
-        print("  skip  TARES_TEST_PG is not set")
-        return
-    import psycopg
-    s = new_store(state_dsn="")
-    path = s.path
-    envs = hold_in_duckdb(s)
-    s.set_session_state("old", "idle", f"wai{Z}ting", T0)
-    s.record_reply_usage("old", f"ms{Z}g1", T0 + timedelta(seconds=2), "claude-sonnet-4-5", None,
-                         f"su{Z}b", {"input_tokens": 3, "output_tokens": 5})
-    s.set_session_station("old", f"proj-bui{Z}ld", "builder", f"orche{Z}strator", None, T0)
-    s.link_session(PROJECT, "old", f"re{Z}po")
-    s._keep_challenges([e for e in envs if e.event_type == "challenge_commit"])
-    # SQLite takes a key with its NUL and without as two rows; Postgres takes it once
-    for station in (f"tw{Z}in", "twin"):
-        s.record_reply_usage("old", station.replace("tw", "msg-tw"), T0, "claude-sonnet-4-5",
-                             None, None, {"input_tokens": 1, "output_tokens": 1})
-    s.close()
-    s.close()
-
-    schema = "t_" + uuid.uuid4().hex[:16]
-    with psycopg.connect(PG, autocommit=True) as c:
-        c.execute(f"CREATE SCHEMA {schema}")
-    dsn = f"{PG}?options=-csearch_path%3D{schema}"
-    got = attempt("the start succeeds", lambda: Store(path, state_dsn=dsn))
-    if got is None:
-        return
-    s = got
-    ck("on Postgres", s.sessions_db.dialect == "postgresql", s.sessions_db.dialect)
-    t = session_states.c
-    want("the state came over", rows(s, t.session, t.reason), [("old", "waiting")])
-    t = session_stations.c
-    want("the station", rows(s, t.session, t.station, t.parent),
-         [("old", "proj-build", "orchestrator")])
-    want("the session's project", rows(s, project_sessions.c.repo), [("repo",)])
-    t = session_usage.c
-    want("the reply once, beside the one the fill adds, and one of the twins",
-         rows(s, t.session, t.message, t.subagent),
-         [("good", "m41", None), ("old", "msg1", "sub"), ("old", "msg-twin", None)])
-    t = challenges.c
-    want("the challenger line once", rows(s, t.key_value, t.branch, t.tares_project),
-         [("old", "factory/TR-1", "proj")])
-
+    # the pass of a start over what was just posted adds nothing
+    attempt("the usage pass of a start completes", s._claude_usage_reprice)
+    no_nul_in_sessions_db(s)
     s.close()
 
 
@@ -566,11 +294,6 @@ def unit():
 def main():
     unit()
     posted()
-    held_by_duckdb()
-    counted_before()
-    moved(timedelta(hours=1), session_move.TARGET)
-    moved(timedelta(days=30), session_move.ARCHIVE)
-    first_state_start()
     print(f"\n{P} passed, {F} failed")
     raise SystemExit(1 if F else 0)
 

@@ -15,8 +15,8 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from sqlalchemy import (BigInteger, bindparam, case, distinct, false, func, literal, select, union,
-                        union_all, update)
+from sqlalchemy import (BigInteger, and_, bindparam, case, distinct, false, func, literal, or_, select,
+                        union, union_all, update)
 
 from . import claude_usage_hourly as hourly
 from . import session_ingest
@@ -65,6 +65,13 @@ class ClaudeUsageStore:
 
         def price(model, *tokens):
             return cost_usd(model or "", *(t or 0 for t in tokens))
+        # a read first, which takes no write lock: most starts have nothing to do
+        with self.sessions_db.read() as conn:
+            todo = conn.execute(select(u.c.session).where(or_(
+                and_(u.c.cost_usd.is_(None), u.c.model.is_not(None)), u.c.model == SYNTHETIC)
+            ).limit(1)).first()
+        if todo is None:
+            return
         with self.sessions_db.begin() as conn:
             hourly.hold(self, conn)
             # every session this transaction changes, found before it writes a row, so that their

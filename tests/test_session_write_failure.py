@@ -2,12 +2,10 @@
 
 The factory's pages read only the session store, so it is written first. While it takes no write,
 `/ingest` answers 503 and nothing is stored; the same lines sent again give what a delivery with no
-failure gives. A line the store will not take is acknowledged, its session is marked incomplete and
-the M1 drain (`session_drain`) copies it from DuckDB later; one that can never be stored is given up
-once. With an archive the factory keeps accepted lines out of DuckDB (TR-1647), so the session store
-is their only copy: a batch whose session can be neither counted nor marked is refused, a drain that
-could not write facts and turns keeps the session marked, and a rebuild never drops a line only the
-store holds.
+failure gives. A line the store will not take is acknowledged, its session is counted and marked
+incomplete, and its lines are not kept: the session store is the only copy of the lines (TR-1815), so
+there is nothing to copy them from later. A batch whose session can be neither counted nor marked is
+refused.
 
 Plain:                python tests/test_session_write_failure.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -42,12 +40,12 @@ os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp(prefix="tares-wri
 import httpx  # noqa: E402
 from sqlalchemy import delete, func, select, update  # noqa: E402
 
-from tares import metrics, session_drain, session_ingest, session_move  # noqa: E402
+from tares import metrics, session_archive, session_ingest  # noqa: E402
 from tares.envelope import Envelope, now_utc  # noqa: E402
 from tares.session_store.tables import challenges as challenges_table  # noqa: E402
 from tares.session_store.tables import (session_commands, session_files,  # noqa: E402
-                                        session_ingest_marks, session_lines, session_messages,
-                                        session_said, session_turns, sessions)
+                                        session_lines, session_messages, session_said,
+                                        session_turns, sessions)
 from tares.store import Store  # noqa: E402
 
 SRC = "claude_code"
@@ -107,31 +105,6 @@ def down(s):
     return patched(s.sessions_db, "begin", Down)
 
 
-class Spy:
-    """The DuckDB connection, keeping every statement that reads `events`."""
-
-    def __init__(self, con):
-        self.con, self.seen = con, []
-
-    def execute(self, sql, *args, **kw):
-        if re.search(r"\bFROM\s+events\b", sql) and not sql.lstrip().upper().startswith("DELETE"):
-            self.seen.append(sql)
-        return self.con.execute(sql, *args, **kw)
-
-    def __getattr__(self, name):
-        return getattr(self.con, name)
-
-
-@contextlib.contextmanager
-def spying(s):
-    spy = Spy(s.con)
-    s.con = spy
-    try:
-        yield spy.seen
-    finally:
-        s.con = spy.con
-
-
 def refuse(s):
     """Make the session store refuse every line whose payload holds REFUSE, and nothing else."""
     with s.sessions_db.begin() as c:
@@ -180,13 +153,9 @@ def clear_facts(s, sid):
             c.execute(delete(t).where(t.c.session == sid))
 
 
-def open_store(moved=True):
-    """A new store. `moved`: the one-time move is complete (planned with nothing to move)."""
+def open_store():
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
-    s = Store(os.path.join(tempfile.mkdtemp(dir=_TMP), "t"))
-    if moved:
-        session_move.plan(s)
-    return s
+    return Store(os.path.join(tempfile.mkdtemp(dir=_TMP), "t"))
 
 
 def env(sid, tag, i, etype, text, content, payload=None, source=SRC):
@@ -233,23 +202,6 @@ def set_row(s, sid, **values):
 def rows_of(s, sid):
     with s.sessions_db.begin() as c:
         return c.execute(select(func.count()).where(session_lines.c.session == sid)).scalar()
-
-
-def marks(s):
-    with s.sessions_db.begin() as c:
-        return sorted(n for (n,) in c.execute(select(session_ingest_marks.c.name)).all()
-                      if n.startswith("session_drain"))
-
-
-def duck(s, sid):
-    with s._lock:
-        return s.con.execute("SELECT count(*) FROM events WHERE key_value = ?", [sid]).fetchone()[0]
-
-
-def drop_duck(s, sid=None):
-    with s._lock:
-        s.con.execute("DELETE FROM events WHERE source = ?" + (" AND key_value = ?" if sid else ""),
-                      [SRC] + ([sid] if sid else []))
 
 
 def challenges(s):
@@ -343,9 +295,9 @@ def unavailable(want):
     with down(s), warnings_said() as said:
         e, _ = raised(lambda: s.append(batch))
     ck("append raises LinesNotStored", isinstance(e, session_ingest.LinesNotStored), repr(e))
-    ck("no line, count or fact is stored, in either database",
-       row(s, "s") is None and rows_of(s, "s") == 0 and duck(s, "s") == 0
-       and not any(facts(s, "s").values()), (row(s, "s"), rows_of(s, "s"), duck(s, "s")))
+    ck("no line, count or fact is stored",
+       row(s, "s") is None and rows_of(s, "s") == 0
+       and not any(facts(s, "s").values()), (row(s, "s"), rows_of(s, "s")))
     mine = [m for m in said if "challenger line" in m]
     ck("the lost verdict is said once, naming the session and the commit",
        challenges(s) == 0 and len(mine) == 1 and mine[0].startswith("1 challenger line(s) lost")
@@ -357,14 +309,12 @@ def unavailable(want):
     ck("it is not brought back once the store takes writes again", challenges(s) == 0, challenges(s))
     ck("sent again, the factory holds what a delivery with no failure holds",
        not differs(view(s, "s", "ts"), want), differs(view(s, "s", "ts"), want))
-    ck("each line is stored once, in the session store alone",
-       rows_of(s, "s") == 6 and duck(s, "s") == 0, (rows_of(s, "s"), duck(s, "s")))
+    ck("each line is stored once", rows_of(s, "s") == 6, rows_of(s, "s"))
     had = lost()
     s.append([commit])
     s.append([commit])
     ck("the challenger's line sent again is kept once, and not counted as lost",
        challenges(s) == 1 and lost() == had, (challenges(s), had, lost()))
-    ck("nothing is left to drain", session_drain.drain(s) == 0 and marks(s) == [], marks(s))
     with patched(session_ingest, "_write_whole", lambda *a: (_ for _ in ()).throw(AssertionError())):
         e, _ = raised(lambda: s.append([]))
     ck("an empty batch writes nothing", e is None, repr(e))
@@ -391,221 +341,35 @@ def unavailable(want):
         e, _ = raised(lambda: s.append(work("a", "ta")[2:] + work("b", "tb2")))
     ck("the batch is refused", isinstance(e, session_ingest.LinesNotStored), repr(e))
     ck("what the second try had written is taken back",
-       (row(s, "a"), rows_of(s, "a")) == before and row(s, "b") is None and duck(s, "a") == 0,
+       (row(s, "a"), rows_of(s, "a")) == before and row(s, "b") is None,
        ((row(s, "a"), rows_of(s, "a")), before, row(s, "b")))
 
-    print("== DuckDB fails after the store was written ==")
-    s = open_store()
-    s.append(work("s", "ts")[:2])
-    before = (row(s, "s"), rows_of(s, "s"))
-
-    def broken(*a, **k):
-        raise RuntimeError("DuckDB would not write")
-
-    with patched(s, "_append", broken):
-        e, _ = raised(lambda: s.append(work("s", "ts")[2:]))
-    ck("the error reaches the caller", "DuckDB" in str(e), repr(e))
-    ck("the store's write is taken back", (row(s, "s"), rows_of(s, "s")) == before,
-       (row(s, "s"), rows_of(s, "s"), before))
-    with patched(s, "_append", broken):
-        e, _ = raised(lambda: s.append(work("new", "tn")))
-    ck("a session the batch made is removed again", row(s, "new") is None and rows_of(s, "new") == 0,
-       row(s, "new"))
-    s.append(work("s", "ts")[2:])
-    ck("sent again, it equals a delivery with no failure", not differs(view(s, "s", "ts"), want),
-       differs(view(s, "s", "ts"), want))
     s.close()
 
 
 def refused(want):
-    print("== the store refuses a line: acknowledged, marked, copied by the drain ==")
+    print("== the store refuses a line: acknowledged, counted and marked, its lines not kept ==")
     s = open_store()
     refuse(s)
     e, out = raised(lambda: s.append(work("s", "ts", mark="REFUSE") + work("ok", "tk")))
     ck("the batch is acknowledged", e is None, repr(e))
-    ck("the daemon says which session was refused",
-       "refused 6 claude_code line(s) of session s" in out, out)
+    ck("the daemon says which session was refused, and that its lines are not kept",
+       "refused 6 claude_code line(s) of session s" in out and "the lines are not kept" in out, out)
     ok = view(s, "ok", "tk")
     ck("the other session of the batch is whole", not differs(ok, want), differs(ok, want))
     ck("the refused session is counted and marked incomplete",
        row(s, "s") == (6, 3, 1, False) and rows_of(s, "s") == 0, (row(s, "s"), rows_of(s, "s")))
-    ck("DuckDB keeps its lines", duck(s, "s") == 6, duck(s, "s"))
+    got = facts(s, "s")
+    ck("its facts and turns are written on their own", all(len(v) == 1 for v in got.values()), got)
     e, _ = raised(lambda: s.append([env("s", "ts", 7, "assistant", "one more", [])]))
     ck("a later line is not held up", e is None and row(s, "s")[0] == 7 and rows_of(s, "s") == 1,
        (repr(e), row(s, "s"), rows_of(s, "s")))
     accept(s)
     page = s.key_events_from(SRC, "s", limit=100)[0]
-    ck("until the drain, the page shows only what the table holds", len(page) == 1, len(page))
-    n, out = said(lambda: session_drain.drain(s))
-    ck("the drain takes the one marked session and says so",
-       n == 1 and "M1 drain: session s rebuilt" in out and "7 line(s) stored" in out, (n, out))
-    ck("counts and the page are whole again",
-       row(s, "s") == (7, 3, 1, True) and rows_of(s, "s") == 7, (row(s, "s"), rows_of(s, "s")))
-    # the same lines with no refusal, in a store of their own
-    other = open_store()
-    other.append(work("s", "ts", mark="REFUSE"))
-    other.append([env("s", "ts", 7, "assistant", "one more", [])])
-    a, b = view(s, "s", "ts"), view(other, "s", "ts")
-    ck("lines, counts, facts and turns equal a run with no refusal", not differs(a, b),
-       differs(a, b))
-    other.close()
-    with spying(s) as read:
-        n, out = said(lambda: session_drain.drain(s))
-    ck("a second drain takes nothing, reads nothing and changes nothing",
-       n == 0 and not read and not out and view(s, "s", "ts") == a, (n, read, out))
-
-    print("== a line that can never be stored ==")
-    s = open_store()
-    refuse(s)
-    raised(lambda: s.append(work("s", "ts", mark="REFUSE")))
-    n, out = said(lambda: session_drain.drain(s))
-    ck("the drain stores the lines it can and gives the other up",
-       n == 1 and rows_of(s, "s") == 5 and "5 line(s) stored, 1 cannot be stored" in out,
-       (n, rows_of(s, "s"), out))
-    ck("the session stays incomplete, its counts kept", row(s, "s") == (6, 3, 1, False), row(s, "s"))
-    ck("with the gave-up mark", marks(s) == [session_ingest.DRAIN_GAVE_UP + "s"], marks(s))
-    got = facts(s, "s")
-    ck("its facts and turns are there", all(len(v) == 1 for v in got.values()), got)
-    with spying(s) as read:
-        again, out = said(lambda: session_drain.drain(s))
-    ck("it is not tried again: no read, no log", again == 0 and not read and not out,
-       (again, read, out))
-    s.append([env("s", "ts", 7, "assistant", "one more", [])])
-    ck("a good line after it is stored, with no new try",
-       rows_of(s, "s") == 6 and session_drain.drain(s) == 0, rows_of(s, "s"))
-    raised(lambda: s.append([env("s", "ts", 8, "assistant", "REFUSE again", [],
-                                 {"note": "REFUSE"})]))
-    n, out = said(lambda: session_drain.drain(s))
-    ck("a new refusal is tried once more", n == 1 and rows_of(s, "s") == 6 and row(s, "s")[0] == 8,
-       (n, rows_of(s, "s"), row(s, "s"), out))
-    ck("and given up again", session_drain.drain(s) == 0)
-
-    print("== a counted line neither database holds ==")
-    s = open_store()
-    s.append(work("s", "ts"))
-    drop_duck(s, "s")
-    with s.sessions_db.begin() as c:
-        c.execute(delete(session_lines).where(session_lines.c.session == "s",
-                                              session_lines.c.seq == 3))
-    set_row(s, "s", lines_complete=False)
-    n, out = said(lambda: session_drain.drain(s))
-    ck("it is not called complete, and the count is not lowered",
-       n == 1 and row(s, "s") == (6, 3, 1, False) and rows_of(s, "s") == 5, (n, row(s, "s"), out))
-    ck("and is not tried again", session_drain.drain(s) == 0)
-
-
-def gates(want):
-    print("== when the drain does not run ==")
-    s = open_store()
-    ck("an empty store has nothing to drain", session_drain.drain(s) == 0)
-    s.append(work("s", "ts"))
-    drop_duck(s)
-    with spying(s) as read:
-        n = session_drain.drain(s)
-    ck("with the DuckDB lines gone and nothing marked, it reads nothing", n == 0 and not read,
-       (n, read))
-
-    s = open_store(moved=False)
-    s.append(work("s", "ts"))
-    set_row(s, "s", lines_complete=False)
-    with spying(s) as read:
-        n = session_drain.drain(s)
-    ck("before the move is complete it takes nothing", n == 0 and not read, (n, read))
-
-    s = open_store()
-    s.append(work("s", "ts"))
-    set_row(s, "s", lines_complete=False, lines_origin=None)
-    ck("a session not born in the table is left to DuckDB", session_drain.drain(s) == 0)
-
-    print("== a try that fails as a whole ==")
-    s = open_store()
-    refuse(s)
-    raised(lambda: s.append(work("s", "ts", mark="REFUSE")))
-    accept(s)
-
-    def gone(*a):
-        raise RuntimeError("the sessions database went away")
-
-    with patched(session_move, "_existing", gone):
-        n, out = said(lambda: session_drain.drain(s))
-        n2, out2 = said(lambda: session_drain.drain(s))
-    ck("the session stays marked", row(s, "s")[3] is False and n == 1 and n2 == 1, (row(s, "s"), n, n2))
-    ck("and it is said once", out.count("M1 drain of session s failed") == 1 and not out2,
-       (out, out2))
-    said(lambda: session_drain.drain(s))
-    ck("the next pass repairs it", row(s, "s")[3] is True and rows_of(s, "s") == 6, row(s, "s"))
-
-    print("== a pass takes at most its limit ==")
-    s = open_store()
-    refuse(s)
-    for i in range(3):
-        raised(lambda: s.append(work(f"s{i}", f"t{i}", mark="REFUSE")))
-    accept(s)
-    n, _ = said(lambda: session_drain.drain(s, limit=2))
-    m, _ = said(lambda: session_drain.drain(s, limit=2))
-    ck("two, then the third", (n, m) == (2, 1), (n, m))
-
-    print("== the background job runs it ==")
-    s = open_store()
-    refuse(s)
-    raised(lambda: s.append(work("s", "ts", mark="REFUSE")))
-    accept(s)
-    said(lambda: session_ingest._drain_pass(s))
-    ck("one pass of the job repairs the session", row(s, "s") == (6, 3, 1, True), row(s, "s"))
-
-    print("== the move could not fill a session's facts and turns ==")
-    s = open_store()
-    s.append(work("s", "ts"))
-    with s.sessions_db.begin() as c:
-        for t in (session_commands, session_messages, session_turns, session_said, session_files):
-            c.execute(delete(t))
-
-    def no_fill(*a):
-        raise RuntimeError("the fill broke")
-
-    with patched(session_ingest, "_fill_chunk", no_fill):
-        _, out = said(lambda: session_move._fill(s, [SRC], ["s"]))
-    ck("the move says they are marked for the M1 drain",
-       "not filled (RuntimeError: the fill broke); marked, so the M1 drain fills them" in out, out)
-    ck("the session has the todo mark", marks(s) == [session_ingest.DRAIN_TODO + "s"], marks(s))
-    said(lambda: session_drain.drain(s))
-    got = view(s, "s", "ts")
-    ck("the drain fills them", not differs(got, want) and marks(s) == [], (differs(got, want), marks(s)))
-
-    print("== a purge forgets the marks ==")
-    s = open_store()
-    refuse(s)
-    raised(lambda: s.append(work("s", "ts", mark="REFUSE")))
-    said(lambda: session_drain.drain(s))
-    session_ingest.mark_drain_todo(s, ["s"])
-    assert len(marks(s)) == 2, marks(s)
-    s.purge_events(SRC)
-    ck("no drain mark is left", marks(s) == [], marks(s))
-
-    print("== held-back lines (TR-1647): a refused session's lines go to DuckDB ==")
-    with patched(session_ingest, "caught_up", lambda st: True):
-        s = open_store()
-        s.append(work("h", "th"))
-        ck("an accepted line is held back", duck(s, "h") == 0 and rows_of(s, "h") == 6,
-           (duck(s, "h"), rows_of(s, "h")))
-        refuse(s)
-        raised(lambda: s.append([env("h", "th", 7, "assistant", "no", [], {"note": "REFUSE"}),
-                                 env("g", "tg", 1, "assistant", "yes", [])]))
-        ck("the refused session's line is written to DuckDB", duck(s, "h") == 1, duck(s, "h"))
-        ck("the accepted one of the same batch is held back", duck(s, "g") == 0, duck(s, "g"))
-        s.append([env("h", "th", 8, "assistant", "after", [])])
-        ck("and its next lines too, while it is marked", duck(s, "h") == 2, duck(s, "h"))
-        accept(s)
-        said(lambda: session_drain.drain(s))
-        ck("the drain keeps the held lines and adds the DuckDB ones",
-           row(s, "h") == (8, 3, 1, True) and rows_of(s, "h") == 8, (row(s, "h"), rows_of(s, "h")))
-        s.append([env("h", "th", 9, "assistant", "held again", [])])
-        ck("once the drain cleared it, its lines are held back again",
-           duck(s, "h") == 2 and rows_of(s, "h") == 9, (duck(s, "h"), rows_of(s, "h")))
-        with down(s):
-            e, _ = raised(lambda: s.append([env("h", "th", 10, "assistant", "down", [])]))
-        ck("with the store down nothing is written anywhere",
-           isinstance(e, session_ingest.LinesNotStored) and duck(s, "h") == 2, (repr(e), duck(s, "h")))
+    ck("the page shows what the table holds", len(page) == 1, len(page))
+    ck("and the session stays incomplete, so the archive leaves it", row(s, "s")[3] is False
+       and "s" not in session_archive.due(s.sessions_db, NOW + timedelta(days=30)))
+    s.close()
 
 
 def unmarkable():
@@ -614,7 +378,7 @@ def unmarkable():
         s = open_store()
         if first:
             s.append(work("h", "th")[:first])
-        state = lambda: [(row(s, x), rows_of(s, x), duck(s, x)) for x in ("g", "h")]
+        state = lambda: [(row(s, x), rows_of(s, x)) for x in ("g", "h")]
         before = state()
         batch = work("h", "th")[first:] + work("g", "tg")     # g sorts first: written, taken back
         refuse_row(s, "h")
@@ -622,13 +386,12 @@ def unmarkable():
         ck(f"{what}: the batch is not acknowledged",
            isinstance(e, session_ingest.LinesNotStored), repr(e))
         ck(f"{what}: the daemon says which session", "does not take the row of session h" in out, out)
-        ck(f"{what}: nothing of the batch is stored in either database", state() == before,
+        ck(f"{what}: nothing of the batch is stored", state() == before,
            (state(), before))
         accept_row(s)
         s.append(batch)
         ck(f"{what}: sent again, every line is there once",
-           [rows_of(s, x) for x in ("g", "h")] == [6, 6] and row(s, "h") == (6, 3, 1, True)
-           and duck(s, "h") == 0, (state(),))
+           [rows_of(s, x) for x in ("g", "h")] == [6, 6] and row(s, "h") == (6, 3, 1, True), (state(),))
         s.close()
 
 
@@ -641,9 +404,7 @@ def verdict_of_a_refused_row():
     with warnings_said() as warned:
         e, _ = raised(lambda: s.append(batch))
     ck("append raises LinesNotStored", isinstance(e, session_ingest.LinesNotStored), repr(e))
-    ck("no line is stored in either database",
-       (row(s, "h"), rows_of(s, "h"), duck(s, "h")) == (None, 0, 0),
-       (row(s, "h"), rows_of(s, "h"), duck(s, "h")))
+    ck("no line is stored", (row(s, "h"), rows_of(s, "h")) == (None, 0), (row(s, "h"), rows_of(s, "h")))
     ck("the verdict is kept: the database takes writes, only that row is refused",
        challenges(s) == 1, challenges(s))
     ck("and is not said or counted as lost",
@@ -656,90 +417,16 @@ def verdict_of_a_refused_row():
     s.close()
 
 
-def unfilled(want):
-    print("== the drain could not write facts and turns: marked until both land (F3) ==")
-    s = open_store()
-    refuse(s)
-    raised(lambda: s.append(work("s", "ts", mark="REFUSE")))
-    accept(s)
-    clear_facts(s, "s")
-
-    def broken(*a, **k):
-        raise RuntimeError("would not write")
-
-    todo = [session_ingest.DRAIN_TODO + "s"]
-    with patched(session_ingest, "_write_turns", broken):
-        n, out = said(lambda: session_drain.drain(s))
-        ck("the lines are stored and the session is marked",
-           n == 1 and rows_of(s, "s") == 6 and row(s, "s")[3] is True and marks(s) == todo,
-           (n, rows_of(s, "s"), row(s, "s"), marks(s)))
-        ck("and the daemon says it tries again",
-           "were not written (RuntimeError: would not write); tried again" in out, out)
-        n, out = said(lambda: session_drain.drain(s))
-        ck("the next pass tries again and says it once",
-           n == 1 and not out and marks(s) == todo, (n, out, marks(s)))
-    with patched(session_ingest, "_write_facts", broken):
-        said(lambda: session_drain.drain(s))
-        ck("facts failing keeps it marked too", marks(s) == todo and not facts(s, "s")["session_turns"],
-           (marks(s), facts(s, "s")))
-    s.append([env("s", "ts", 7, "assistant", "while marked", [])])
-    ck("while marked, its new lines are written to DuckDB too",
-       duck(s, "s") == 7 and rows_of(s, "s") == 7, (duck(s, "s"), rows_of(s, "s")))
-    n, _ = said(lambda: session_drain.drain(s))
-    got = facts(s, "s")
-    ck("once both write, they are there and the mark is gone",
-       n == 1 and all(len(got[k]) == len(want[k]) + (k == "session_said") for k in got)
-       and marks(s) == []                                   # one more line said while marked
-       and rows_of(s, "s") == 7, (n, got, marks(s)))
-    s.append([env("s", "ts", 8, "assistant", "after", [])])
-    ck("and its lines are held back again", duck(s, "s") == 7 and rows_of(s, "s") == 8,
-       (duck(s, "s"), rows_of(s, "s")))
-
-    print("== a line given up and facts not written: both are remembered ==")
-    s = open_store()
-    refuse(s)
-    raised(lambda: s.append(work("s", "ts", mark="REFUSE")))
-    clear_facts(s, "s")
-    with patched(session_ingest, "_write_turns", broken):
-        _, out = said(lambda: session_drain.drain(s))
-    both = [session_ingest.DRAIN_GAVE_UP + "s", session_ingest.DRAIN_TODO + "s"]
-    ck("the gave-up mark and the todo mark", marks(s) == both and "and is not tried again" not in out,
-       (marks(s), out))
-    said(lambda: session_drain.drain(s))
-    ck("the facts land and only the line stays given up",
-       marks(s) == both[:1] and len(facts(s, "s")["session_turns"]) == 1
-       and session_drain.drain(s) == 0, (marks(s), facts(s, "s")))
-
-    print("== a rebuild never drops a line only the session store holds ==")
-    s = open_store()
-    s.append(work("s", "ts", mark="REFUSE"))               # accepted: held, in the store alone
-    ck("the six lines are in the store alone", (rows_of(s, "s"), duck(s, "s")) == (6, 0),
-       (rows_of(s, "s"), duck(s, "s")))
-    refuse(s)                                              # now one of them would not go back in
-    raised(lambda: s.append([env("s", "ts", 7, "assistant", "no", [], {"note": "REFUSE"})]))
-    _, out = said(lambda: session_drain.drain(s))
-    ck("the try is dropped whole: the six stay, the session stays marked",
-       rows_of(s, "s") == 6 and duck(s, "s") == 1 and row(s, "s")[3] is False and marks(s) == []
-       and "only the session store holds" in out, (rows_of(s, "s"), row(s, "s"), marks(s), out))
-    accept(s)
-    said(lambda: session_drain.drain(s))
-    ck("the next pass stores all seven", rows_of(s, "s") == 7 and row(s, "s")[3] is True,
-       (rows_of(s, "s"), row(s, "s")))
-
-
 def tail():
     print("== the newest readable lines (F2) ==")
     for what, days in (("table", 0), ("archive", 20)):
-        s = open_store(moved=False)
+        s = open_store()
         lines = work("s", "ts")
         for x in lines:
             x.event_time -= timedelta(days=days)
-        # a session whose lines are in DuckDB too, so the move has it to archive
-        with patched(s, "_lines_skip_duckdb", lambda: False):
-            s.append(lines)
-        session_move.plan(s)
+        s.append(lines)
         if days:
-            said(lambda: session_move.move_old(s))
+            said(lambda: session_archive.archive_pass(s, None, NOW))
         set_row(s, "s", line_count=12)      # six lines counted that cannot be read
         got, _ = said(lambda: s.key_events_from(SRC, "s", limit=3, offset=9, tail={}))
         start = {}
@@ -763,18 +450,12 @@ def wire(sid, etype, ago, content, **more):
 async def route():
     print("== through /ingest and the station page ==")
     from tares.daemon import make_app
-    with patched(session_move, "MOVE_ENABLED", False):      # the test plans the move itself
-        app = make_app()
+    app = make_app()
     mk = lambda: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                    headers={"Authorization": f"Bearer {TOKEN}"})
     store = app.state.store
     async with app.router.lifespan_context(app):
         async with mk() as cx:
-            for _ in range(200):
-                if session_ingest.caught_up(store):
-                    break
-                await asyncio.sleep(0.05)
-            session_move.plan(store)
             body = [wire("w", "user", 9, "build the footer"),
                     wire("w", "assistant", 8, [{"type": "text", "text": "running the tests"}]),
                     wire("w", "assistant", 7, [{"type": "text", "text": "done"}])]
@@ -784,18 +465,17 @@ async def route():
                        "factory_station": "shop-build-m1"}
             r = await cx.post(f"/ingest/{SRC}", json=[station])
             assert r.status_code == 202, r.text
-            held = (row(store, "w"), duck(store, "w"))
+            held = row(store, "w")
             with down(store):
                 r = await cx.post(f"/ingest/{SRC}", json=body)
             ck("while the store takes no write, /ingest answers 503 and says to send again",
                r.status_code == 503 and "send the lines again" in r.text, (r.status_code, r.text))
-            ck("and keeps nothing of the batch", (row(store, "w"), duck(store, "w")) == held,
-               (row(store, "w"), duck(store, "w"), held))
+            ck("and keeps nothing of the batch", row(store, "w") == held, (row(store, "w"), held))
             r = await cx.post(f"/ingest/{SRC}", json=body)
             ck("sent again, it is taken", r.status_code == 202, r.text)
-            n = held[0][0] + 3
-            ck("each line once", row(store, "w")[0] == n and rows_of(store, "w") == n
-               and duck(store, "w") == 0, (row(store, "w"), rows_of(store, "w"), duck(store, "w")))
+            n = held[0] + 3
+            ck("each line once", row(store, "w")[0] == n and rows_of(store, "w") == n,
+               (row(store, "w"), rows_of(store, "w")))
             set_row(store, "w", line_count=n + 5)
             d = (await cx.get("/api/crew/shop-build-m1",
                               params={"recent": 2, "conversation": 2})).json()
@@ -812,10 +492,8 @@ def main():
     want = baseline()
     unavailable(want)
     refused(want)
-    gates(want)
     unmarkable()
     verdict_of_a_refused_row()
-    unfilled(want)
     tail()
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
     asyncio.run(route())

@@ -551,7 +551,7 @@ def a_large_write_holds_few_locks():
 
 def nothing_to_fill():
     s = Store(os.path.join(tempfile.mkdtemp(), "t"))
-    ck("the start-up fill of an empty store locks nothing", locked_by(s._claude_usage_reprice) == [[]])
+    ck("the start-up pass of an empty store locks nothing", locked_by(s._claude_usage_reprice) in ([], [[]]))
     s._usage_forget_project("nobody")
     reply(s, "s1", "first", T0)
     with s.sessions_db.begin() as conn:                # no state row yet: nothing is covered

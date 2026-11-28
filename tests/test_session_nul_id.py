@@ -2,10 +2,8 @@
 
 Postgres text holds no NUL. A posted line loses the NULs of its `sessionId` before anything counts
 or stores it, so SQLite and Postgres keep it under the same id; an id that was nothing but NULs is
-no id. Lines DuckDB already holds under an id with a NUL (stored before this) are passed over by the
-fills and the one-time move on Postgres, which used to raise on them at every start, and the other
-sessions are filled and moved. A recorded command under such an id does not fail the ticket view's
-check of what the caller may read (TR-1710).
+no id. A recorded command under such an id does not fail the ticket view's check of what the caller
+may read (TR-1710).
 
 Plain:                python tests/test_session_nul_id.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -17,22 +15,17 @@ import io
 import os
 import sys
 import tempfile
-import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sqlalchemy import select  # noqa: E402
 
-from tares import factory_api, session_ingest, session_move  # noqa: E402
+from tares import factory_api  # noqa: E402
 from tares.session_map import ClaudeCodeLines  # noqa: E402
-from tares.envelope import Envelope  # noqa: E402
-from tares.session_store.tables import (challenges, session_commands,  # noqa: E402
-                                        session_meters, session_moves, session_states,
+from tares.session_store.tables import (session_meters, session_states,  # noqa: E402
                                         session_turns, session_usage, sessions)
 from tares.store import Store  # noqa: E402
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _old_cell import append_duckdb_first, forget_fills  # noqa: E402
 
 SRC = "claude_code"
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
@@ -85,11 +78,6 @@ def column(s, col):
         return sorted(set(c.execute(select(col)).scalars()))
 
 
-def duck(s, sql):
-    with s._lock:
-        return [r[0] for r in s.con.execute(sql).fetchall()]
-
-
 def posted():
     print("== a posted batch ==")
     s = open_store()
@@ -118,89 +106,6 @@ def posted():
                            ("session_meters", session_meters.c.session, ["bad"])):
         got = column(s, col)
         ck(f"{name} holds {ids}", got == ids, got)
-    got = duck(s, "SELECT DISTINCT key_value FROM events WHERE key_value LIKE '%' || chr(0) || '%'")
-    ck("no id in DuckDB has a NUL", got == [], got)
-    s.close()
-
-
-def hold_in_duckdb(s):
-    """Three sessions' lines in DuckDB alone, one under an id with a NUL: how a cell upgraded from
-    before TR-1703 holds them: written to DuckDB alone (tests/_old_cell.py, record=False)."""
-    def env(sid, etype, sec, text, payload):
-        return Envelope(source=SRC, source_type="agent_session", key_value=sid, event_type=etype,
-                        text=text, event_time=T0 + timedelta(seconds=sec), payload=payload,
-                        labels={"session": sid, "type": etype})
-
-    def lines(sid, n):
-        block = {"type": "tool_use", "id": f"t{n}", "name": "Bash", "input": {"command": "ls"}}
-        return [env(sid, "user", n, f"turn {n}", user(sid, n)),
-                env(sid, "tool_use", n + 1, "→ Bash(ls)", {"message": {"content": [block]}}),
-                env(sid, "assistant", n + 2, f"words {n + 2}", reply(sid, n + 2)),
-                env(sid, "challenge_commit", n + 3, "Challenger reviewed commit abc",
-                    {"challenge": {"verdict": "PASS", "sha": f"abc{n}"}})]
-
-    keep = s._keep_challenges
-    s._keep_challenges = lambda *a, **k: None          # DuckDB has the lines, nothing else does
-    try:
-        append_duckdb_first(s, lines("one", 10) + lines(ODD, 20) + lines("two", 30), record=False)
-    finally:
-        s._keep_challenges = keep
-    forget_fills(s)                                   # the start's fills read them
-
-
-def held_by_duckdb():
-    """Lines stored under an id with a NUL before TR-1703, and not yet in the sessions tables: what
-    the fills of a start find."""
-    print("== lines DuckDB already holds under an id with a NUL ==")
-    s = open_store()
-    hold_in_duckdb(s)
-    pg = s.sessions_db.dialect == "postgresql"
-    want = ["one", "two"] if pg else [ODD, "one", "two"]     # SQLite takes the id as it is
-    for turn in (1, 2):
-        attempt(f"the turns fill completes, pass {turn}", lambda: session_ingest.fill_turns(s, chunk=2))
-    got = column(s, session_turns.c.session)
-    ck("every other session's turns are filled", got == want, got)
-    ck("and it set its watermark", session_ingest._turns_mark(s) is not None)
-    attempt("the facts fill completes", lambda: session_ingest.fill_facts(s))
-    got = column(s, session_commands.c.session)
-    ck("with the other sessions' commands", got == want, got)
-    attempt("the sessions reconcile completes", lambda: session_ingest.reconcile_sessions(s))
-    got = column(s, sessions.c.session)
-    ck("with the other sessions counted", got == want, got)
-    attempt("the usage fill of a start completes", s._claude_usage_fill)
-    got = column(s, session_usage.c.session)
-    ck("with the other sessions' replies", got == want, got)
-    attempt("the challenger fill of a start completes", s._challenges_fill)
-    got = column(s, challenges.c.key_value)
-    ck("with the other sessions' challenger lines", got == want, got)
-    s.close()
-
-
-def moved():
-    """The one-time move of a factory cell that holds such lines (`session_move.plan` raised on
-    Postgres at every start, so nothing moved)."""
-    print("== the move of a factory cell that holds them ==")
-    s = open_store()
-    hold_in_duckdb(s)
-    pg = s.sessions_db.dialect == "postgresql"
-    want = ["one", "two"] if pg else [ODD, "one", "two"]
-    with contextlib.redirect_stdout(io.StringIO()):
-        session_ingest.reconcile_sessions(s)
-    out = io.StringIO()
-    stop = threading.Event()
-    timer = threading.Timer(60, stop.set)      # a move that never ends fails the checks below
-    timer.start()
-    with contextlib.redirect_stdout(out):
-        session_move.run(s, stop, pause=0, old_pause=0)
-    timer.cancel()
-    ck("the move runs to its end", "session move stopped" not in out.getvalue(), out.getvalue())
-    ck("and is complete", session_move.complete(s))
-    with s.sessions_db.begin() as c:
-        got = sorted(c.execute(select(session_moves.c.session, session_moves.c.state)).all())
-    ck("every other session is moved and verified",
-       [tuple(r) for r in got] == [(sid, session_move.VERIFIED) for sid in want], got)
-    kept = duck(s, "SELECT count(*) FROM events WHERE key_value LIKE '%' || chr(0) || '%'")
-    ck("DuckDB keeps the lines under the id with a NUL", kept == [4], kept)
     s.close()
 
 
@@ -236,8 +141,6 @@ def ticket_view():
 
 def main():
     posted()
-    held_by_duckdb()
-    moved()
     ticket_view()
     print(f"\n{P} passed, {F} failed")
     raise SystemExit(1 if F else 0)

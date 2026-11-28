@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from alembic import command  # noqa: E402
-from sqlalchemy import func, inspect, select, text  # noqa: E402
+from sqlalchemy import inspect, select, text  # noqa: E402
 
 from tares import metrics, session_archive, session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
@@ -37,8 +37,6 @@ from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import (metadata, session_archive_parts,  # noqa: E402
                                         session_lines, sessions)
 from tares.store import Store  # noqa: E402
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _old_cell import append_duckdb_first  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
@@ -66,17 +64,13 @@ def line(session, etype="assistant", payload=None, sec=None, days=0):
 
 
 def open_store():
-    """A cell that writes its lines to DuckDB first, then counts them, as a platform cell did before
-    Tares 2.0 (tests/_old_cell.py): what this suite was written against."""
-    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
-    s.append = lambda envs: append_duckdb_first(s, envs)
-    return s
+    return Store(os.path.join(tempfile.mkdtemp(), "t"))
 
 
 def ready(s, *names, n=3, days=0):
-    """Sessions `names` with `n` lines each, reconciled so lines_complete is true."""
+    """Sessions `names` with `n` lines each; lines_complete is true from the first batch."""
     s.append([line(name, "assistant", days=days) for name in names for _ in range(n)])
-    session_ingest.reconcile_sessions(s)
+    session_ingest.repair_table_sessions(s)
 
 
 def rows_of(s, session):
@@ -101,11 +95,6 @@ def flags(s, session):
         r = c.execute(select(sessions.c.line_count, sessions.c.lines_complete).where(
             sessions.c.session == session)).first()
     return None if r is None else (r[0], bool(r[1]))
-
-
-def duck_count(s, session):
-    with s._lock:
-        return s.con.execute("SELECT count(*) FROM events WHERE key_value = ?", [session]).fetchone()[0]
 
 
 def unzip(data):
@@ -238,7 +227,7 @@ def file_archive():
     b = FileBackend(root)
     ready(s, "old", "fresh", n=3)
     s.append([line("fresh", "assistant", days=26, sec=5)])          # last line 4 days before NOW
-    session_ingest.reconcile_sessions(s)
+    session_ingest.repair_table_sessions(s)
     before = rows_of(s, "old")
     ck("seeded: three rows, complete", len(before) == 3 and flags(s, "old") == (3, True), flags(s, "old"))
     ck("the session is due, the one with a line 4 days ago is not", session_archive.due(s.sessions_db, NOW)
@@ -248,7 +237,6 @@ def file_archive():
     ck("just under 7 days since its last line is not due, just over is",
        session_archive.due(s.sessions_db, last + timedelta(days=7) - timedelta(seconds=1)) == []
        and session_archive.due(s.sessions_db, last + timedelta(days=7, seconds=1)) == ["old"])
-    duck = duck_count(s, "old")
     full = rows_of_full(s, "old")
     sessions_before, bytes_before = counter("ARCHIVE_SESSIONS"), counter("ARCHIVE_BYTES")
     moved = session_archive.archive_pass(s, b, NOW)
@@ -269,11 +257,10 @@ def file_archive():
         o["session"] == "old" and o["seq"] == r[0] and o["line_key"] == r[1] and o["type"] == r[3]
         and o["labels"] == r[4] and o["render"] == r[5] and o["payload"] == r[6]
         and datetime.fromisoformat(o["at"]) == r[2] for o, r in zip(objs, before)), (objs, before))
-    ck("DuckDB is untouched", duck_count(s, "old") == duck == 3)
     ck("line_count is untouched and the session is still complete", flags(s, "old") == (3, True),
        flags(s, "old"))
-    session_ingest.reconcile_sessions(s)
-    ck("a reconcile counts rows plus archived lines: still complete", flags(s, "old") == (3, True),
+    session_ingest.repair_table_sessions(s)
+    ck("the repair counts rows plus archived lines: still complete", flags(s, "old") == (3, True),
        flags(s, "old"))
     ck("a second pass finds nothing", session_archive.archive_pass(s, b, NOW) == 0
        and len(parts_of(s, "old")) == 1)
@@ -297,26 +284,21 @@ def file_archive():
 
     print("== a session that is not complete is not archived ==")
     s = open_store()
-    real = session_ingest.record
-    session_ingest.record = lambda *a, **k: None
-    try:
-        s.append([line("gap", "user"), line("gap", "assistant")])
-    finally:
-        session_ingest.record = real
-    s.append([line("gap", "assistant")])
-    session_ingest.reconcile_sessions(s)
-    ck("a session with lines only DuckDB holds is false and has one row", flags(s, "gap") == (3, False)
-       and len(rows_of(s, "gap")) == 1, (flags(s, "gap"), rows_of(s, "gap")))
-    ck("so it is not due, and a pass leaves it", session_archive.due(s.sessions_db, NOW) == []
+    s.append([line("gap", "user"), line("gap", "assistant"), line("gap", "assistant")])
+    with s.sessions_db.begin() as c:      # as a session whose lines the store refused is marked
+        c.execute(sessions.update().where(sessions.c.session == "gap").values(lines_complete=False))
+    ck("a session marked incomplete", flags(s, "gap") == (3, False) and len(rows_of(s, "gap")) == 3,
+       (flags(s, "gap"), rows_of(s, "gap")))
+    ck("is not due, and a pass leaves it", session_archive.due(s.sessions_db, NOW) == []
        and session_archive.archive_pass(s, FileBackend(tempfile.mkdtemp()), NOW) == 0
-       and len(rows_of(s, "gap")) == 1)
+       and len(rows_of(s, "gap")) == 3)
     s.close()
 
     print("== at most `limit` sessions a pass, the oldest first ==")
     s = open_store()
     b = FileBackend(tempfile.mkdtemp())
     s.append([line("s3", days=3), line("s1", days=1), line("s2", days=2)])
-    session_ingest.reconcile_sessions(s)
+    session_ingest.repair_table_sessions(s)
     ck("the oldest first", session_archive.due(s.sessions_db, NOW) == ["s1", "s2", "s3"])
     ck("a pass of two moves two", session_archive.archive_pass(s, b, NOW, limit=2) == 2
        and rows_of(s, "s1") == [] and rows_of(s, "s2") == [] and len(rows_of(s, "s3")) == 1)
@@ -334,8 +316,8 @@ def late_lines():
     s.append([line("late", "user", {"uuid": "after"}, days=1)])
     ck("the new line takes the next number: seq never repeats", [r[0] for r in rows_of(s, "late")] == [3]
        and flags(s, "late")[0] == 3, (rows_of(s, "late"), flags(s, "late")))
-    session_ingest.reconcile_sessions(s)
-    ck("the reconcile counts the part and the new row: complete", flags(s, "late") == (3, True),
+    session_ingest.repair_table_sessions(s)
+    ck("the repair counts the part and the new row: complete", flags(s, "late") == (3, True),
        flags(s, "late"))
     ck("the session is due again", session_archive.due(s.sessions_db, NOW) == ["late"])
     ck("a pass writes part 2", session_archive.archive_pass(s, b, NOW) == 1, parts_of(s, "late"))
@@ -343,7 +325,7 @@ def late_lines():
     ck("part 2 holds seq 3 only, in its own file", [p[:4] for p in parts] == [(1, 1, 2, 2), (2, 3, 3, 1)]
        and parts[1][6] == "late/2.jsonl.gz" and unzip(b.get(parts[1][6]))[0]["line_key"] == "after", parts)
     ck("part 1 is as it was", len(unzip(b.get(parts[0][6]))) == 2)
-    session_ingest.reconcile_sessions(s)
+    session_ingest.repair_table_sessions(s)
     ck("complete across two parts", flags(s, "late") == (3, True) and rows_of(s, "late") == [])
     s.close()
 
@@ -407,7 +389,7 @@ def failures():
             return super().put(key, data)
     b = Picky(tempfile.mkdtemp())
     s.append([line("a", days=1), line("b", days=2), line("c", days=3)])
-    session_ingest.reconcile_sessions(s)
+    session_ingest.repair_table_sessions(s)
     with printed():
         moved = session_archive.archive_pass(s, b, NOW)
     ck("a and c moved, b stayed", moved == 2 and rows_of(s, "a") == [] and rows_of(s, "c") == []
@@ -593,10 +575,10 @@ def defaults_and_loop():
     if on_pg(s):
         ck("on Postgres with no URL the job does nothing", session_archive.archive_pass(s, None, NOW) == 0
            and len(rows_of(s, "dflt")) == 2 and not os.path.exists(os.path.join(
-               os.path.dirname(s.path), "archive")))
+               s.data_dir, "archive")))
     else:
         ck("on SQLite the folder is <data dir>/archive", session_archive.archive_pass(s, None, NOW) == 1
-           and os.path.exists(os.path.join(os.path.dirname(s.path), "archive", "dflt", "1.jsonl.gz")))
+           and os.path.exists(os.path.join(s.data_dir, "archive", "dflt", "1.jsonl.gz")))
     s.close()
 
     print("== a store with no file has no default folder ==")
@@ -623,7 +605,7 @@ def defaults_and_loop():
             s, None, NOW) == 1 and os.path.exists(os.path.join(folder, "env", "1.jsonl.gz")))
         os.environ["TARES_ARCHIVE_URL"] = "gopher://x"
         s.append([line("env2", days=1)])
-        session_ingest.reconcile_sessions(s)
+        session_ingest.repair_table_sessions(s)
         fails0 = counter("ARCHIVE_FAILURES")
         with printed() as out:
             moved = session_archive.archive_pass(s, None, NOW)
@@ -670,7 +652,7 @@ def defaults_and_loop():
                 await asyncio.sleep(0.05)
             moved = rows_of(s, "loop") == []
             s.append([line("loop2", days=1)])
-            session_ingest.reconcile_sessions(s)
+            session_ingest.repair_table_sessions(s)
             for _ in range(100):
                 if not rows_of(s, "loop2"):
                     break

@@ -21,15 +21,12 @@ import uuid
 from datetime import timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from sqlalchemy import event, func, insert, select  # noqa: E402
-from sqlalchemy.engine import Engine  # noqa: E402
+from sqlalchemy import event, func, select  # noqa: E402
 
 from tares import claude_usage_hourly as hourly  # noqa: E402
-from tares import report, session_archive, session_ingest, session_move, session_read  # noqa: E402
+from tares import report, session_archive, session_ingest, session_read  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
-from tares.session_store import SessionStore, copy as store_copy  # noqa: E402
-from tares.session_store.tables import (session_archive_parts, session_lines,  # noqa: E402
-                                        session_stations, session_store_copies)
+from tares.session_store.tables import session_archive_parts, session_lines  # noqa: E402
 from tares.store import Store, now_utc  # noqa: E402
 
 FAILS = []
@@ -151,7 +148,7 @@ def held_reads():
     s = open_store()
     seed(s)
     ck("the setup: lines are in the session store, the totals are built",
-       line_count(s, "s1") == 3 and hourly.ready(s) and session_ingest.caught_up(s),
+       line_count(s, "s1") == 3 and hourly.ready(s),
        (line_count(s, "s1"), hourly.ready(s)))
 
     def more(sid, station_session=None):
@@ -219,22 +216,12 @@ def held_reads():
     ck("archive: no line is lost", all_lines and len(all_lines[0]) == had + 2,
        all_lines and len(all_lines[0]))
 
-    # holdable is on the ingest path itself: it must not wait for another writer either
-    one = line("s1")
-    with s.sessions_db.begin():
-        out = []
-        ok, detail, t, errors = beside(lambda: out.append(session_ingest.holdable(s, [one])))
-    t.join(30)
-    if s.sessions_db.dialect == "sqlite":
-        ck("holdable answers while another transaction holds the write lock",
-           ok and out == [[one]], (detail, out))
     s.close()
 
 
 def reads(s):
     """{name: call} of every read function; the second set is those whose queries must agree."""
     def forget():
-        s.__dict__.pop("_sessions_caught_up", None)
         s.__dict__.pop("_usage_hourly_ready", None)
 
     def fresh(call):
@@ -260,18 +247,7 @@ def reads(s):
         "person_turns": lambda: s.person_turns(SRC, None, since),
         "role_sessions": lambda: s.role_sessions("builder"),
         "session_archive.due": lambda: session_archive.due(db, now_utc()),
-        "holdable": lambda: session_ingest.holdable(s, [line("s1")]),
-        "_mark": lambda: session_ingest._mark(s),
-        "caught_up": fresh(lambda: session_ingest.caught_up(s)),
         "lines_size": lambda: session_ingest.lines_size(s),
-        "_facts_mark": lambda: session_ingest._facts_mark(s),
-        "_turns_mark": lambda: session_ingest._turns_mark(s),
-        "session_move.planned": lambda: session_move.planned(s),
-        "session_move.due": lambda: session_move.due(s),
-        "session_move.due_old": lambda: session_move.due_old(s),
-        "session_move.retrying": lambda: session_move.retrying(s),
-        "session_move.counts": lambda: session_move.counts(s),
-        "copy._in_ledger": lambda: store_copy._in_ledger(db, session_stations),
         "sessions_of_projects": lambda: s.sessions_of_projects(["p1"]),
         "projects_of_sessions": lambda: s.projects_of_sessions(["s1"]),
         "project_sessions": lambda: s.project_sessions("p1"),
@@ -355,7 +331,7 @@ def first_reads(s):
     """{name: call} of the functions that read and then write: their first transaction is the read."""
     return {
         "_factory_upgrade": s._factory_upgrade,
-        "_claude_usage_fill": s._claude_usage_fill,
+        "_claude_usage_reprice": s._claude_usage_reprice,
         "_archive_session": lambda: session_archive._archive_session(
             s.sessions_db, session_archive.backend_of(s), "old", now_utc()),
     }
@@ -373,38 +349,6 @@ def first_transactions(s):
             ck(f"{name} reads with no write lock", seen[:1] == ["BEGIN"], seen)
         else:
             ck(f"{name} reads at the default isolation", set(seen) == {"default"}, seen)
-
-
-def local_copy_source():
-    print("== the first start with a state database reads the local file with no write lock ==")
-    s = open_store()
-    seed(s)
-    local_dir = tempfile.mkdtemp()
-    local = SessionStore(local_dir)
-    local.upgrade()
-    with local.begin() as c:    # its ledger says this table was copied, so the file is its source
-        c.execute(insert(session_store_copies).values(table_name=session_stations.name, rows=0,
-                                                      copied_at=now_utc()))
-    local.close()
-    began, read_in = {}, []
-
-    def after(conn, cursor, statement, *a):
-        if not str(conn.engine.url.database or "").startswith(local_dir):
-            return
-        key = id(conn.connection.dbapi_connection)
-        if statement.startswith("BEGIN"):
-            began[key] = statement
-        elif f"FROM {session_stations.name}" in statement:
-            read_in.append(began.get(key))
-
-    event.listen(Engine, "after_cursor_execute", after)
-    try:
-        store_copy.copy_from_duckdb(s, s.sessions_db, state_move=True, local_dir=local_dir)
-    finally:
-        event.remove(Engine, "after_cursor_execute", after)
-    ck("copy_from_duckdb reads the local file's table with no write lock", read_in == ["BEGIN"],
-       read_in)
-    s.close()
 
 
 def every_read_function():
@@ -438,7 +382,6 @@ def in_memory():
 if __name__ == "__main__":
     held_reads()
     every_read_function()
-    local_copy_source()
     in_memory()
     print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
     sys.exit(1 if FAILS else 0)
