@@ -131,7 +131,6 @@ export const isOnCell = (href: string) => href.startsWith("/");
 // ---- adding one
 
 export const RECORD_WORDS = "Record a decision";
-export const ADD_HEADING = RECORD_WORDS;
 export const ADD_LINE = "For decisions that live nowhere else. Decisions in GitHub repos and factory projects are added for you.";
 export const READ_ONLY_LINE = "Your key can only read, so it cannot record decisions.";
 export const MAX_TITLE = 200;

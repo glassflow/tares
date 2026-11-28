@@ -117,19 +117,6 @@ export function useLicenceNoAnswer(): boolean {
   return noAnswer && !eeAllowed;
 }
 
-/** What a core fallback shows in place of an ee part that is not there: `pending` while it loads
- *  (a skeleton unless given), the failed-chunk words, the no-answer words, else `children`, the plain
- *  version for a cell with no licence. */
-export function EeFallback({ children, pending = <SkeletonRows /> }: { children: ReactNode; pending?: ReactNode }) {
-  const isPending = useEePending();
-  const chunkFailed = useEeFailed();
-  const noAnswer = useLicenceNoAnswer();
-  if (isPending) return <>{pending}</>;
-  if (chunkFailed) return <Banner tone="warn" data-testid="ee-failed">{EE_FAILED_WORDS}</Banner>;
-  if (noAnswer) return <Banner tone="warn" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</Banner>;
-  return <>{children}</>;
-}
-
 /** True once the ee chunk is loaded and has registered, and while the cell's licence still allows it:
  *  a licence removed or ended takes a team part (a tab, a row) away without a reload. */
 export function useEeLoaded(): boolean {

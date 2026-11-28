@@ -51,112 +51,6 @@ export interface ConnectorSpec {
   provides?: { name: string; primary?: boolean; help?: string }[];   // synthesized label fields
 }
 
-export interface SourceFieldValue { value: string; events: number; }
-export interface SourceField {
-  name: string;
-  help: string;
-  primary_default: boolean;
-  coverage: number;
-  distinct: number;
-  is_label?: boolean;
-  is_key?: boolean;
-  values: SourceFieldValue[];
-}
-export interface SourceLabelProfile {
-  name: string;
-  is_key: boolean;
-  coverage: number;
-  distinct: number;
-  values: SourceFieldValue[];
-}
-export interface SourceFieldsProfile {
-  sampled: number;
-  fields: SourceField[];
-  labels?: SourceLabelProfile[];
-}
-
-// One event in a correlated read: its time offset, source, rendered text, and the labels it
-// carries (endpoint, status, …) — so the timeline shows the dimensions you filtered/sliced by.
-export interface TimelineEventRow {
-  offset: string;
-  source: string;
-  text: string;
-  labels: Record<string, string>;
-}
-
-export interface CatalogDescribe {
-  handle: string;
-  kind: "source" | "trigger";
-  entry: Record<string, unknown>;
-  schema?: { event_types?: string[]; fields?: Record<string, string>; sampled_events?: number } & Record<string, unknown>;
-  labels?: Record<string, { value: string; events: number; last_ingest?: string }[]>;
-  primary_label?: string;
-  freshness?: { last_event_time?: string; lag_seconds?: number; events_total?: number; status?: string };
-  lineage?: { from: string; to: string; transform: string }[];
-  sample?: { key: string; event_type: string; text: string; ingest_time?: string }[];
-  subscribers?: number;
-}
-
-export interface DiscoverMetric {
-  name: string;
-  type: string;
-  help: string;
-  series: number;
-  sample: string | null;
-  labels: string[];
-  ingest: boolean;
-  reason: string;
-}
-
-export interface ProposedSource {
-  connector: string;
-  name: string;
-  config: Record<string, unknown>;
-  summary: string;
-  preselect: boolean;
-  from: string;
-}
-
-export interface EnvScan {
-  provider: string;
-  summary: { containers: number; proposed: number };
-  containers: Array<{ name: string; image: string; ports: string; project: string; service: string }>;
-  proposed_sources: ProposedSource[];
-  skipped: Array<{ service: string; image: string; reason: string }>;
-}
-
-export interface DiscoverProposal {
-  connector: string;
-  families?: string[];   // prometheus: the metric families (name prefixes) this proposal ingests
-  summary: { total_metrics: number; relevant: number; hidden: number; capped?: boolean; families?: number };
-  suggested_key: { name: string; cardinality: number; values_preview: string[]; alternatives: string[] };
-  proposed_labels: string[];
-  metrics: DiscoverMetric[];
-  derived_suggestions: { id: string; label: string; promql: string; event_type: string; field: string; reason: string }[];
-  proposed_config: { url: string; default_key: string; queries: unknown[]; labels: { name: string; field: string }[] };
-}
-
-// A connected agent: subscriptions grouped by endpoint, named deterministically server-side.
-export interface AgentInfo {
-  name: string;
-  endpoint: string;   // masked — the last path segment may carry a secret
-  // a Tares agent (in-process), an external webhook, or a Slack channel (slack://channel/<id>)
-  kind: "tares" | "connected" | "slack";
-  subscriptions: { subscription_id: string; trigger: string; created_at: string | null }[];
-  triggers: string[];
-  created_by: string[];
-  first_seen: string | null;
-  delivered_ok_24h: number;     // deliveries in the last 24h — what the roster columns show
-  delivered_fail_24h: number;
-  delivered_ok_total: number;   // all-time, shown as secondary text so the number isn't lost
-  delivered_fail_total: number;
-  pending?: number;             // in-flight Tares-agent runs
-  last_woken: string | null;
-  unhealthy?: boolean;          // the most recent delivery to this endpoint failed
-  last_error?: string | null;   // why, when unhealthy
-  recent: { at: string | null; ok: boolean | null; trigger: string | null; key: string | null; error?: string | null; dispatch_id?: string }[];
-}
-
 export interface ApiKey {
   id: string;
   name: string;
@@ -195,46 +89,11 @@ export interface Whoami {
   mcp_object_tools?: boolean;
 }
 
-// An agent that joined a project with a webhook subscription (TR-336). The URL comes masked: it
-// can carry the receiver's secret.
-export interface ExternalAgent {
-  subscription_id: string;
-  name: string;
-  url: string;
-  key_id: string | null;
-  key_name: string | null;
-  created_at: string | null;
-  last_delivery: { at: string | null; ok: boolean | null; error: string | null; dispatch_id: string } | null;
-}
-
-// Discover response for table-shaped connectors (postgres): the columns found plus a proposed
-// config to review and apply. (Prometheus uses the richer DiscoverProposal above.)
-export interface ColumnsProposal {
-  connector: string;
-  summary: string;
-  columns: { name: string; type: string }[];
-  proposed_config: Record<string, unknown>;
-}
-
 // One filter row on a trigger: which events it counts. Same ops the daemon accepts.
 export interface TriggerFilter {
   field: string;
   op: "eq" | "neq" | "contains" | "gt" | "lt" | "gte" | "lte" | "in";
   value: string | number | string[];   // a list for `in`
-}
-
-export interface Entity {
-  value: string;
-  events: number;
-  last_ingest: string | null;
-}
-
-export interface LabelFacet {
-  label: string;
-  primary?: boolean;
-  sources: string[];
-  high_cardinality?: boolean;   // exceeded the entity cardinality cap — served by a live scan
-  values: Entity[];
 }
 
 export interface TriggerCondition {
@@ -265,43 +124,6 @@ export interface Trigger {
   customized?: boolean;
 }
 
-// A Tares agent is a prompt attached to a trigger: when the trigger fires, the agent takes a
-// first look and writes a finding onto the entity's timeline. It's a real agent, configured inside
-// Tares rather than connected over a webhook. The prompt is the only field a user edits; enabled
-// means it's subscribed to its trigger, exactly like an external agent.
-export interface BuiltinAgent {
-  name: string;
-  project?: string;            // the project it belongs to (its trigger is in the same one)
-  trigger: string;
-  prompt: string;
-  enabled: boolean;
-  slack_configured: boolean;   // the webhook URL itself is never sent to the client
-  model: string;               // "" = the provider's default model
-  provider: string;            // provider id from Settings; "" = the cell default
-  effective_provider?: string | null;   // what the next run resolves to (the default when the named one is gone)
-  slack_channel: string;       // workspace-bot channel id, "" = none
-  webhook_url: string;         // write-back target, "" = none
-  webhook_key_label?: string;  // the write-back reports this label's value as `key`; "" = the entity
-  webhook_token_configured: boolean;   // the token itself is never sent to the client
-  mcp_servers: string[];       // registry names this agent may use
-  max_rounds: number | null;   // model rounds per run; null = the default for its shape
-  budget_usd?: number | null;  // spend cap in USD over budget_period; null = no budget
-  budget_period?: "lifetime" | "month";  // "month" resets on the 1st, 00:00 UTC; absent = lifetime
-  budget_spent_usd?: number | null;  // this month's spend, set for a month budget only
-  handoffs?: Handoff[];        // who takes over when a run concludes with a verdict (TR-334)
-  concludes?: boolean;         // every run ends with the conclude tool, whatever the prompt says
-  verdicts?: Verdict[];        // the only verdicts it may give; empty: any word, or none
-  github?: string;             // the GitHub credential it acts with (check runs); "" = none
-  offers_conclude?: boolean;   // it gets the conclude tool (set to, or its prompt names it)
-  effective_max_rounds: number;   // the cap its next run will be held to
-  updated_at?: string;
-  last_run?: AgentRun | null;
-  owned_by?: string | null;
-  customized?: boolean;
-  stats?: AgentStats;
-  projects?: string[];         // every project that uses it (P-TR-216: parts are shared)
-}
-
 // When a run concludes a finding with `verdict`, `agent` (in the same project) is started on the
 // concluded entity, handed the finding; at most once per entity per `cooldown`.
 export interface Handoff {
@@ -310,87 +132,11 @@ export interface Handoff {
   cooldown: string;            // a duration, e.g. 30m
 }
 
-// Lifetime aggregates over an agent's runs. cost_usd is a floor: runs from before usage tracking
-// and runs on unpriced models carry no cost (uncosted_runs counts those).
-export interface AgentStats {
-  runs: number;
-  ok: number;
-  finished: number;            // runs that concluded or tried to (excludes running and capped)
-  avg_duration_ms: number | null;
-  cost_usd: number | null;
-  input_tokens: number;
-  output_tokens: number;
-  uncosted_runs: number;
-}
-
-export interface AgentRun {
-  id: string;
-  agent: string;
-  trigger: string;
-  dispatch_id: string;
-  key: string;
-  status: "running" | "ok" | "empty" | "failed" | "capped" | "exhausted";
-  rounds: number;
-  max_rounds?: number | null;  // the cap this run was held to
-  tool_calls: number;
-  external_tools?: string[];   // prefixed server__tool names this run called
-  started_at: string;
-  duration_ms: number | null;
-  finding: string | null;
-  error: string | null;
-  // Model usage; null on runs from before cost tracking (unknown, not zero).
-  model?: string | null;
-  provider?: string;           // the provider the run resolved to
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  cache_creation_input_tokens?: number | null;
-  cache_read_input_tokens?: number | null;
-  cost_usd?: number | null;
-  // the write-back's outcome: "ok", "http 4xx", "failed"; null when the agent has no webhook
-  delivery?: string | null;
-  delivery_error?: string | null;
-  // how the run ended on purpose (TR-318): "no_op" left no finding; null on older runs
-  outcome?: "finding" | "no_op" | null;
-  verdict?: string | null;
-  headline?: string | null;    // the one-line conclusion, when the agent gave one
-  // what the run produced (TR-220), read off its tool calls and deliveries; [] when nothing
-  results?: RunResult[];
-  // the project skills the run loaded (TR-332), in order; [] when none
-  skills?: string[];
-}
-
-// A project's skill (TR-332): instructions its agents load by name when a task matches.
-export interface SkillSummary {
-  name: string;
-  description: string;
-  updated_at: string;
-  size: number;          // bytes of the body
-  loaded_by: string[];   // agents of the project that loaded it in the last 7 days
-}
-export interface Skill {
-  name: string;
-  description: string;
-  body: string;
-  updated_at: string;
-}
-
 // Docs and tickets (TR-403): what a spec session leaves in a project for the session that builds it
 // The person behind a record (TR-619): who stood behind the call, and `by_label` says it in words
 // ("Kiran (crew-builder-1)", or just "Kiran" when no station was named).
 export interface PersonRef { id: string; name: string }
 export type DocKind = "start" | "spec" | "plan" | "agents" | "memory" | "grants" | "note" | "working";
-export interface DocSummary {
-  id: string;
-  kind: DocKind;
-  title: string;
-  global?: boolean;     // the AGENTS.md or memory every project shares
-  made_by: string | null;
-  updated_by: string | null;
-  created_at: string;
-  updated_at: string;
-  size?: number;
-}
-export interface Doc extends DocSummary { body: string; projects: string[] }
 export type TicketStatus = "todo" | "in_progress" | "done" | "canceled";
 export interface Ticket {
   id: string;
@@ -432,42 +178,13 @@ export interface VerdictNow { verdict: "pass" | "changes" | "block"; head: strin
 export interface ChallengeFinding { priority?: string; title?: string; waived?: boolean; reason?: string }
 export interface ReviewFinding { id: string; label: string; severity: "P1" | "P2" | "P3"; file: string | null; line: number | null; blocking: boolean; text: string; kind: string; state: "open" | "fixed"; fixed_in: string | null }
 export interface Review { id: string; round: number; pr: string | null; head: string; verdict: "pass" | "changes" | "block"; verified: string; not_verified: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; findings: ReviewFinding[]; fixed: string[] }
-export interface DeskItem {
-  id: string; label: string; project: string | null; project_name: string | null; question: string;
-  context: string; options: string[]; recommendation: string; why: string; blocks: string;
-  tickets: string[]; blocking: boolean; asked_by: string | null; assumptions: string[];
-  state: "open" | "answered" | "withdrawn"; reason: string | null; created_at: string; closed_at: string | null;
-  // a permission request: the station that was refused and the exact command
-  station: string | null; command: string | null;
-  person?: PersonRef | null; by_label?: string | null;   // who asked: the person, and the station when there is one
-  to_person?: PersonRef | null;   // who it is for (TR-634); null on an item from before
-}
-export interface DeskAllowed { desk_item: DeskItem; decision: Decision; station: string; line: string; added: boolean; scope: "project" | "all" }
-// The body of POST /api/desk/{ref}/reply: a person's own answer from the console (TR-740)
-export interface DeskReplyBody {
-  words: string; choice?: string; standing?: boolean; scope?: "project" | "all";
-  grant_kind?: "project" | "personal"; kept?: string[]; overturned?: Record<string, string>;
-}
-export interface DeskReplied {
-  desk_item: DeskItem; decision: Decision; matched: boolean; recorded: boolean; granted: boolean;
-  grant: Grant | null; assumptions: { label: string; state: "kept" | "overturned"; tickets: string[] }[];
-  follow_up: { assumption: string; tickets: string[] }[]; unheard: string[];
-}
 export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
   via: "console" | "feed" | "message" | null;   // a page of the console or a message (feed on rows from before the feed was removed): a permission allowed there, or an answer given there, with no typed words to match
   person?: PersonRef | null;   // who decided
 }
-export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; repo: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
-export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }
 export type AssumptionState = "open" | "kept" | "overturned";
-export interface Assumption {
-  id: string; label: string; number: number; question: string; choice: string; why: string;
-  affects: string; tickets: string[]; state: AssumptionState; words: string | null;
-  made_by: string | null; person?: PersonRef | null; by_label?: string | null;
-  made_at: string; decided_at: string | null;
-}
 export interface TicketCheck {
   id: string; command: string; result: string; commit: string | null; broke_test: string | null;
   by: string | null; person?: PersonRef | null; by_label?: string | null; at: string;
@@ -480,7 +197,6 @@ export interface TicketPR {
   ci?: "success" | "failure" | "pending" | "none"; verdict?: "pass" | "changes" | "pending" | null;
   verdict_text?: string | null; checked_at?: string | null; error?: string | null;
 }
-export interface CrewMessage { at: string; session: string; from: string; to: string; type: string; first_line: string; text: string }
 export interface MilestoneCheck { check: string; expect: string }
 export interface Milestone {
   id: string;
@@ -530,16 +246,6 @@ export interface CrewStation {
   crew?: string | null;
   machine?: string;
   person?: PersonRef | null;
-}
-/** One person's crew on one machine, with its stations (TR-628) */
-export interface CrewGroup {
-  id: string | null;
-  name: string | null;
-  machine: string;
-  person: PersonRef | null;
-  person_id: string | null;
-  last_seen: string | null;
-  stations: CrewStation[];
 }
 // What Claude Code sessions spend (tares/claude_usage.py)
 export interface StationContext {
@@ -592,48 +298,15 @@ export interface CrewSettings {
   docker_cleanup?: boolean | null;
   docker_keep?: string[] | null;
 }
-/** The crew's pace before the plan's limits (/api/crew/pace, TR-674). */
-export interface CrewPace {
-  on: boolean; known: boolean; level: 0 | 1 | 2; at_limit: boolean;
-  state: "off" | "ok" | "slow" | "hold" | "limit";
-  until: string | null; session_pct: number | null; weekly_pct: number | null; note: string;
-}
 // The merged settings the caller sees (GET /api/crew/settings): theirs over the cell's default.
 export interface CrewSettingsView extends CrewSettings { autonomy_levels?: Record<string, string> }
 export type CrewSettingField = "autonomy" | "challenger" | "builders_max" | "releaser" | "release_profile" | "prod_pattern" | "pace" | "idle_wake";
-export interface HandoverRepo { path: string | null; name: string | null }
-export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null }
-// A hand-over the project lead pushed through without every area owner's sign-off, and why (TR-636)
-export interface HandoverOverride { reason: string; at: string; person?: PersonRef | null; by_label?: string | null }
 // A question from a spec to the owner of a repo, and the answer once they give it (TR-636)
 export interface SpecQuestion {
   id: string; to_person_id: string; to_person?: PersonRef | null; repo: string; text: string;
   asked_by: string | null; asked_at: string; answer: string | null; answered_by: string | null;
   answered_by_person?: PersonRef | null; answered_at: string | null; state: "open" | "answered";
   via?: "console" | "feed" | "message" | null;   // answered on a page of the console
-}
-export interface Handover { override?: HandoverOverride | null; overridden?: boolean; overrides?: HandoverOverride[]; repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
-// A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
-export interface RepoPR {
-  url: string; ticket: string; number: number | null; title: string; branch: string | null;
-  head: string | null; ci: "success" | "failure" | "pending" | "none" | null;
-  github_verdict: "pass" | "changes" | "pending" | null; stage: TicketStage | null; holder: string | null;
-  review: { verdict: "pass" | "changes" | "block"; round: number; current: boolean } | null;
-  merged_at: string | null; checked_at: string | null; error: string | null;
-}
-export interface ProjectRepo extends HandoverRepo {
-  tickets: string[];
-  open_prs: RepoPR[];
-  merged_prs: RepoPR[];
-  github_error: string | null;
-}
-// A project handed to the crew, as the orchestrator reads it (TR-462)
-export interface CrewProject {
-  id: string; name: string; repos: ProjectRepo[]; autonomy: string | null;
-  handed_over_at: string | null; handed_over_by: string | null;
-  tickets_done: number; tickets_total: number; stages: Record<string, number>;
-  milestone: { name: string; done: number; total: number } | null;
-  progress?: TicketProgress;           // the tickets as the ring counts them (canceled kept out)
 }
 export interface StationDetail extends CrewStation {
   tickets: { project: string; project_name: string; ticket: string; title: string; stage: string | null; repo: string | null; pr: string | null }[];
@@ -642,24 +315,6 @@ export interface StationDetail extends CrewStation {
   context_detail: ContextReading | null;
   context_at: string | null;
   context_asked_at: string | null;
-}
-export interface LinearLink {
-  id: string; name: string; url: string;
-  synced_at?: string | null; error?: string | null; issues?: number;
-}
-export interface GitHubLink {
-  repo: string; issue_label: string; url: string;
-  synced_at?: string; error?: string | null; issues?: number;
-}
-export interface LinearStatus {
-  connected: boolean;
-  // cloud: the GlassFlow Linear app, through the control plane; oauth: the cell's own sign-in
-  // from before TR-538, no longer used
-  kind?: "api_key" | "cloud" | "oauth";
-  account?: { name?: string; email?: string; org?: string };
-  connected_at?: string | null;
-  error?: string | null;   // why a connection that is there cannot be used
-  write_error?: string | null;   // Linear refused a write for its scope: the words and the way to fix it
 }
 export interface ProjectSession {
   session: string; repo: string | null; linked_at: string;
@@ -670,12 +325,6 @@ export interface ProjectSession {
   state_at: string | null;
   last_said?: string;   // a waiting session: the last thing it wrote
   station?: string | null;   // the tares-factory station it played, for a crew session
-}
-
-export interface RunResult {
-  kind: "pr" | "commit" | "check" | "slack" | "email" | "webhook" | "custom";
-  label: string;
-  url?: string;
 }
 
 // The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,
@@ -696,70 +345,6 @@ export interface ModelUsage {
   by_provider?: Record<string, ModelUsageBucket>;   // provider id -> spend; rows before providers count as anthropic
   days: ({ day: string } & ModelUsageBucket)[];
   window_days: number;
-}
-
-export interface AgentPreset {
-  id: string;
-  label: string;
-  prompt: string;
-  concludes?: boolean;          // the preset ends every run with conclude
-  tier?: "small";               // picks the provider's cheaper model (small_models), when it has one
-  verdicts?: Verdict[];         // and gives these verdicts
-}
-
-/** A verdict an agent may give when it concludes with a finding, and when to give it. */
-export interface Verdict { verdict: string; when?: string }
-
-export interface QueryLogEntry {
-  id: string;   // r_ = a read, s_ = a stats call
-  key: string;
-  window: string;
-  rows_returned: number;
-  client: string;
-  queried_at: string;
-}
-
-export interface DispatchLogEntry {
-  dispatch_id: string;
-  trigger: string;
-  key: string;
-  kind: string;
-  fired_at: string;
-  subscribers: number;
-  delivered: number;
-  payload: string;
-  error?: string | null;   // most recent failed delivery's reason, when delivered < subscribers
-}
-
-// One delivery attempt to a specific subscriber, for the dispatch detail page.
-export interface DispatchDelivery {
-  agent: string;
-  kind: "tares" | "slack" | "webhook";
-  endpoint: string;   // masked
-  ok: boolean;
-  error?: string | null;
-  delivered_at: string | null;
-}
-
-// A single firing, deep — fetched by id so a linked dispatch page never dead-ends.
-export interface DispatchDetail extends DispatchLogEntry {
-  deliveries: DispatchDelivery[];
-}
-
-export interface Subscription {
-  subscription_id: string;
-  trigger: string;
-  url: string;
-  created_at: string;
-}
-
-export interface SourceEvent {
-  source: string;
-  key: string;
-  event_type: string;
-  text: string;
-  event_time: string;
-  ingest_time: string;
 }
 
 // GET /api/usage — what this instance is using on disk.
@@ -860,12 +445,6 @@ export interface Template {
   // what a person would type to get this template, first person
   sentence?: string;
 }
-export interface McpServer {
-  name: string; url: string; auth_header: string; auth_value_configured: boolean;
-  auth_credential: string; headers: Record<string, string>; updated_at: string;
-  owned_by?: string | null; customized?: boolean;
-  project?: string;
-}
 export type ProjectObjectKind = "source" | "trigger" | "agent" | "mcp_server";
 export interface ProjectObject {
   kind: ProjectObjectKind;
@@ -893,9 +472,6 @@ export interface Project {
   activity_at?: string;                // when it last moved: its own update or its newest ticket's (GET /api/projects only)
   ready_to_close?: boolean;            // a software factory project, still open, whose tickets are all merged or otherwise finished (GET /api/projects and the summary)
 }
-/** What the platform pages still read off a project, which the API no longer sends (TR-1816). Goes with
- *  those pages (TR-1820). */
-export type LegacyProject = Project & { template?: string; params: Record<string, unknown>; last_error?: string | null };
 export type ProjectScope = "team" | "private";
 export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" | "self" }
 // a software factory project's tickets as its progress ring shows them (tares/factory.py
@@ -908,72 +484,6 @@ export interface TicketProgress {
 
 // ── the goal-first project page (contract: goal-first-contract.md, "Backend") ──
 
-// GET /api/projects/{uid}/outline: the project's setup in plain sentences, built from its config
-export type OutlineSourceState = "receiving" | "silent" | "error" | "paused" | "waiting";
-export interface OutlineWatch {
-  source: string; title?: string; connector: string; description: string; state: OutlineSourceState;
-  last_event_at: string | null; detail: string | null;
-}
-export interface OutlineWake { trigger: string; sentence: string; cooldown_sentence: string | null; paused: boolean }
-export interface OutlineHandoff { verdict: string; agent: string; cooldown: string | number | null }
-export interface OutlineAgent {
-  name: string; sentence: string; enabled: boolean; runs_on: "trigger" | "handoff"; handoffs: OutlineHandoff[];
-}
-export interface OutlineSkill { name: string; description: string; loaded_by: string[] }
-/** An agent outside Tares working for the project: a project key, or a webhook subscribed without one. */
-export interface OutlineOutside { name: string; sentence: string; joined: boolean }
-export interface ProjectOutline {
-  sentence: string;
-  watches: OutlineWatch[];
-  wakes: OutlineWake[];
-  agents: OutlineAgent[];
-  outside?: OutlineOutside[];
-  skills: OutlineSkill[];
-}
-
-// GET /api/projects/{uid}/results: one entry per concluded chain, newest first
-export interface ProjectResult {
-  id: string;                 // run id of the concluding run
-  thread: string;             // the timeline thread it belongs to
-  at: string;
-  entity: string | null;
-  kind: "action" | "no_action";
-  headline: string | null;
-  summary: string | null;     // first paragraph of the note, plain text
-  next_step: string | null;
-  verdict: string | null;
-  chain: string[];            // the agents in order, e.g. triage then root cause
-  no_op?: boolean;            // it concluded with nothing to report
-  cost_usd: number | null;    // the whole chain
-  duration_ms: number | null; // the whole chain
-  handled: { at: string; by: string } | null;
-  external: boolean;
-  practice?: boolean;         // from a practice run during setup; left out of today's totals
-}
-export interface ProjectResults {
-  results: ProjectResult[];
-  next_before: string | null;
-  today: { looked_at: number; found: number; spent_usd: number };
-}
-// GET /api/projects/{uid}/results/{run_id}
-export interface ProjectResultDetail extends ProjectResult {
-  note: string | null;                  // the full markdown note
-  steps: { at: string; text: string }[]; // how Tares got there, oldest first
-}
-
-// GET /api/projects/{uid}/health
-export interface ProjectHealthIssue {
-  severity: "error" | "warning";
-  message: string;
-  fix: string | null;
-  view: string | null;        // a project view to open, same form as ?view= (e.g. "source:checkout-errors")
-  agent?: string;             // with view "settings:agents": the agent whose daily cap this is (TR-670)
-}
-export interface ProjectHealth {
-  state: "working" | "attention" | "paused" | "setting_up";
-  message: string;
-  issues: ProjectHealthIssue[];
-}
 export interface ProjectLogEntry { at: string; action: string; detail: string }
 // summary = instance + log + whatever the template reports. The template part is free-form; the
 // shapes below are what the shared code context template returns and the page renders when present.
@@ -1007,8 +517,6 @@ export interface ChallengerSession {
   commits: { sha?: string; verdict?: string; round?: string | number; findings?: string | number; blocking?: string | number }[];
   thread: ChallengeEvent[];
 }
-export interface ProjectUpdateReport { created: string[]; updated: string[]; kept: string[]; deleted: string[]; added?: string[]; released?: string[] }
-
 // A model provider the cell holds (Settings, Model providers). Credentials are never returned:
 // `configured` says one resolves, `source` where from (console, env:VAR, or empty).
 export interface ModelProvider {
@@ -1101,68 +609,7 @@ export interface Plan {
   skills: PlanSkill[];
   notes: string[];
 }
-// POST /api/setup/check -> problems: what stops the plan from applying, per item. where:
-// "watches.<key>", "wakes.<key>", "agents.<key>", "tools.<key>", "skills.<key>", "own_agent",
-// a section ("watches", "wakes", "agents") or "plan"
-/** `who`: "tares" when the plan itself is wrong (the planner fixes it), "you" when only the
- *  person knows the answer (which Slack channel). */
-export interface SetupProblem { where: string; message: string; who?: "tares" | "you" }
 export type SetupStep = "connect" | "try" | "done";
-
-// POST /api/setup/apply -> connect: what only the user can do next
-export interface SetupConnect {
-  sources: { name: string; needs: PlanWatch["needs"]; ingest_url: string | null;
-             sample: Record<string, unknown> | null; credential_hint: string | null }[];
-  tools: { name: string; url: string; needs_token: boolean }[];
-  // key: the secret on the answer to apply only; null when the setup is read again (shown once)
-  own_agent: { key: string | null; mcp_url: string; claude_command: string; subscribe_hint: string } | null;
-}
-
-// GET /api/projects/{uid}/setup -> checks: live state for the Connect step
-export interface SetupChecks {
-  sources: { name: string; state: "waiting" | "receiving" | "error"; detail: string | null;
-             last_event_at: string | null; fields_seen: string[] }[];
-  tools: { name: string; state: "untested" | "ok" | "error"; detail: string | null }[];
-  own_agent: { state: "waiting" | "joined"; detail: string | null } | null;
-}
-/** A plan being written for a draft, step by step as it happens. */
-export interface SetupPlanning {
-  state: "running" | "failed";
-  steps: { text: string; state: "running" | "done" | "stopped"; at: string }[];
-  error?: string;
-  no_provider?: boolean;        // failed for want of a model provider
-}
-export interface ProjectSetup {
-  step: SetupStep | "plan";     // plan: a draft, still being planned or edited
-  draft?: boolean;
-  goal?: string | null;
-  name?: string;                // a draft: the name the person gave it ("" when Tares names it)
-  description?: string;         // a draft: what the person said about it, for the planner
-  who?: "tares" | "own" | null;
-  plan: Plan | null;            // null on a draft until its first plan is written
-  planning?: SetupPlanning | null;
-  practice_run: string | null;
-  checks: SetupChecks | null;
-  connect: SetupConnect | null; // what Connect shows; the own agent's key is never in it
-}
-
-// GET /api/resources: every part on the cell, each with the projects that use it (TR-351)
-export interface ResourceRow {
-  name: string;
-  title?: string;               // what a person calls it, when plainer than the name (a GitHub source: its repository)
-  what: string;                 // what it is, in plain words
-  state: string;                // receiving / silent / error / paused / waiting; active / paused; on / off; set / no credentials; used / never used
-  detail?: string | null;
-  kind?: string; kind_label?: string;     // sources: the connector
-  last_event_at?: string | null;          // sources
-  last_fired_at?: string | null;          // wake-ups
-  last_run_at?: string | null; last_run_status?: string | null;   // agents
-  url?: string | null;                    // tools
-  prefix?: string | null; last_used_at?: string | null;           // keys
-  used_by: { id: string; name: string }[];
-}
-export type ResourceKind = "sources" | "triggers" | "agents" | "tools" | "skills" | "keys";
-export type Resources = Record<ResourceKind, ResourceRow[]>;
 
 /** The crew's standup (/api/crew/standup): what moved in each handed-over project over a range,
  *  read from the ledger; `markdown` is the same report ready to copy or post. */
@@ -1185,13 +632,6 @@ export interface Standup {
 
 export type Edition = "factory" | "sre" | "platform";
 
-export interface EditionSettings {
-  edition: Edition;
-  edition_name: string;
-  edition_needed: boolean;
-  env_value: string | null;
-  choices: { id: Edition; name: string }[];
-}
 // Area owners (TR-627): the person who owns each GitHub repo.
 export interface Area { repo: string; person: PersonRef; note: string | null }
 
@@ -1211,12 +651,3 @@ export interface Grant {
   waiting_for: { id: string; name: string | null }[];   // id "admin": an admin has to
   in_effect: boolean;
 }
-export interface GrantsView {
-  grants: Grant[];
-  waiting_for_me: Grant[];
-  known_words: string[];
-}
-
-// A person's own AGENTS.md and memory (GET /api/docs/personal); null until the first line.
-export interface PersonalDoc { id: string; title: string; body: string; updated_at: string; updated_by: string | null }
-export interface PersonalDocs { person: PersonRef | null; agents: PersonalDoc | null; memory: PersonalDoc | null }
