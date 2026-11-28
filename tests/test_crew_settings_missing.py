@@ -19,6 +19,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -322,7 +323,7 @@ ck("one line says the team's choice, before the first question",
    r.stderr.count(f"{LINE} you approve each merge.\n") == 1
    and -1 < r.stderr.find(LINE) < r.stderr.find("1/3  "), tail(r))
 ck("the rest is asked, autonomy is not",
-   questions_in(r.stderr) == ["releaser", "challenger", "builders_max"] and "4/" not in r.stderr, questions_in(r.stderr))
+   questions_in(r.stderr) == ["releaser", "challenger", "builders_max"] and re.search(r"\b4/\d+  ", r.stderr) is None, questions_in(r.stderr))
 ck("no None in what is printed", "None" not in r.stderr, tail(r))
 ck("only what was asked is saved",
    saves() == [(200, {"releaser": False, "challenger": False, "builders_max": 2})], saves())
