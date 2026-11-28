@@ -71,8 +71,8 @@ _GONE = ("ended", "stopped", "replaced")
 
 
 def stage_of(has_start: bool, tickets: list[dict], finished: bool = False) -> str:
-    """Where a project stands: "spec", "build", "review" or "done". It is phaseOf() of
-    ui/src/components/project/factory.tsx in Python.
+    """Where a project stands: "spec", "build", "review" or "done" (the console's phaseOf() in
+    the platform pages, deleted in TR-1820, said the same; this is now the only copy).
 
     No starting prompt, or no ticket that is not canceled: spec. Every such ticket finished
     (factory.finished: done, or merged or shipped by its stage): done.

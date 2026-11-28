@@ -170,8 +170,12 @@ async def main():
 
         print("== old console words are gone ==")
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        text = open(os.path.join(here, "ui", "src", "components", "LinearSettings.tsx")).read().lower()
-        ck("Settings no longer says Tares only reads", "never writes" not in text
+        text = ""                                  # every console file: the Linear copy may sit in any
+        for root, _, files in os.walk(os.path.join(here, "ui", "src")):
+            for f in files:
+                if f.endswith((".ts", ".tsx")):
+                    text += open(os.path.join(root, f), encoding="utf-8").read().lower()
+        ck("the console no longer says Tares only reads Linear", bool(text) and "never writes" not in text
            and "only reads" not in text and "read access is enough" not in text)
         await cx.aclose()
 
