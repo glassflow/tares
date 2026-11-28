@@ -25,6 +25,7 @@ dependencies = [
     "pydantic>=2",
     "mcp>=1.2,<2",   # 2.0 renamed FastMCP->MCPServer and dropped mcp.server.fastmcp (see mcp_server.py)
     "pytz>=2024.1",   # DuckDB needs it to bind tz-aware datetimes to TIMESTAMPTZ
+    "tzdata; sys_platform == 'win32'",   # DuckDB reads Etc/UTC through zoneinfo; Windows has no tz database
     "asyncpg>=0.29",  # Postgres connector driver — base so the connector works on `tares up`
     "anthropic>=0.40",  # console Ask/Organize agent — base so it works on `tares up`
     # Agent tracing (tracing.py): OTLP/HTTP export of agent runs to Rius, Langfuse, a collector.
