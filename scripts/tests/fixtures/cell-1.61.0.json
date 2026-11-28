@@ -1,0 +1,31 @@
+{
+  "api_secret": "tares-fixture-api-secret-0001",
+  "credential": "fx-app",
+  "ingest_key": "github_app-fixture00000001",
+  "installation": 4242,
+  "now": "2026-11-20T12:00:00+00:00",
+  "pr_events_since": "2026-10-21T12:00:00+00:00",
+  "projects": {
+    "default": "uc_default03",
+    "factory": [
+      "uc_lantern01",
+      "uc_harbor002"
+    ],
+    "non_factory": [
+      "uc_challeng4"
+    ]
+  },
+  "repo": "example-org/lantern",
+  "schema": "tares161fixture",
+  "sessions": {
+    "archived": "11111111-0000-4000-a000-000000000004",
+    "legacy": "11111111-0000-4000-a000-000000000006",
+    "main": "11111111-0000-4000-a000-000000000001",
+    "old_source": "11111111-0000-4000-a000-000000000003",
+    "partial": "11111111-0000-4000-a000-000000000005",
+    "two": "11111111-0000-4000-a000-000000000002"
+  },
+  "ticket": "tk_5c2cda7bbc",
+  "version": "1.61.0",
+  "webhook_secret": "fixture-webhook-secret"
+}
