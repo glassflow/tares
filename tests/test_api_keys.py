@@ -86,6 +86,8 @@ async def main():
             # ── whoami ──
             w = (await cx.get(f"{B}/api/whoami", headers=H(read_key))).json()
             ck("whoami: name + scopes", w.get("name") == "agent" and w.get("scopes") == ["read"], str(w))
+            ck("whoami: no edition fields (TR-1817)",
+               not {"edition", "edition_name", "edition_needed"} & set(w), str(w))
 
             # ── revocation kills access ──
             r = await cx.post(f"{B}/api/keys", json={"name": "revoke-me", "scopes": ["read"]}, headers=H(AUTH))

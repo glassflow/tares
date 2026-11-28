@@ -8,8 +8,8 @@ and the in-process caches in CACHES are cleared before each of them, so a call i
 a page after a quiet minute, which is what a person opening it sees. The median of the 5 is the
 route's time.
 
-Which routes. ROUTES holds every GET the factory console makes (the pages of ui/src/editions/routes.tsx
-for the factory edition, the shell around them, and what those pages open). NOT_TIMED holds the GETs
+Which routes. ROUTES holds every GET the factory console makes (the pages of ui/src/editions/pages.ts,
+the shell around them, and what those pages open). NOT_TIMED holds the GETs
 that only an older page or another edition makes, or that another server answers, each with the reason;
 they are printed.
 Nothing checks these two lists against ui/src: a PR that adds a GET to the console adds it here.
@@ -97,9 +97,9 @@ OVER = {
 # count (the answer must be 200, and the function must be true of its JSON). The `{...}` names are
 # filled from `fixtures`. Paths under ui/src.
 ROUTES = [
-    # the shell, on every page (editions/edition.tsx, licence.tsx, cloud.ts, components/AuthGate.tsx,
+    # the shell, on every page (editions/who.tsx, licence.tsx, cloud.ts, components/AuthGate.tsx,
     # editions/Shell.tsx)
-    ("whoami", "/api/whoami", lambda d: d["person"]["name"] == "Sam" and d["edition"] == "factory"),
+    ("whoami", "/api/whoami", lambda d: d["person"]["name"] == "Sam" and "edition" not in d),
     ("licence", "/api/licence", lambda d: d["valid"] and d["ee_allowed"]),
     ("health", "/health", lambda d: d["status"] == "ok"),
     ("capabilities", "/api/capabilities", lambda d: d["version"] and d["slack_configured"]),

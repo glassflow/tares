@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { Combo, Picker } from "../components/bits";
 import InfoDialog, { HelpButton } from "../components/InfoDialog";
-import type { GithubCredential, Template, Project } from "../types";
+import type { GithubCredential, LegacyProject, Template, Project } from "../types";
 
 // The shared code context wizard: pick the GitHub repos that are the sources of context, pick
 // the repo the agent maintains, choose when it runs, click Start. Four steps, then Tares creates
@@ -104,7 +104,7 @@ export default function ProjectNewSharedContext() {
     if (!editId) return;
     api.project(editId).then((u) => {
       setExisting(u);
-      const p = u.params as Record<string, unknown>;
+      const p = (u as LegacyProject).params ?? {};
       setName(u.name);
       if (typeof p.credential === "string") setCredential(p.credential);
       if (Array.isArray(p.source_repos)) {

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 import { api } from "../api";
-import { useEdition } from "../editions/edition";
 import { Button, EmptyState } from "../components/edition";
 import SourceDetail from "./SourceDetail";
 
@@ -25,8 +24,7 @@ const NOUN: Record<Kind, { factory: string; sre: string }> = {
 };
 
 function Resolving({ find, what }: { find: () => Promise<string | null>; what: Kind }) {
-  const { edition } = useEdition();
-  const noun = NOUN[what][edition === "sre" ? "sre" : "factory"];
+  const noun = NOUN[what].factory;
   const [to, setTo] = useState<string | null>();
   useEffect(() => {
     let live = true;

@@ -1,7 +1,6 @@
 import { Link } from "react-router-dom";
 
 import { Banner } from "@/components/edition";
-import { useEdition } from "../editions/edition";
 import { licenceWordsOn, useCloud } from "../cloud";
 import { useLicence } from "../licence";
 import { licenceDate } from "./LicencePanel";
@@ -10,11 +9,10 @@ import { licenceDate } from "./LicencePanel";
  *  stops working: adding people is what pauses. Links to the Enterprise licence tab. */
 export default function LicenceBanner() {
   const { state } = useLicence();
-  const { edition } = useEdition();
   useCloud();   // renders again when /health lands: the banner shows only on a cell it has shown to be self-hosted
   if (!licenceWordsOn()) return null;   // Tares Cloud needs no licence, and a cell /health has not shown to be self-hosted says nothing
   if (!state || (!state.expired && !state.over_seats)) return null;
-  const to = edition === undefined || edition === "platform" ? "/settings?tab=licence" : "/settings/advanced?tab=licence";
+  const to = "/settings?tab=licence";
   const words = state.expired
     ? `The enterprise licence ended on ${licenceDate(state.expires)}. Everything keeps working; adding people is paused until it is renewed.`
     : `This cell has ${state.used} people and the licence covers ${state.seats}. Adding people is paused.`;

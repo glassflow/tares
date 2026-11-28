@@ -7,7 +7,6 @@ brain-decisions
 brain-folders
 brain-repos
 component-gallery
-connect
 edition-routes
 edition-shell
 ee-chunk
@@ -36,7 +35,5 @@ licence-words
 login-handoff
 motion
 other-project
-redirects
 report
-source-claude-code
 team-home

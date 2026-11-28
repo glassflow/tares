@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 import { Banner, Button, Collapse, Dialog, EmptyState, Panel, ProgressBar, Skeleton, StatusLabel, Toaster, type Tone, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 import { useSample } from "../sample";
 import { useBrainRead } from "../brainRead";
 import { usePagePolling } from "../usePagePolling";
@@ -315,7 +315,7 @@ const sampleLoad = (name: string): Promise<BrainReposData> =>
 export default function BrainRepos() {
   const named = useSample();
   const sample = isBrainSample(named) ? named : null;
-  const { admin } = useEdition();
+  const { admin } = useWho();
   const { toast } = useToast();
   // A sample reads its own data; a live page takes the shell's one read of GET /api/brain (TR-1438), which
   // also feeds the menu and the Ask page, so the page makes no read of its own and odd answers are already

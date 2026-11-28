@@ -6,7 +6,7 @@
  * on /projects, a ticket address opens the ticket page (the old ?view=ticket:<ref> goes there too); the menu is Home, Integrations, Projects, Tickets, Reviews, Report, Crew, People, Docs and memory, Settings;
  * / on a new cell (no project, setup not done) opens Set up your factory;
  * ?sample=busy without the browser flag renders the same as /.
- * /welcome/edition and the old AI SRE pages land on /. The Advanced tab passes the words check, and is shot at
+ * /welcome/edition lands on /; an AI SRE or platform address, or any other, is Page not found (TR-1817). The Advanced tab passes the words check, and is shot at
  * 1440 and 390 wide. useSample (src/editions/sample.ts) is run as written, with a fake browser, for
  * the flag rule: the address alone never shows sample data.
  *
@@ -144,10 +144,23 @@ function loadSample(env) {
       ck("factory: a ticket address opens the ticket page, here with no such ticket", where(page) === "/projects/x/tickets/T1", where(page));
       const home = await homeOf(page, e);
       ck("factory: / on a new cell, with no project and setup not done, opens Set up your factory", home === "/setup", home);
-      for (const p of ["/welcome/edition", "/timeline", "/services", "/services/service-a", "/incidents", "/incidents/i-1", "/runbooks"]) {
+      await go(page, e, "/welcome/edition");
+      ck("factory: /welcome/edition lands on /", where(page) === "/" && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
+      // TR-1817: the console routes only factory pages; an AI SRE or platform address is not found
+      for (const p of ["/timeline", "/services", "/services/service-a", "/incidents/i-1", "/runbooks", "/sources", "/explore",
+                       "/ask", "/connect", "/reads", "/projects/x/setup", "/nope"]) {
         await go(page, e, p);
-        ck(`factory: ${p} lands on /`, where(page) === "/" && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
+        await page.getByTestId("not-found").waitFor();
+        ck(`factory: ${p} is Page not found`, where(page) === p
+           && (await page.getByRole("heading", { name: "Page not found" }).isVisible()), where(page));
       }
+
+      // links in Slack messages already sent land on a page that exists
+      await go(page, e, "/agents/a1");
+      ck("factory: an old /agents link lands on /projects", where(page) === "/projects", where(page));
+      await go(page, e, "/dispatches/d1");
+      ck("factory: an old /dispatches link lands on /", where(page) !== "/dispatches/d1"
+         && (await page.getByTestId("not-found").count()) === 0, where(page));
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);

@@ -7,7 +7,7 @@ import { Input } from "@paper-kit/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@paper-kit/ui/tabs";
 import { Slot, useEeLoaded, useEePending, useEeSamples } from "../../eeSlots";
 import { cn } from "../../lib/utils";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
@@ -229,7 +229,7 @@ export function FactoryProjectsView({ data, onClose, start }: {
 
 /** The person's name as the cell has it, for "Led by you". */
 function useMe(): string | undefined {
-  const { personName } = useEdition();
+  const { personName } = useWho();
   return personName && personName !== "You" ? personName : undefined;
 }
 

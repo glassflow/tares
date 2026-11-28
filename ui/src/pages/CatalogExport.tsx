@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import type { ConnectorSpec, Source } from "../types";
 import { copyText } from "../editions/copyText";
-import { useEdition } from "../editions/edition";
+import { useWho } from "../editions/who";
 import { Banner, Button, Checkbox, Collapse, EmptyState, ListRow, ListSection, LoadingBlocks, Panel, StatusLabel, Switch } from "../components/edition";
 
 const REDACTED = "••••••••";   // matches connectors.REDACTED_SECRET; a set secret comes back as this
@@ -15,8 +15,8 @@ const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
  *  daemon's defaults (every connection, no secrets) are the agent's and MCP's call; this page adds
  *  picking connections and an opt-in for secrets. The route is admin only on the daemon. */
 export default function CatalogExport() {
-  const { edition, admin } = useEdition();
-  const rules = edition === "sre" ? "check rules" : "rules";
+  const { admin } = useWho();
+  const rules = "rules";
   const [sources, setSources] = useState<Source[]>();
   const [specs, setSpecs] = useState<Record<string, ConnectorSpec>>({});
   const [loadErr, setLoadErr] = useState<string>();

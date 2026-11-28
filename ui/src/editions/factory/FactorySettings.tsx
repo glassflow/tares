@@ -6,7 +6,7 @@ import { licenceWordsOn, slugFromHost, useCloud, useWorkspaceOverview } from "..
 import LicencePanel from "../../components/LicencePanel";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
-import { CLOUD_BACK } from "../../pages/Security";
+import { CLOUD_BACK } from "../settings/cloudBack";
 import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../settings/AccessPanels";
 import WorkspaceSettings, { TeamPanel } from "../settings/WorkspacePanels";
 import { ProvidersPanel } from "../settings/ProvidersPanel";

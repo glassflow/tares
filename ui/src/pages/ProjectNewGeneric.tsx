@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { api } from "../api";
 import { Picker } from "../components/bits";
 import { SlackPick } from "../components/SlackPick";
-import type { Project, Template, RecipeParam } from "../types";
+import type { LegacyProject, Template, RecipeParam } from "../types";
 import { copyText } from "../editions/copyText";
 
 // The fallback wizard: a form rendered straight from a template's PARAMS, for templates without a
@@ -39,7 +39,7 @@ export default function ProjectNewGeneric() {
   const navigate = useNavigate();
   const [search] = useSearchParams();
   const editId = search.get("edit");
-  const [existing, setExisting] = useState<Project>();
+  const [existing, setExisting] = useState<LegacyProject>();
   const [template, setRecipe] = useState<Template>();
   const [err, setErr] = useState<string>();
   const [name, setName] = useState("");
@@ -89,9 +89,9 @@ export default function ProjectNewGeneric() {
       setRecipe(found);
       if (editId) {
         const proj = await api.project(editId);
-        setExisting(proj);
+        setExisting(proj as LegacyProject);
         setName(proj.name);
-        setVals(Object.fromEntries(Object.entries(found.params).map(([k, p]) => [k, fromStored(p, proj.params[k])])));
+        setVals(Object.fromEntries(Object.entries(found.params).map(([k, p]) => [k, fromStored(p, (proj as LegacyProject).params[k])])));
         return;   // no detect on edit: the stored values are the truth, Rescan is one click away
       }
       setName(found.title);

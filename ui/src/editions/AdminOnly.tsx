@@ -1,10 +1,10 @@
 import { Banner } from "../components/edition";
-import { useEdition } from "./edition";
+import { useWho } from "./who";
 
 /** What a key that can only read sees in place of Settings: the page is for admin keys, and the cell
  *  refuses the read for any other key, so nothing is loaded. A cell with no sign-in counts as admin. */
 export function useSettingsRefused(sample: boolean): boolean {
-  const { admin } = useEdition();
+  const { admin } = useWho();
   return !sample && admin === false;
 }
 

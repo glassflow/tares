@@ -48,7 +48,6 @@ export const KIT_REGISTER = {
   'src/ee/home/Sender.tsx': RUNTIME,
   'src/ee/home/Side.tsx': RUNTIME,
 
-  'src/editions/ChooseEdition.tsx': NO_PRIMITIVE,
   'src/editions/Shell.tsx': NO_PRIMITIVE,
   'src/editions/StartChecklist.tsx': NO_PRIMITIVE,
   'src/editions/factory/BrainAsk.tsx': NO_PRIMITIVE,

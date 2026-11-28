@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api, ApiError } from "../api";
-import { useEdition } from "../editions/edition";
+import { useWho } from "../editions/who";
 import { Banner, Button, Collapse, Dialog, Switch, Textarea } from "../components/edition";
 
 type Counts = Awaited<ReturnType<typeof api.importYaml>>;
@@ -12,8 +12,8 @@ const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? on
  *  whole before the daemon writes; a replace removes what is here first, and today the daemon does
  *  that before the checks, so the page claims nothing about a failed one. The route is admin only. */
 export default function CatalogImport() {
-  const { edition, admin } = useEdition();
-  const rule = edition === "sre" ? "check rule" : "rule";
+  const { admin } = useWho();
+  const rule = "rule";
   const [text, setText] = useState("");
   const [replace, setReplace] = useState(false);
   const [confirming, setConfirming] = useState(false);

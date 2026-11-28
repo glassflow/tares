@@ -5,6 +5,7 @@ import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { licenceWordsOn, useCloud } from "../cloud";
 import type { Edition, EditionSettings } from "../types";
+import { CLOUD_BACK } from "../editions/settings/cloudBack";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import LicencePanel from "../components/LicencePanel";
@@ -15,7 +16,6 @@ import { ProvidersPanel } from "../editions/settings/ProvidersPanel";
 import { ApiKeysPanel } from "../editions/settings/ApiKeysPanel";
 import { AccessPanel, PeopleBlock, useAccessData } from "../editions/settings/AccessPanels";
 import AdvancedPanel from "../editions/AdvancedPanel";
-import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "../editions/settings/WorkspacePanels";
 import { copyText } from "../editions/copyText";
 
@@ -44,32 +44,11 @@ const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "advanced", label: "Advanced" },   // factory and sre cells only
 ];
 
-// Coming back from a Tares Cloud connect page (contract §3): `cloud` says what happened and
-// `cloud_detail` may add a sentence to show as is. Shown once, on the tab it belongs to.
-export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind: "ok" | "error" | "" }> = {
-  "github-connected": { tab: "github", kind: "ok",
-    text: "GitHub is connected. Events from the repositories you picked arrive here as they happen." },
-  "github-repos": { tab: "github", kind: "ok",
-    text: "Repositories saved. Events from them arrive here as they happen." },
-  "github-disconnected": { tab: "github", kind: "",
-    text: "GitHub is disconnected. Its events no longer reach this workspace." },
-  "slack-connected": { tab: "slack", kind: "ok",
-    text: "Slack is connected. Triggers and agents can post to its channels, and your team can ask Tares with /tares ask." },
-  "slack-disconnected": { tab: "slack", kind: "",
-    text: "Slack is disconnected. Nothing is posted to it any more." },
-  "linear-connected": { tab: "linear", kind: "ok",
-    text: "Linear is connected. Projects can keep their tickets in a Linear project." },
-  "linear-disconnected": { tab: "linear", kind: "",
-    text: "Linear is disconnected. Projects linked to it keep their tickets and stop syncing." },
-  error: { kind: "error", text: "That did not work. Nothing was changed." },
-  cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
-};
 
 
 export default function Security({ initialTab }: { initialTab?: SettingsTab } = {}) {
   // The Advanced tab holds the building blocks on the factory and sre editions; a platform cell has no such tab.
-  const { edition } = useEdition();
-  const hasAdvanced = edition !== undefined && edition !== "platform";
+  const hasAdvanced = true;
   const [cloudBack] = useState(() => {
     const q = new URLSearchParams(window.location.search);
     const m = CLOUD_BACK[q.get("cloud") ?? ""];
@@ -220,7 +199,7 @@ function EditionPanel() {
     api.whoami().then((w) => {
       const isAdmin = w.scopes.includes("admin");
       setAdmin(isAdmin);
-      setNow(w.edition_name);
+      setNow("Software Factory");
       if (!isAdmin) return;
       return api.edition().then((s) => { setSt(s); setPick(s.edition); });
     }).catch((e) => { setAdmin(false); setErr(String((e as Error).message ?? e)); });

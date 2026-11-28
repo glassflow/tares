@@ -157,11 +157,6 @@ def router(deps: Deps) -> APIRouter:
             _err(KeyError(f"no active key {kid!r}"), 404)
         return {"ok": True, "note": "key revoked"}
 
-    def _whoami_edition() -> dict:
-        # Fixed values the console still reads to pick its screens, until the console's edition
-        # code goes (TR-1817). Nothing on the cell asks or checks which edition it is any more.
-        return {"edition": "factory", "edition_name": "Software Factory", "edition_needed": False}
-
     # ── People: who is on the cell. Keys belong to them; the credential names who is calling ──
     def _person_out(p: dict) -> dict:
         return {k: p.get(k) for k in ("id", "name", "email", "emails", "github", "is_admin",
@@ -289,8 +284,8 @@ def router(deps: Deps) -> APIRouter:
         scopes = getattr(request.state, "scopes", None)
         if ident is None:   # guard not active (open instance) or ingest-path credential
             return {"id": "open", "name": "no auth configured", "kind": "open",
-                    "person": _current_person(request), "scopes": sorted(_SCOPES), **_whoami_edition()}
-        out = {**ident, "scopes": scopes or [], **_whoami_edition()}
+                    "person": _current_person(request), "scopes": sorted(_SCOPES)}
+        out = {**ident, "scopes": scopes or []}
         if ident.get("project"):   # a project key: the project it reads, by id and name
             out["project_name"] = (store.get_project(ident["project"]) or {}).get("name")
         return out

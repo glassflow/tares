@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { DemoRow, ReadyItem, useOwnProjects, useReadiness } from "../components/readiness";
 import { GoalStep, type GoalWords, type Who } from "../components/setup/goal";
-import { CLOUD_BACK } from "./Security";
+import { CLOUD_BACK } from "../editions/settings/cloudBack";
 import { startDraft } from "./ProjectSetup";
 
 // Start: where a new cell opens, until the person has a project of their own (then / is

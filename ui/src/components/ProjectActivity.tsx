@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { api } from "../api";
+import { request } from "../api";
 import { ErrorState, Picker, TimeAgo, fmtCost, usePolling } from "./bits";
 import { ResultChips, SkillChips, statusBadge } from "../pages/AgentDetail";
 import type { AgentRun } from "../types";
@@ -12,6 +12,14 @@ import type { AgentRun } from "../types";
 // expandable in place to what it carried and everything it led to. Runs nest what came of them:
 // a rerun under the run it repeats, a handoff under the run that handed off, and a firing its
 // finding tripped under that run, with the runs that firing woke.
+
+// the project's threads, newest first; page with `before` = the previous page's next_before. Read here,
+// not in api.ts, so the factory console does not pull this platform view in through its types (TR-1817).
+const projectTimeline = (id: string, q: { trigger?: string; agent?: string; outcome?: string;
+                                          entity?: string; before?: string | null; limit?: number } = {}) =>
+  request<{ threads: TimelineThread[]; next_before: string | null }>(
+    `/api/projects/${encodeURIComponent(id)}/timeline?` + new URLSearchParams(
+      Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString());
 
 export type TimelineRun = AgentRun & {
   woken_by?: "trigger" | "schedule" | "manual" | "rerun" | "bootstrap" | "handoff" | "external" | null;
@@ -85,7 +93,7 @@ function Timeline({ id, triggers, agents, onShowTrigger, openThread }: {
   const [loadingMore, setLoadingMore] = useState(false);
   const [open, setOpen] = useState<Set<string>>(() => new Set(openThread ? [openThread] : []));
   const filters = { trigger, agent, outcome, entity };
-  const { data: head, error, reload } = usePolling(() => api.projectTimeline(id, filters), 10000);
+  const { data: head, error, reload } = usePolling(() => projectTimeline(id, filters), 10000);
   useEffect(() => { setOlder([]); setOlderCursor(undefined); reload(); },
     [trigger, agent, outcome, entity]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -98,7 +106,7 @@ function Timeline({ id, triggers, agents, onShowTrigger, openThread }: {
     if (!cursor) return;
     setLoadingMore(true);
     try {
-      const page = await api.projectTimeline(id, { ...filters, before: cursor });
+      const page = await projectTimeline(id, { ...filters, before: cursor });
       setOlder((o) => [...o, ...page.threads]);
       setOlderCursor(page.next_before);
     } catch { setOlderCursor(null); }

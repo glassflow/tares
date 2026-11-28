@@ -3,8 +3,8 @@
  * factory project (editions/factory/OtherProject.tsx), and where an old ?view= address leads.
  *
  * A project with no kind (made over the API, or before the cell became a factory cell) gets one kit page:
- * its name and status, what it is for, what it holds, where its full setup lives (the platform edition),
- * Pause or Turn back on, and Delete behind a dialog. A draft goes to its setup, an address with no project
+ * its name and status, what it is for, what it holds, and no word of an edition,
+ * Pause or Turn back on, and Delete behind a dialog. A draft opens this page too, an address with no project
  * says so. An old ?view= address on a factory project lands on the factory page that holds the same thing.
  * The factory edition no longer reaches the old project page (pages/ProjectShell) at all.
  *
@@ -104,8 +104,8 @@ async function waitFor(url, tries = 100) {
       ck("what it is for", (await txt(T("other-goal"))).includes("What it is for"));
       ck("it holds nothing, and says so in one line", (await T("other-part").count()) === 0
          && (await txt(T("other-empty"))) === "It holds no connections, rules, agents or MCP servers." && (await T("other-count").count()) === 0);
-      ck("its full setup is the platform edition's, with a link to Settings, Edition",
-         (await T("other-edition-link").getAttribute("href")) === "/settings?tab=edition");
+      ck("no word of a platform edition or a switch to one", (await T("other-setup").count()) === 0
+         && (await T("other-edition-link").count()) === 0 && !(await txt(T("other-project"))).includes("edition"));
       ck("Pause and Delete, nothing else", (await T("other-pause").count()) === 1 && (await T("other-resume").count()) === 0
          && (await T("other-delete").count()) === 1 && (await T("other-actions").getByRole("button").count()) === 2);
       await checkWords(page, ck, "the page");
@@ -171,8 +171,11 @@ async function waitFor(url, tries = 100) {
     {
       const { ctx, page } = await newPage(1440);
       await page.goto(`${BASE}/projects/${z}`, { waitUntil: "load" });
-      await page.waitForURL((u) => u.pathname.endsWith("/setup"), { timeout: 10000 }).catch(() => {});
-      ck("a draft opens at its setup", new URL(page.url()).pathname === `/projects/${z}/setup`, page.url());
+      await page.getByTestId("other-project").waitFor({ timeout: 10000 }).catch(() => {});
+      ck("a draft opens its own page, being planned, not a missing setup page",
+         new URL(page.url()).pathname === `/projects/${z}`
+         && (await raw(page.getByTestId("other-status"))) === "Being planned"
+         && (await page.getByTestId("not-found").count()) === 0, `${page.url()} | ${await raw(page.getByTestId("other-status")).catch(() => "no status")}`);
       await page.goto(`${BASE}/projects/uc_nosuchthing`, { waitUntil: "load" });
       await page.getByTestId("other-missing").waitFor();
       ck("an address with no project says so, with a way to every project",
@@ -187,7 +190,7 @@ async function waitFor(url, tries = 100) {
     for (const width of [1440, 390]) {
       const { ctx, page } = await newPage(width);
       const T = (id) => page.getByTestId(id);
-      await routeSummary(page, { objects: PARTS, status: "error", last_error: "agent triage-agent: the model provider refused the key",
+      await routeSummary(page, { objects: PARTS, status: "error",
                                  lead: { id: "p1", name: "Ada Example" }, goal: "Watch the production logs and open an incident when the error rate jumps." });
       await page.goto(`${BASE}/projects/${w}`, { waitUntil: "load" });
       await T("other-part").first().waitFor();
@@ -200,8 +203,9 @@ async function waitFor(url, tries = 100) {
         ck("the count beside the title", (await txt(T("other-count"))) === "5");
         ck("a part deleted by hand says so, on its own row only", (await T("other-part-missing").count()) === 1
            && (await txt(T("other-part").nth(3))).includes("deleted outside the project"));
-        ck("a failing project says why, in the error tone", (await raw(T("other-status"))) === "Failing" && (await T("other-status").getAttribute("data-tone")) === "bad"
-           && (await txt(T("other-error"))).includes("the model provider refused the key") && (await T("other-error").getAttribute("role")) === "alert");
+        // TR-1817: the API sends no last_error any more, so there is no error line, only the status
+        ck("a failing project says so, in the error tone, with no error line", (await raw(T("other-status"))) === "Failing" && (await T("other-status").getAttribute("data-tone")) === "bad"
+           && (await T("other-error").count()) === 0);
         ck("who leads it", (await txt(T("other-what"))).includes("Led by Ada Example."));
         ck("the goal, as written", (await txt(T("other-goal"))).includes("Watch the production logs"));
         ck("its names and goal are marked as the person's own text", (await T("other-part-name").first().getAttribute("data-user-text")) !== null

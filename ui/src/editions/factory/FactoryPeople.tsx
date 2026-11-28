@@ -5,7 +5,7 @@ import LicenceNeeded from "../../components/LicenceNeeded";
 import { Banner, Button, Collapse, Initials, Input, ListRow, ListSection, LoadingBlocks, StatusDot } from "../../components/edition";
 import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePending, useLicenceNoAnswer } from "../../eeSlots";
 import { cn } from "../../lib/utils";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 import { usePagePolling } from "../usePagePolling";
 import { factoryPeople, type FactoryPeopleData, type PersonRow } from "./FactoryPeople.api";
 import { MUTED, sentence } from "./peopleText";
@@ -113,7 +113,7 @@ function AddSlot({ data, onAdded }: { data: FactoryPeopleData; onAdded: (words: 
 export default function FactoryPeople() {
   const { data, error, reload } = usePagePolling<FactoryPeopleData>(factoryPeople, POLL_MS);
   const [note, setNote] = React.useState("");
-  const edition = useEdition();
+  const who = useWho();
   const banner = error && (
     <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
       <b>People did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
@@ -123,7 +123,7 @@ export default function FactoryPeople() {
   return (
     <>
       {banner && <div className="mb-6">{banner}</div>}
-      <FactoryPeopleView data={data} note={note} onAdded={(w) => { setNote(w); reload(); }} onPeopleChanged={() => { reload(); edition.reload?.(); }} />
+      <FactoryPeopleView data={data} note={note} onAdded={(w) => { setNote(w); reload(); }} onPeopleChanged={() => { reload(); who.reload(); }} />
     </>
   );
 }

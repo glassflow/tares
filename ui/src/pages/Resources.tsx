@@ -7,7 +7,6 @@ import {
   Banner, Button, Checkbox, EmptyState, Input, ListRow, ListSection, LoadingBlocks, StatusLabel, Tabs, toneOf,
 } from "../components/edition";
 import { toolTitle } from "../components/setup/planEdit";
-import { useEdition } from "../editions/edition";
 import { ageWords } from "../lib/time";
 import type { ResourceKind, ResourceRow } from "../types";
 
@@ -70,13 +69,12 @@ function lastAt(kind: ResourceKind, r: ResourceRow): string | null {
 export default function Resources() {
   const { kind: raw } = useParams();
   const navigate = useNavigate();
-  const { edition } = useEdition();
   const kind: ResourceKind = (KINDS.find((k) => k.kind === raw)?.kind) ?? "sources"; // words-ok
   const { data, error, reload } = usePolling(() => api.resources(), 15000);
   const [filter, setFilter] = useState("");
   const [loose, setLoose] = useState(false);
 
-  const wordsOf = (k: (typeof KINDS)[number]): Words => ({ ...k.factory, ...(edition === "sre" ? k.sre : {}) });
+  const wordsOf = (k: (typeof KINDS)[number]): Words => ({ ...k.factory });
   const words = wordsOf(KINDS.find((k) => k.kind === kind)!);
   const all = data?.[kind] ?? [];
   const needle = filter.trim().toLowerCase();
@@ -84,7 +82,7 @@ export default function Resources() {
     (!loose || r.used_by.length === 0)
     && (!needle || `${r.name} ${plainTitle(kind, r) ?? ""} ${r.what} ${r.used_by.map((u) => u.name).join(" ")}`
       .toLowerCase().includes(needle)));
-  const rules = edition === "sre" ? "check rule" : "rule";
+  const rules = "rule";
 
   const list = data && (
     <div className="grid min-w-0 gap-4 pt-4">

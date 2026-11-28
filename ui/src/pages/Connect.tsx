@@ -7,7 +7,6 @@ import {
   Banner, Button, EmptyState, Input, ListRow, ListSection, Panel, Select, SkeletonLines, SkeletonRows, Tabs,
 } from "../components/edition";
 import { copyText } from "../editions/copyText";
-import { useEdition } from "../editions/edition";
 
 // Connect (TR-1395): how an agent of your own hooks up to this Tares, one tab per way in. The tab keys
 // are the address's (/connect?tab=push is linked from a project's Subscribers), not page words.
@@ -61,8 +60,7 @@ export function ConnectPage() {
   const [params] = useSearchParams();
   const initial = params.get("tab");
   const [tab, setTab] = useState<ConnectTab>(TABS.some((t) => t.value === initial) ? (initial as ConnectTab) : "mcp");
-  const { edition } = useEdition();
-  const rule = edition === "sre" ? "check rule" : "rule";
+  const rule = "rule";
 
   const origin = window.location.origin;
   const [authReq, setAuthReq] = useState<boolean>();

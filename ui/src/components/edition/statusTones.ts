@@ -19,8 +19,6 @@ import type { TicketStateKey } from "../../editions/factory/FactoryTicket.api";
 import type { MemberState } from "../../editions/factory/FactoryCrew.api";
 import type { HomeCrewState } from "../../editions/factory/home.types";
 import type { CiState } from "../../editions/factory/FactoryReviews.api";
-import type { GroupState } from "../../editions/sre/Incidents.api";
-import type { SreServiceState } from "../../editions/sre/Services.api";
 import type { CrewState, Project, ProjectSession, TicketStatus } from "../../types";
 
 const shared = (key: StatusKey): Tone => STATUS[key].tone;
@@ -122,23 +120,6 @@ const call = {
   you_changed_it: "done",
 } satisfies Record<Keyed<CallState>, Tone>;
 
-// An incident, or a finding that was raised and did not become one.
-const incident = {
-  open: "bad",
-  on_it: "working",
-  resolved: "ready",
-  raised: "quiet",
-} satisfies Record<GroupState, Tone>;
-
-const service = {
-  incident: "bad",
-  unusual: "waiting",
-  silent: "waiting",
-  not_watched: "quiet",
-  no_own_signal: "quiet",
-  normal: "ready",
-} satisfies Record<SreServiceState, Tone>;
-
 // A push source has no poll loop, so its health is not measured: quiet, not jade. A source that is
 // starting reads quiet here, where STATUS.starting is working: the console keeps its own.
 const source = {
@@ -190,7 +171,7 @@ const docTicket = {
 } satisfies Record<TicketStatus, Tone>;
 
 /** Every table, by domain. The gallery and its test walk this, so a new domain shows up there too. */
-export const STATUS_TONES = { project, ticket, turn, pr, ci, crew, verdict, finding, call, incident, service, source, resource, projectRun, docTicket } as const;
+export const STATUS_TONES = { project, ticket, turn, pr, ci, crew, verdict, finding, call, source, resource, projectRun, docTicket } as const;
 export type StatusDomain = keyof typeof STATUS_TONES;
 
 /** The tone of a status the API sends as a plain string. An unknown one reads quiet and warns once,

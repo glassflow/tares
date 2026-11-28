@@ -14,7 +14,6 @@ import type {
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
 } from "./types";
-import type { TimelineThread } from "./components/ProjectActivity";
 import { ENTERPRISE_URL, licenceSentence, licenceWordsOn } from "./licenceWords";
 
 const TOKEN_KEY = "tares_token";
@@ -536,12 +535,6 @@ export const api = {
   finishProject: (id: string, words: string) =>
     request<{ project: string; name: string; finished: unknown }>(
       `/api/projects/${encodeURIComponent(id)}/finish`, { method: "POST", body: JSON.stringify({ words }) }),
-  // the project's threads, newest first; page with `before` = the previous page's next_before
-  projectTimeline: (id: string, q: { trigger?: string; agent?: string; outcome?: string;
-                                     entity?: string; before?: string | null; limit?: number } = {}) =>
-    request<{ threads: TimelineThread[]; next_before: string | null }>(
-      `/api/projects/${encodeURIComponent(id)}/timeline?` + new URLSearchParams(
-        Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString()),
   // template "custom" takes `objects` ({kind, name} each) instead of params
   // `goal`: one line, <= 200 chars; a template's own goal applies when it is left out
   createProject: (body: { template: string; name?: string; params?: Record<string, unknown>;
