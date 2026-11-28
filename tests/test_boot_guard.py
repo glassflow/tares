@@ -64,17 +64,17 @@ class _EP:
 
 class EeTeam(SingleTeam):
     """An ee team with one route that wants the licence."""
-    def register_routes(self, app, host):
+    def register_routes(self, app, deps):
         @app.post(PING[1])
         def ping():
             if not L.ee_allowed():
-                host.licence_required("Ping needs an enterprise licence (ee route).")
+                deps.licence_required("Ping needs an enterprise licence (ee route).")
             return {"pong": True}
 
 
 class HalfTeam(SingleTeam):
     """Adds one route, then raises."""
-    def register_routes(self, app, host):
+    def register_routes(self, app, deps):
         @app.get(HALF)
         def half():
             return {"half": True}
@@ -139,7 +139,7 @@ async def case_type():
     log = watch("tares.team")
     os.environ["TARES_LICENSE"] = LIC
     class NotATeam:
-        def register_routes(self, app, host):
+        def register_routes(self, app, deps):
             raise AssertionError("a wrong type must never get as far as registering")
     real_eps = importlib.metadata.entry_points
     # only the ee group is faked: pydantic and others ask for their own groups while the app builds

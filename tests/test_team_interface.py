@@ -95,11 +95,11 @@ class FakeEeTeam(SingleTeam):
     def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting): return {"team": True}
     def mcp_tools(self): return [print]
 
-    def register_routes(self, app, host):
+    def register_routes(self, app, deps):
         @app.post(PING[1])
         def ping():
             if not L.ee_allowed():
-                host.licence_required("Ping needs an enterprise licence (ee route).")
+                deps.licence_required("Ping needs an enterprise licence (ee route).")
             return {"pong": True}
 
         @app.get("/api/ee-info")

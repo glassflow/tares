@@ -409,8 +409,8 @@ async def main():
     fx = {}
     register = factory_api.register
 
-    def keeping_fx(app, store, h):
-        fx["fx"] = register(app, store, h)
+    def keeping_fx(app, h):
+        fx["fx"] = register(app, h)
         return fx["fx"]
 
     factory_api.register = keeping_fx

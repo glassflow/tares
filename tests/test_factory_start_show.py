@@ -89,7 +89,7 @@ async def main():
     from tares.daemon import make_app
     app = make_app()
     store = app.state.store
-    factory_api.register(FastAPI(), store, SimpleNamespace(cc_source=lambda: "claude_code"))
+    factory_api.register(FastAPI(), SimpleNamespace(store=store, cc_source=lambda: "claude_code"))
     mk = lambda token=TOKEN: httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://t",
         headers={"Authorization": f"Bearer {token}"} if token else {})

@@ -223,7 +223,7 @@ async def main():
                                               headers={"Authorization": f"Bearer {TOKEN}"})
     m._cx = mf._cx = mk
     store = app.state.store
-    fx = factory_api.register(FastAPI(), store, SimpleNamespace(cc_source=lambda: "claude_code", hidden_ids=lambda: set(),
+    fx = factory_api.register(FastAPI(), SimpleNamespace(store=store, cc_source=lambda: "claude_code", hidden_ids=lambda: set(),
                                                                current_person=lambda r: None,
                                                                is_system=lambda r: False))
 
