@@ -360,8 +360,8 @@ ck("the three tickets came in, GitHub's", sorted(t["identifier"] for t in s.list
 s.create_ticket("p1", "tares", "Mine")
 n = run(b.sync({"id": "p1"}))
 ck("sync returns the count of GitHub tickets, not Tares ones, and takes a project dict", n == 3, n)
-ck("the events of the first sync are on the timeline", s.con.execute(
-   "SELECT count(*) FROM events WHERE source = 'github_issues'").fetchone()[0] == 3)
+ck("the sync stores no change events: nothing reads them (TR-1806)", s.con.execute(
+   "SELECT count(*) FROM events WHERE source = 'github_issues'").fetchone()[0] == 0)
 _find(1)["state"] = "closed"
 run(b.sync("p1"))
 ck("a change in GitHub is read", tk(s, "GH-1")["status"] == "done")

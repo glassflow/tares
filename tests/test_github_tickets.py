@@ -467,40 +467,9 @@ async def main():
     ck("(l) project and repo labels, issue label in the payload",
        all(e.labels["project"] == "Invoices" and e.labels["repo"] == "acme/app"
            and e.payload["repo"] == "acme/app" and e.payload["issue_label"] == LABEL for e in envs))
-    ck("(l) the source is made once", gt.ensure_source(store) is True and gt.ensure_source(store) is False
-       and any(s["name"] == "github_issues" for s in store.list_catalog_sources()))
     ck("a second sync with nothing new emits nothing", await gt.sync_project(store, uid) == [])
 
-    print("== (r) the connector is registered ==")
-    from tares.config import CatalogError, catalog_from_db, validate_source_dict
-    from tares.connectors import REGISTRY, SPECS
-    from tares.connectors.github_issues import GitHubIssuesConnector
-    row = next(x for x in store.list_catalog_sources() if x["name"] == "github_issues")
-    ck("(r) the stored source names the connector github_issues, polling every 60s",
-       row["connector"] == "github_issues" and row["poll"] == "60s" and row["type"] == "event_stream", row)
-    ck("(r) the registry key equals that name", REGISTRY.get("github_issues") is GitHubIssuesConnector)
-    try:
-        validate_source_dict(row)
-        valid = True
-    except CatalogError as e:
-        valid = str(e)
-    ck("(r) the stored row passes the validation the catalog uses", valid is True, valid)
-    try:
-        validate_source_dict({**row, "connector": "github_issue"})
-        ck("(r) and an unknown connector name still fails it", False)
-    except CatalogError:
-        ck("(r) and an unknown connector name still fails it", True)
-    ck("(r) internal, polled, labeled for the picker", SPECS["github_issues"]["internal"] is True
-       and SPECS["github_issues"]["mode"] == "poll" and SPECS["github_issues"]["poll"] == "60s"
-       and SPECS["github_issues"]["label"] == "GitHub issues (tickets)", SPECS.get("github_issues"))
-    labels = {x["name"]: x for x in row["config"]["labels"]}
-    ck("(r) labels ticket (the key), project and repo, read from the event payload",
-       set(labels) == {"ticket", "project", "repo"} and labels["ticket"].get("primary")
-       and labels["repo"]["field"] == "repo", labels)
-    cat = catalog_from_db(store)
-    ck("(r) the catalog builds it as a github_issues source", cat.sources["github_issues"].connector
-       == "github_issues" and isinstance(REGISTRY[cat.sources["github_issues"].connector](
-           cat.sources["github_issues"], store), GitHubIssuesConnector))
+    print("== (r) the linked projects ==")
     cur = store.get_project_github(uid)
     store.create_project("uc_plain", "custom", "Plain", {"objects": []})
     ck("(r) github_projects lists the linked project, not one without a link",
@@ -720,14 +689,11 @@ async def api():
         ck("(A) the link records repo, issue label, url, credential and the sync",
            lk["repo"] == "acme/app" and lk["issue_label"] == "tares:p" and lk["url"] == "https://github.com/acme/app"
            and lk["credential"] == "cred-a" and lk["synced_at"] and lk["error"] is None and lk["issues"] == 4, lk)
-        ck("(A) the github_issues source exists and is in the project",
-           "github_issues" in app.state.runtime.catalog.sources and "github_issues" in store.project_sources(uid))
-        with store._lock:                    # the source's first poll writes under this lock, from its own thread
-            n = store.con.execute("SELECT count(*) FROM events WHERE source = 'github_issues' AND "
-                                  "event_type = 'ticket_created'").fetchone()[0]
-        ck("(A) one event per ticket found", n == 4, n)
-        await asyncio.sleep(0.3)             # the source's own first poll, then the checks drive the polls
-        app.state.runtime._stop("github_issues")
+        ck("(A) linking makes no catalog source: the sync runner keeps the tickets in step (TR-1806)",
+           "github_issues" not in app.state.runtime.catalog.sources and not store.list_catalog_sources())
+        with store._lock:
+            n = store.con.execute("SELECT count(*) FROM events WHERE source = 'github_issues'").fetchone()[0]
+        ck("(A) the sync's change events are not stored", n == 0, n)
         r = await cx.get(f"/api/projects/{uid}/tickets")
         ck("(A) GET tickets shows the github link, and no linear one", r.json()["github"]["repo"] == "acme/app"
            and r.json()["github"]["issue_label"] == "tares:p" and r.json()["linear"] is None

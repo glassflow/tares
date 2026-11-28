@@ -44,7 +44,7 @@ from .. import tickets
 from ..types import Field, Status, TicketRef
 from ... import factory as factory_mod
 from ... import github_tickets as gt
-from ...connectors.github import _normalize_repo
+from ...github_repo import normalize_repo as _normalize_repo
 from ...envelope import now_utc
 from ...github_credentials import API_DEFAULT, credential_name, get_token, resolve_api_url
 
@@ -228,16 +228,21 @@ class TicketsGithub(tickets.TicketBackend):
         return True, f"Connected to {body.get('full_name') or repo} with {name}; it can write issues."
 
     # ── the interface ─────────────────────────────────────────────────────────
+    # how often the sync runner calls sync() for each linked project (tares/integrations/sync.py)
+    sync_interval_s = 60
+
+    def linked(self) -> list[str]:
+        """The projects whose tickets live in GitHub: the ones the sync runner keeps in step."""
+        return [uid for uid, _link in self.store.github_projects()]
+
     async def sync(self, project) -> int:
         """Retries the status changes waiting to reach GitHub, reads the project's issues into
-        its tickets (and the change events onto the timeline, as the polling connector does), and
-        returns how many tickets GitHub owns in the project now. Raises GitHubTicketsError when
+        its tickets, and returns how many tickets GitHub owns in the project now. Raises GitHubTicketsError when
         GitHub cannot be read; the tickets stay as they were."""
         uid = self._project(project)
         await self.retry_pending(uid)
-        envelopes = await gt.sync_project(self.store, uid)
-        if envelopes:
-            await asyncio.to_thread(self.store.append, envelopes)
+        # the change events it returns are not stored: nothing reads them (Tares 2.0, TR-1806)
+        await gt.sync_project(self.store, uid)
         rows = await asyncio.to_thread(self.store.list_tickets, uid)
         return sum(1 for t in rows if t["owner"] == "github")
 

@@ -746,6 +746,9 @@ def make_app() -> FastAPI:
         archive_task = asyncio.create_task(session_archive.run(store, loop_stop))
         # the weekly figures the report reads, built once and then kept current (TR-1666)
         report_task = asyncio.create_task(report_mod.run(store, loop_stop))
+        # Linear and GitHub Issues tickets kept in step by their integrations (TR-1806)
+        from .integrations import sync as integration_sync
+        sync_task = asyncio.create_task(integration_sync.run(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -771,6 +774,7 @@ def make_app() -> FastAPI:
         waiting_task.cancel()
         archive_task.cancel()
         report_task.cancel()
+        sync_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -5692,11 +5696,7 @@ def make_app() -> FastAPI:
             _err(e, 429 if e.rate_limited else 400)
         except (ValueError, KeyError) as e:
             _err(e)
-        mod = _linear if name == "linear" else _gh_tickets
-        if mod.ensure_source(store):
-            runtime.reload_catalog()
-        await asyncio.to_thread(store.upsert_project_object, uid, "source",
-                                f"+source:{mod.SOURCE_NAME}", mod.SOURCE_NAME)
+        # no source is made: the sync runner keeps the tickets in step (TR-1806)
         try:
             await (_linear_sync_now if name == "linear" else _github_sync_now)(uid)
         except (_linear.LinearError, _gh_tickets.GitHubTicketsError):
@@ -6712,9 +6712,10 @@ def make_app() -> FastAPI:
             _linear_err(e)
 
     async def _linear_sync_now(uid: str) -> None:
-        envelopes = await _linear.sync_project(store, uid)
-        if envelopes:
-            await asyncio.to_thread(store.append, envelopes)
+        # the same lock the sync runner holds, so the two never write one project's tickets at once
+        from .integrations.sync import project_lock
+        async with project_lock("linear", uid):
+            await _linear.sync_project(store, uid)   # its change events are not stored (TR-1806)
 
     @app.post("/api/projects/{uid}/linear/sync")
     async def sync_linear_project(uid: str):
@@ -6752,9 +6753,10 @@ def make_app() -> FastAPI:
         _err(e, 502 if "reach" in str(e) or "answered" in str(e) else 400)
 
     async def _github_sync_now(uid: str) -> None:
-        envelopes = await _gh_tickets.sync_project(store, uid)
-        if envelopes:
-            await asyncio.to_thread(store.append, envelopes)
+        # the same lock the sync runner holds, so the two never write one project's tickets at once
+        from .integrations.sync import project_lock
+        async with project_lock("github", uid):
+            await _gh_tickets.sync_project(store, uid)   # its change events are not stored (TR-1806)
 
     @app.post("/api/projects/{uid}/github/sync")
     async def sync_github_issues(uid: str):
