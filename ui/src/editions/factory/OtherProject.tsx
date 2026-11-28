@@ -106,7 +106,6 @@ function OtherProjectPage({ s, id, reload, stale }: {
         </div>
         <p className="m-0 text-sm text-muted-foreground" data-testid="other-what">
           Not a software factory project: it has no tickets, crew or decisions.
-          {s.template_title && <> It was made from the template “{s.template_title}”.</>}
           {s.lead && <> Led by <span data-user-text>{s.lead.name}</span>.</>}
           {" "}<span title={formatStampUTC(s.created_at)}>Made {ageWords(Date.now() - Date.parse(s.created_at))}</span>.
         </p>
@@ -114,11 +113,6 @@ function OtherProjectPage({ s, id, reload, stale }: {
 
       <Collapse>{stale && <Banner tone="warn" data-testid="other-stale">Showing what Tares read last; the latest read failed: {stale}</Banner>}</Collapse>
       <Collapse>{problem && <Banner tone="error" data-testid="other-problem">{problem}</Banner>}</Collapse>
-      <Collapse>{s.status === "error" && s.last_error && (
-        <Banner tone="error" data-testid="other-error">
-          It stopped on an error: <span className="font-mono text-[13px]" data-user-text>{s.last_error}</span>
-        </Banner>
-      )}</Collapse>
 
       {s.goal && (
         <section className="grid min-w-0 gap-1" data-testid="other-goal">

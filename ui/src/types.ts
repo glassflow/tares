@@ -192,9 +192,6 @@ export interface Whoami {
   scopes: string[];
   project?: string;
   project_name?: string | null;
-  edition: Edition;
-  edition_name: string;
-  edition_needed: boolean;
   mcp_object_tools?: boolean;
 }
 
@@ -880,14 +877,10 @@ export interface ProjectObject {
 }
 export interface Project {
   id: string;
-  template: string;
-  template_title: string;
   name: string;
-  params: Record<string, unknown>;
   status: "active" | "paused" | "error" | "draft" | "done";   // draft: being planned; done: the person said it is finished
   created_at: string;
   updated_at: string;
-  last_error: string | null;
   objects: ProjectObject[];
   default?: boolean;   // the Default project: holds whatever was made outside a project; never deleted
   goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
@@ -900,6 +893,9 @@ export interface Project {
   activity_at?: string;                // when it last moved: its own update or its newest ticket's (GET /api/projects only)
   ready_to_close?: boolean;            // a software factory project, still open, whose tickets are all merged or otherwise finished (GET /api/projects and the summary)
 }
+/** What the platform pages still read off a project, which the API no longer sends (TR-1816). Goes with
+ *  those pages (TR-1820). */
+export type LegacyProject = Project & { template?: string; params: Record<string, unknown>; last_error?: string | null };
 export type ProjectScope = "team" | "private";
 export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" | "self" }
 // a software factory project's tickets as its progress ring shows them (tares/factory.py

@@ -12,7 +12,7 @@ import { formatCount } from "../../lib/number";
 import { licenceSentence } from "@/components/LicenceNeeded";
 import { useCloud } from "@/cloud";
 import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePending, useEeSamples, useLicenceNoAnswer } from "@/eeSlots";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
@@ -69,7 +69,7 @@ function firstName(who: string | undefined): string {
 /** What the greeting calls the person: their own name, else the name of the key they signed in
  *  with. The cell calls its one unnamed person "You", which is not a name to greet. */
 function useFirstName(): string {
-  const { credentialName, personName } = useEdition();
+  const { credentialName, personName } = useWho();
   return firstName(personName && personName !== "You" ? personName : credentialName);
 }
 

@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router-do
 import { ApiError } from "../../api";
 import { Banner, Button, Collapse, Dialog, EmptyState, Panel, SearchSelect, Skeleton, Toaster, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 import { brainDecisions, deleteDecision, type DecisionFilters, type DecisionRow, type DecisionsPage, type DecisionTab } from "./BrainDecisions.api";
 import {
   ALL_PROJECTS, ALL_REPOS, ANY, DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, HEADING,
@@ -149,7 +149,7 @@ export default function BrainDecisions() {
   const repo = (params.get("repo") ?? "").trim() || null;
   const project = (params.get("project") ?? "").trim() || null;
   const key = `${tab}|${repo ?? ""}|${project ?? ""}`;
-  const { canWrite } = useEdition();
+  const { canWrite } = useWho();
   const location = useLocation();
   const navigate = useNavigate();
   const canAdd = canWrite !== false;

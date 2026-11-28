@@ -1,6 +1,4 @@
-import type { Edition } from "../types";
-
-export type MenuEntry = { key: string; label: string; to: string; today: boolean; group?: string };
+export type MenuEntry = { key: string; label: string; to: string; group?: string };
 
 /** The factory menu: Home and Integrations, then what the crew builds (Work), who builds it (Team: the
  *  crew and the people) and what it knows (Knowledge, with the Second Brain's pages once it is set
@@ -11,46 +9,30 @@ export const TEAM_GROUP = "Team";
 export const KNOWLEDGE_GROUP = "Knowledge";
 
 /** Settings sits alone at the bottom of the menu, apart from the entries above it. */
-export const SETTINGS_ENTRY: MenuEntry = { key: "settings", label: "Settings", to: "/settings", today: true };
+export const SETTINGS_ENTRY: MenuEntry = { key: "settings", label: "Settings", to: "/settings" };
 
-
-// `today` says the console has a page for the entry now. The others show once a page exists.
-export const MENUS: Record<"factory" | "sre", MenuEntry[]> = {
-  factory: [
-    { key: "home", label: "Home", to: "/", today: true },
-    { key: "integrations", label: "Integrations", to: "/integrations", today: false },
-    { key: "projects", label: "Projects", to: "/projects", today: true, group: WORK_GROUP },
-    { key: "tickets", label: "Tickets", to: "/tickets", today: false, group: WORK_GROUP },
-    { key: "reviews", label: "Reviews", to: "/reviews", today: false, group: WORK_GROUP },
-    { key: "report", label: "Report", to: "/report", today: true, group: WORK_GROUP },
-    { key: "crew", label: "Crew", to: "/crew", today: true, group: TEAM_GROUP },
-    { key: "people", label: "People", to: "/people", today: false, group: TEAM_GROUP },
-    { key: "docs", label: "Docs and memory", to: "/docs", today: false, group: KNOWLEDGE_GROUP },
-    SETTINGS_ENTRY,
-  ],
-  sre: [
-    { key: "home", label: "Home", to: "/", today: true },
-    { key: "services", label: "Services", to: "/services", today: false },
-    { key: "incidents", label: "Incidents", to: "/incidents", today: false },
-    { key: "timeline", label: "Timeline", to: "/timeline", today: true },
-    { key: "runbooks", label: "Runbooks and memory", to: "/runbooks", today: false },
-    SETTINGS_ENTRY,
-  ],
-};
-
-/** The Second Brain's pages, under Knowledge: shown only on a factory cell whose brain is set up. The pages
- * come with their own tickets, so these rows do not wait for `hasPage`. */
-export const BRAIN_ENTRIES: MenuEntry[] = [
-  { key: "brain-repos", label: "Repos", to: "/brain", today: true, group: KNOWLEDGE_GROUP },
-  { key: "brain-decisions", label: "Decisions", to: "/brain/decisions", today: true, group: KNOWLEDGE_GROUP },
-  { key: "brain-ask", label: "Ask", to: "/brain/ask", today: true, group: KNOWLEDGE_GROUP },
+/** The entries above Settings, in order. */
+export const MENU: MenuEntry[] = [
+  { key: "home", label: "Home", to: "/" },
+  { key: "integrations", label: "Integrations", to: "/integrations" },
+  { key: "projects", label: "Projects", to: "/projects", group: WORK_GROUP },
+  { key: "tickets", label: "Tickets", to: "/tickets", group: WORK_GROUP },
+  { key: "reviews", label: "Reviews", to: "/reviews", group: WORK_GROUP },
+  { key: "report", label: "Report", to: "/report", group: WORK_GROUP },
+  { key: "crew", label: "Crew", to: "/crew", group: TEAM_GROUP },
+  { key: "people", label: "People", to: "/people", group: TEAM_GROUP },
+  { key: "docs", label: "Docs and memory", to: "/docs", group: KNOWLEDGE_GROUP },
 ];
 
-/** The entries to show, in order, without Settings. An entry with no page is left out, not greyed.
- * `brain` says the cell has a brain: only then its pages join Knowledge, after Docs and memory. */
-export function visibleEntries(edition: Edition, hasPage: (to: string) => boolean = () => false,
-                               brain = false): MenuEntry[] {
-  if (edition === "platform") return [];
-  const own = MENUS[edition].filter((e) => e.key !== SETTINGS_ENTRY.key && (e.today || hasPage(e.to)));
-  return edition === "factory" && brain ? [...own, ...BRAIN_ENTRIES] : own;
+/** The Second Brain's pages, under Knowledge: shown only on a cell whose brain is set up. */
+export const BRAIN_ENTRIES: MenuEntry[] = [
+  { key: "brain-repos", label: "Repos", to: "/brain", group: KNOWLEDGE_GROUP },
+  { key: "brain-decisions", label: "Decisions", to: "/brain/decisions", group: KNOWLEDGE_GROUP },
+  { key: "brain-ask", label: "Ask", to: "/brain/ask", group: KNOWLEDGE_GROUP },
+];
+
+/** The entries to show, in order, without Settings. `brain` says the cell has a brain: only then its
+ *  pages join Knowledge, after Docs and memory. */
+export function visibleEntries(brain = false): MenuEntry[] {
+  return brain ? [...MENU, ...BRAIN_ENTRIES] : MENU;
 }

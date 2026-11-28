@@ -6,7 +6,7 @@ import { Banner, Button, Collapse, EmptyState, Panel, Skeleton } from "../../com
 import { Checkbox } from "@paper-kit/ui/checkbox";
 import { Input as TextInput } from "@paper-kit/ui/input";
 import { cn } from "../../lib/utils";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 import { availableRepos, connectBrainRepos, type AvailableData, type AvailableRepo } from "./BrainConnect.api";
 import { availableFolders, type FolderScan } from "./BrainFolders.api";
 import { FolderList } from "./BrainFolders";
@@ -257,7 +257,7 @@ function OthersConnect() {
 }
 
 export default function BrainConnect() {
-  const { admin } = useEdition();
+  const { admin } = useWho();
   // The cell has not said yet who this key is: nothing to ask for, nothing to press.
   if (admin === undefined) return <Head><Loading /></Head>;
   return admin ? <AdminConnect /> : <OthersConnect />;

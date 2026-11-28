@@ -59,6 +59,7 @@ jobs:
           node tests/words.check.cjs
           npm run design-contract
           npm run motion-contract
+          npm run test:closure
           npm run count-parity
           npm run build
         working-directory: ui

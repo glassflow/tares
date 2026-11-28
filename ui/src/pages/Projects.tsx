@@ -8,7 +8,7 @@ import { Activity, Lock, Search } from "../components/icons";
 import { ProgressRing, progressText } from "../components/ProgressRing";
 import { ReadyReminder } from "../components/readiness";
 import { DeleteDraft } from "../components/setup/deleteDraft";
-import type { Project } from "../types";
+import type { LegacyProject, Project } from "../types";
 import {
   SHOWS, SORTS, matchesQuery, matchesShow, pendingWork, sortProjects,
   type Show, type Sort,
@@ -65,7 +65,7 @@ function StatusCell({ u }: { u: Project }) {
 // the templates that make an AI SRE project; kind is null for these as for any ordinary project
 const AI_SRE_TEMPLATES = new Set(["ai_sre_demo", "rius_rca"]);
 const isFactory = (p: Project) => p.kind === "software_factory";
-const isAiSre = (p: Project) => AI_SRE_TEMPLATES.has(p.template);
+const isAiSre = (p: Project) => AI_SRE_TEMPLATES.has((p as LegacyProject).template ?? "");
 
 // in a row the label folds into the title and aria-label at narrow widths (.pj-chip-label); the legend keeps it
 function KindChip({ factory, legend }: { factory: boolean; legend?: boolean }) {

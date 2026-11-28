@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { api, ApiError } from "../../api";
 import type { CrewSettingField } from "../../types";
 import { Slot } from "@/eeSlots";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 import { CopyCommand, Tick } from "../StartChecklist";
 import { hideStart, type StartStep } from "../StartChecklist.api";
 import { saveCrewChoices } from "./FactoryHome.api";
@@ -215,7 +215,7 @@ function ProjectStep({ step, n, of, rows, onChanged }: {
   /** The team's projects, a private one the person is not on as a stub. */
   rows: HomeProjectRow[]; onChanged: () => void;
 }) {
-  const { personId } = useEdition();
+  const { personId } = useWho();
   const [busy, setBusy] = React.useState<string>();
   const [joined, setJoined] = React.useState<string[]>([]);
   const [errors, setErrors] = React.useState<Record<string, string | undefined>>({});

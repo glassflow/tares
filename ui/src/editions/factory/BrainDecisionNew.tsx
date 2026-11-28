@@ -5,7 +5,7 @@ import { api } from "../../api";
 import { Banner, Button, Collapse, Input, Panel, Select, Textarea } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import type { Person } from "../../types";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 import { addDecision } from "./BrainDecisions.api";
 import { ADD_LINE, addErrorWords, FILE_TYPES, fileProblem, formProblem, MAX_TITLE, PEOPLE_FAILED_WORDS, READ_ONLY_LINE, RECORD_WORDS, WHO_MISSING_WORDS } from "./brainDecisionsText";
 
@@ -34,7 +34,7 @@ function Head() {
 
 export default function BrainDecisionNew() {
   const navigate = useNavigate();
-  const { canWrite, personId, personName } = useEdition();
+  const { canWrite, personId, personName } = useWho();
   const [people, setPeople] = React.useState<Person[] | null>(null);
   const [peopleFailed, setPeopleFailed] = React.useState(false);
   const [title, setTitle] = React.useState("");

@@ -3,12 +3,13 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, EmptyState, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton, SkeletonRows, StatusLabel, STATUS_TONES,
+  Banner, Button, EmptyState, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton, SkeletonRows, StatusLabel,
   Toaster, useToast,
 } from "../../components/edition";
 import { Tabs, TabsList, TabsTrigger } from "@paper-kit/ui/tabs";
 import { cn } from "../../lib/utils";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
+import { INCIDENT_TONE } from "./tones";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import {
@@ -38,7 +39,7 @@ const PAGE = 20;
 /** The name the cell records for the person looking: the person behind the key, else the key's
  *  name, or "console" on a cell with no sign-in and nobody to name. */
 function useMe(): string {
-  const { open, credentialName, personName } = useEdition();
+  const { open, credentialName, personName } = useWho();
   return personName ?? (open ? "console" : credentialName ?? "");
 }
 
@@ -238,7 +239,7 @@ export default function Incidents() {
 
 // ── one incident ─────────────────────────────────────────────────────────────
 
-/** The incident page's state word; its tone comes from STATUS_TONES.incident. */
+/** The incident page's state word; its tone comes from INCIDENT_TONE. */
 const GROUP_LABEL: Record<GroupState, string> = {
   open: "Open", on_it: "Someone on it", resolved: "Resolved", raised: "Raised",
 };
@@ -489,7 +490,7 @@ function IncidentView({ id }: { id: string }) {
     <>
       <header className="grid gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <StatusLabel tone={STATUS_TONES.incident[d.state]} data-testid="incident-tag">{GROUP_LABEL[d.state]}</StatusLabel>
+          <StatusLabel tone={INCIDENT_TONE[d.state]} data-testid="incident-tag">{GROUP_LABEL[d.state]}</StatusLabel>
           <span className="border border-border bg-card px-2 py-0.5 text-xs" data-user-text data-testid="incident-service">{d.service}</span>
           {openedWords && <span className="text-[13px] text-muted-foreground" data-testid="incident-opened">opened {openedWords}</span>}
         </div>

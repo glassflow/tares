@@ -5,7 +5,7 @@ import { api } from "../api";
 import { cloudLink, useCloud, useWorkspaceOverview, type Cloud } from "../cloud";
 import ConfirmDialog from "./ConfirmDialog";
 import { usePolling } from "./bits";
-import type { Project } from "../types";
+import type { LegacyProject, Project } from "../types";
 
 // What a new cell has ready and what helps next, read from the state it is in: a model provider
 // (on Tares Cloud the included credit), GitHub and Slack. The Start page shows the whole list;
@@ -15,7 +15,7 @@ import type { Project } from "../types";
 /** Projects the person made: not the demo, not the default project, not a draft still being
  *  planned. undefined while loading. */
 export function ownProjects(projects: Project[] | undefined): Project[] | undefined {
-  return projects?.filter((p) => p.template !== "ai_sre_demo" && !p.default && p.status !== "draft");
+  return projects?.filter((p) => (p as LegacyProject).template !== "ai_sre_demo" && !p.default && p.status !== "draft");
 }
 
 export function useOwnProjects(intervalMs = 30000) {
@@ -170,7 +170,7 @@ export function DemoRow({ projects, onChange }: { projects: Project[] | undefine
   const navigate = useNavigate();
   const { data: rec } = usePolling(() => api.templates(), 60000);
   const template = rec?.templates.find((t) => t.key === "ai_sre_demo");
-  const demo = projects?.find((p) => p.template === "ai_sre_demo");
+  const demo = projects?.find((p) => (p as LegacyProject).template === "ai_sre_demo");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
   const [confirm, setConfirm] = useState(false);

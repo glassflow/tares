@@ -181,7 +181,7 @@ export default function ProjectShell({ s, id, reload, template }: {
     : <button type="button" onClick={() => { setPauseSources(false); setConfirmPause(true); }}>Pause</button>;
   // Edit and Delete: on How it works and in the full setup's header
   const manage = <>
-    {!s.default && <Link className="btn" to={`/projects/new/${custom ? "custom" : encodeURIComponent(s.template)}?edit=${encodeURIComponent(id)}`}>Edit</Link>}
+    {!s.default && <Link className="btn" to={`/projects/new/${custom ? "custom" : encodeURIComponent(String(s.template))}?edit=${encodeURIComponent(id)}`}>Edit</Link>}
     {/* the Default project holds whatever was made outside a project; it is never deleted */}
     {!s.default && <button type="button" className="danger" onClick={() => { setPurge(false); setDelSources(new Set()); setConfirmDel(true); }}>Delete</button>}
   </>;
@@ -266,7 +266,7 @@ export default function ProjectShell({ s, id, reload, template }: {
         <button type="button" className="linklike" onClick={() => setActionMsg(undefined)}>Dismiss</button>
       </div>
     )}
-    {s.last_error && s.status === "error" && (
+    {typeof s.last_error === "string" && s.status === "error" && (
       <div className="alert error"><strong>Last error</strong> · <span className="mono">{s.last_error}</span></div>
     )}
     {s.summary_error && <div className="alert warn">summary unavailable: <span className="mono">{s.summary_error}</span></div>}

@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { useEdition } from "../edition";
+import { useWho } from "../who";
 
 import {
   Banner, Button, Collapse, EmptyState, ListSection, Loading, type ServiceRowItem, ServiceRows, Skeleton, SkeletonLines,
@@ -132,7 +132,7 @@ function Today({ home }: { home: SreHome }) {
 
 export default function Home() {
   const named = useSample();
-  const { credentialName } = useEdition();
+  const { credentialName } = useWho();
   const sample = isHomeSample(named) ? named : null;
   const { data, error, reload } = usePagePolling<SreHome>(() => (sample ? sampleHome(sample) : sreHome()), POLL_MS);
 

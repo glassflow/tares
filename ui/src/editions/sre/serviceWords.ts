@@ -1,8 +1,8 @@
-import { STATUS_TONES } from "../../components/edition";
+import { SERVICE_TONE } from "./tones";
 import { formatCount } from "../../lib/number";
 
 /** The tone of a service's state, from the one status table. The words say the state; the tone only repeats it. */
-export const STATE_TONE = STATUS_TONES.service;
+export const STATE_TONE = SERVICE_TONE;
 
 export const up = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 

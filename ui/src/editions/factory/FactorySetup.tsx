@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { cloudLinkHere, useCloud } from "../../cloud";
-import { CLOUD_BACK } from "../../pages/Security";
+import { CLOUD_BACK } from "../settings/cloudBack";
 import { TerseSettings } from "../settings/AccessPanels";
 import { GithubPanel } from "../settings/GithubPanel";
 import { SlackCloudPanel, SlackSelfHostedPanels, WaitingDmPanel } from "../settings/SlackPanels";

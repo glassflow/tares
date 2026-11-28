@@ -8,8 +8,8 @@ import CommandPalette from "../components/CommandPalette";
 import LicenceBanner from "../components/LicenceBanner";
 import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
 import {
-  Activity, BarChart, Book, Bot, Chat, ChevronDown, ChevronRight, Database, Eye, Flag, Folder, Grid, HomeIcon, Moon, Plug,
-  Search, Settings as SettingsIcon, Sun, Ticket, Users, Zap,
+  BarChart, Book, Bot, Chat, ChevronDown, ChevronRight, Database, Eye, Flag, Folder, HomeIcon, Moon, Plug,
+  Search, Settings as SettingsIcon, Sun, Ticket, Users,
 } from "../components/icons";
 import { Button, ProgressBar, usePresence } from "../components/edition";
 import { Initials, initialsOf } from "../components/edition/Initials";
@@ -19,15 +19,15 @@ import { reducedMotion } from "../lib/motion";
 import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
 import { BrainReadContext, normalizeBrain, type BrainRead } from "./brainRead";
-import { useEdition } from "./edition";
 import { useSample } from "./sample";
+import { useWho } from "./who";
 import { askBrainRepos } from "./factory/BrainAsk.api";
 import { SETTINGS_ENTRY, visibleEntries, type MenuEntry } from "./menus";
-import { hasPage, preloadPage } from "./routes";
+import { preloadPage } from "./pages";
 import { isSettingsPath, rememberPlace } from "./settingsBack";
 import { setupProgress, type SetupProgress } from "./factory/FactorySetup.api";
 
-// The shell of the factory and sre editions: a header, a left menu, and the page in between.
+// The shell of the console: a header, a left menu, and the page in between.
 // The page keeps its own heading; the shell adds no breadcrumbs.
 //
 // Embedded in the Tares desktop (embed.ts, TR-1553) the desktop draws the cell's name, the sign-in and
@@ -63,7 +63,6 @@ const groupSlug = (g: string) => g.toLowerCase().replace(/\s+/g, "-");
 const MENU_ICONS: Record<string, (p: React.SVGProps<SVGSVGElement>) => React.ReactElement> = {
   home: HomeIcon, integrations: Plug, projects: Folder, tickets: Ticket, reviews: Eye, report: BarChart, crew: Bot, people: Users,
   docs: Book, "brain-repos": Database, "brain-decisions": Flag, "brain-ask": Chat, settings: SettingsIcon,
-  services: Grid, incidents: Zap, timeline: Activity, runbooks: Book,
 };
 
 function EntryLabel({ e }: { e: MenuEntry }) {
@@ -108,9 +107,8 @@ function saveFolded(groups: string[]): void {
 function MenuLinks({ entries, narrow, setup }: {
   entries: MenuEntry[]; narrow: boolean; setup?: SetupProgress | null;
 }) {
-  const { edition } = useEdition();
   // the page's code starts loading while the pointer rests on its link (TR-1433)
-  const early = (to: string) => () => preloadPage(edition, to);
+  const early = (to: string) => () => preloadPage(to);
   const link = (e: MenuEntry) => (
     <NavLink key={e.key} to={e.to} end={e.to === "/" || e.to === "/brain"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}
              onMouseEnter={early(e.to)} onFocus={early(e.to)}>
@@ -261,16 +259,16 @@ export function useHeaderSlots(): HeaderSlots {
 }
 
 export default function EditionShell() {
-  const { edition, name, credentialName, open: openCell, personPicture } = useEdition();
+  const { credentialName, open: openCell, personPicture } = useWho();
   const narrow = useNarrow();
   const embed = embedded();
   const [drawer, setDrawer] = useState(false);
   const [text, setText] = useState("");
   const { pathname: here, search } = useLocation();
-  // A factory cell's Settings has its own sidebar with a Back link, in place of the main menu, and so
-  // has a factory project's frame while it shows (TR-1245; today's page for another kind keeps the menu).
+  // Settings has its own sidebar with a Back link, in place of the main menu, and so has a project's
+  // frame while it shows (TR-1245).
   const [frame, setFrame] = useState(false);
-  const noMenu = edition === "factory" && (isSettingsPath(here) || frame);
+  const noMenu = isSettingsPath(here) || frame;
   useEffect(() => { rememberPlace(here, search); }, [here, search]);
   // The Second Brain group shows once the cell says it has a brain. A cell without a licence has no
   // such route (404), and any failed read means no brain too: the group stays out, with no error.
@@ -306,12 +304,11 @@ export default function EditionShell() {
   }, []);
   useEffect(() => {
     brainLive.current = true;
-    if (edition !== "factory") { setBrain(false); return; }
     readBrain();
     return () => { brainLive.current = false; };
-  }, [edition, readBrain]);
+  }, [readBrain]);
   const brainValue = useMemo(() => ({ read: brainRead, reload: readBrain }), [brainRead, readBrain]);
-  const entries = visibleEntries(edition ?? "platform", (to) => hasPage(edition, to), brain);
+  const entries = visibleEntries(brain);
   // How far the factory is set up, read again on each move so a step done elsewhere shows. A key that
   // may not set the factory up gets a refusal: no Setup card then.
   const [setup, setSetup] = useState<(SetupProgress & { projects: number }) | null>(null);
@@ -321,12 +318,11 @@ export default function EditionShell() {
   const sample = useSample();
   const ownMenuPath = here === "/setup" || isSettingsPath(here) || /^\/projects\/(?!new(\/|$))[^/]+/.test(here);
   useEffect(() => {
-    if (edition !== "factory") { setSetup(null); return; }
     if (ownMenuPath || noMenu || sample) return;
     let live = true;
     setupProgress().then((p) => { if (live) setSetup(p); }).catch(() => { if (live) setSetup(null); });
     return () => { live = false; };
-  }, [edition, here, noMenu, ownMenuPath, sample]);
+  }, [here, noMenu, ownMenuPath, sample]);
   const navigate = useNavigate();
   // A cell with no project yet and setup not done opens on Setup when the console is opened on the
   // home. Going home from inside the console (Exit setup, the Home entry) is never sent back.
@@ -339,7 +335,7 @@ export default function EditionShell() {
     navigate("/setup", { replace: true });
   }, [setup, navigate]);
 
-  // Same sources as the platform sidebar: the cloud's workspace link, the control plane's sign-out
+  // The cloud's workspace link, the control plane's sign-out
   // address and who is signed in there.
   const cloud = useCloud();
   const workspaceUrl = cloud.switcher || cloud.health?.workspace_api_url
@@ -350,9 +346,8 @@ export default function EditionShell() {
   const who = email || credentialName || "Account";
   const small = email ? "Signed in to this workspace" : openCell ? "This cell has no sign-in" : "Signed in with an API key";
   // Wide, the workspace switcher sits in the header (it names the workspace, so it is the cell name
-  // too). Narrow, it moves to the top of the menu and an AI SRE header keeps the plain name.
+  // too). Narrow, it moves to the top of the menu.
   const switcher = cloud.switcher ? <WorkspaceSwitcher cloud={cloud} /> : null;
-  const cellName = narrow && edition === "sre" ? cloud.current?.slug : undefined;
   const menuButton = useRef<HTMLButtonElement>(null);
   const [crumbEl, setCrumbEl] = useState<HTMLElement | null>(null);
   const [actionsEl, setActionsEl] = useState<HTMLElement | null>(null);
@@ -383,21 +378,14 @@ export default function EditionShell() {
             </Button>
           )}
           {!embed && (<>
-          {/* the platform console's brand: the mark and the "tares" wordmark (App.tsx, .brand) */}
+          {/* the brand: the mark and the "tares" wordmark */}
           <img src="/tares-mark.svg" alt="" aria-hidden data-testid="brand-mark" className="h-auto w-6 shrink-0" />
           <b className="text-[19px] font-semibold tracking-[-0.02em]" data-testid="brand-word">tares</b>
-          <span data-testid="edition-name"
-                className={"whitespace-nowrap text-base text-muted-foreground " + (cellName ? "shrink-0" : "min-w-0 truncate")}>{name}</span>
+          <span data-testid="edition-name" className="min-w-0 truncate whitespace-nowrap text-base text-muted-foreground">Software Factory</span>
           {!narrow && switcher && (
             <>
               <span aria-hidden className="shrink-0 text-base text-faint">/</span>
               <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0 [&_.ws-switch]:py-1.5">{switcher}</div>
-            </>
-          )}
-          {cellName && (
-            <>
-              <span aria-hidden className="shrink-0 text-base text-faint">/</span>
-              <span data-testid="cell-name" data-user-text title={cellName} className="min-w-0 truncate text-base">{cellName}</span>
             </>
           )}
           <span ref={setCrumbEl} className="contents" />

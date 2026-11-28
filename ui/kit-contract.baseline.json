@@ -1,5 +1,4 @@
 {
-  "src/App.tsx": 3,
   "src/components/ActionError.tsx": 2,
   "src/components/AgentForm.tsx": 57,
   "src/components/AskChat.tsx": 19,
@@ -54,7 +53,6 @@
   "src/components/TriggerEditor.tsx": 31,
   "src/components/UsagePanels.tsx": 9,
   "src/components/WorkspaceSwitcher.tsx": 2,
-  "src/editions/ChooseEdition.tsx": 1,
   "src/editions/factory/BrainAsk.tsx": 1,
   "src/editions/factory/CrewConversation.tsx": 10,
   "src/editions/factory/FactoryCrew.tsx": 5,
