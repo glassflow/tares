@@ -96,7 +96,7 @@ async def main():
 
             f = os.path.join(DB, "tares.sqlite")
             if ON_PG:
-                ck("db_bytes is the Postgres database's size, and there is no WAL of its own",
+                ck("db_bytes is the size of the cell's Postgres schema, and there is no WAL of its own",
                    u["db_bytes"] > 0 and u["wal_bytes"] == 0, str(u))
             else:
                 db, wal = os.path.getsize(f), (os.path.getsize(f + "-wal") if os.path.exists(f + "-wal") else 0)
@@ -154,7 +154,7 @@ async def main():
         proc.terminate(); proc.wait(timeout=10)
 
     # ── limit configured + auth on; a limit with room lets ingest resume ──
-    roomy = (100 << 30) if ON_PG else (1 << 30)   # a shared Postgres database is far bigger than one cell
+    roomy = 1 << 30   # on Postgres too: the cell's own schema is measured, not the shared database
     proc = _boot(TARES_AUTH_TOKEN=AUTH, TARES_MAX_DB_SIZE=str(roomy))
     try:
         if not await _wait(f"{B}/health"):

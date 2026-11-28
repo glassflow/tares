@@ -165,6 +165,7 @@ test_hooks
 test_hooks_json
 test_import_boundary
 test_ingest_runtime_slot
+test_ingest_size_unread
 test_integration_connections
 test_integrations_api
 test_integrations_carry

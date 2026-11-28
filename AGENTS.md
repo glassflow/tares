@@ -151,7 +151,7 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_MODEL` | model the summaries use on the default provider; `TARES_AGENT_MODEL` is the old name, still read |
 | `TARES_ARCHIVE_URL` | where the hourly job archives sessions idle for a week: `file:///path` or `s3://bucket/prefix/`; unset gives `<data dir>/archive/` on SQLite and nothing on Postgres |
 | `TARES_ARCHIVE_ENDPOINT`, `TARES_ARCHIVE_REGION`, `TARES_ARCHIVE_ACCESS_KEY_ID`, `TARES_ARCHIVE_SECRET_ACCESS_KEY` | the S3 endpoint, region and keys for the archive (needs the `archive-s3` extra); unset, boto3's own credential chain applies |
-| `TARES_MAX_DB_SIZE` | storage limit `/api/usage`, `/health` and the metrics measure against: the session store (`tares.sqlite` and its WAL, or the Postgres database) plus the archive; unset = the volume the data directory sits on |
+| `TARES_MAX_DB_SIZE` | storage limit `/api/usage`, `/health` and the metrics measure against: the session store (`tares.sqlite` and its WAL, or the tables of the cell's Postgres schema) plus the archive; unset = the volume the data directory sits on |
 | `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507); default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
 | `TARES_WEBHOOK_ALLOW_PRIVATE` | let an integration's URL point at an internal address (loopback, private, link-local); off by default |

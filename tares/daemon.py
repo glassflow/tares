@@ -180,7 +180,7 @@ def storage_limit(data_dir: str) -> tuple[int | None, str]:
 
 def storage_state(store, data_dir: str) -> dict:
     """How full this instance is against its limit, and whether ingest is paused because of it:
-    the session store (the SQLite file and its WAL, or the Postgres database) plus the archive
+    the session store (the SQLite file and its WAL, or this cell's Postgres schema) plus the archive
     (`Store.disk_bytes`, measured at most every few seconds, so every probe and every ingest can
     afford it)."""
     limit, origin = storage_limit(data_dir)
@@ -272,6 +272,13 @@ _SCREENS = (
 
 
 def make_app() -> FastAPI:
+    if os.getenv("TARES_DB") and not os.getenv("TARES_HOME"):
+        # TARES_DB named the old DuckDB file, and tares.sqlite sat beside it. It is no longer read:
+        # a daemon that still sets only it would open an empty store here, so say where to look.
+        print(f"taresd: TARES_DB is no longer read; the store is tares.sqlite in TARES_HOME "
+              f"(now {os.path.abspath(DATA_DIR)}). Set TARES_HOME="
+              f"{os.path.dirname(os.path.abspath(os.path.expanduser(os.environ['TARES_DB'])))} "
+              f"to keep the store that sat beside {os.environ['TARES_DB']}.", flush=True)
     try:
         # TARES_STATE_DSN (a cloud cell): everything is in that Postgres database. Unset, it is in
         # tares.sqlite in the data directory.
