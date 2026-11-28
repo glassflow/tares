@@ -38,7 +38,7 @@ WEIGHT = {
     "test_project_keys": 19, "test_plugin_challenger": 11,
     "test_login": 9, "test_usage": 9,
     "test_github_tickets": 8, "test_degraded": 8, "test_factory_seed": 45, "test_factory_page_times": 90,
-    "test_merge_queue_ci_rerun": 12,
+    "test_merge_queue_ci_rerun": 12, "test_migrate_to_2_script": 40,
 }
 
 
