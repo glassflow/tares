@@ -24,33 +24,6 @@ export interface Source {
   projects?: string[];        // every project the source is a member of (ids)
 }
 
-export interface ConnectorField {
-  name: string;
-  type: "string" | "number" | "json" | "map" | "list" | "bool";
-  required: boolean;
-  help: string;
-  secret?: boolean;          // render as a password input (tokens, DSNs)
-  discover_input?: boolean;  // Discover needs this field — shown above the Discover panel
-  default?: unknown;         // what the connector uses when the field is empty; prefilled on a fresh source
-  choices?: string[];        // a fixed set of values: rendered as a dropdown, anything else is refused on save
-  label?: string;            // the words shown for the field; the name stays the config key
-  item?: ConnectorField[];   // for type "list": the sub-fields of each row
-}
-
-export interface ConnectorSpec {
-  label: string;
-  mode: "poll" | "push" | "reference";   // reference: documents added by hand, no events flow
-  discover?: boolean;
-  poll?: string;   // connector-specific default poll interval (e.g. github: "2m")
-  internal?: boolean;   // provisioned by Tares itself (agent findings) — not offered in the UI
-  // created with its credential (the GitHub App source): never offered as a new kind, but an
-  // existing one is picked like any other source (under the GitHub kind)
-  credential_managed?: boolean;
-  description: string;
-  fields: ConnectorField[];
-  provides?: { name: string; primary?: boolean; help?: string }[];   // synthesized label fields
-}
-
 export interface ApiKey {
   id: string;
   name: string;

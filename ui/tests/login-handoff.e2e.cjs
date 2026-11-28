@@ -5,6 +5,9 @@
  *   2. logged out + login_url present  → redirect to  {login_url}?return=<cell host>
  *   3. ?code= present                  → POST {origin}/exchange, store the real key, strip the URL,
  *                                        and authenticate against the daemon (token persists)
+ *   4. self-hosted (`tares up --auth`, no login_url): the token form. A bad token says Invalid
+ *      token; the root token and a read or ingest key each sign in and the shell loads.
+ *      A second daemon on DAEMON_PORT + 3 (MCP + 4) serves it.
  *
  * No cloud, no release. The stub mints a real scoped key on the daemon (as the control plane does),
  * so the exchanged token actually works — the console stays authed instead of bouncing to login.
@@ -27,6 +30,7 @@ const DAEMON_PORT = 8808;
 const CP_PORT = 8809;
 const ROOT_TOKEN = "root-secret";
 const LOGIN_URL = `http://localhost:${CP_PORT}/login`;
+const SELF_PORT = DAEMON_PORT + 3;   // the self-hosted daemon: auth on, no login_url
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -36,10 +40,10 @@ const ck = (label, cond, detail = "") => {
 
 // Mint a real scoped key on the daemon with the root token — exactly what the control plane's
 // /exchange does. Returns a token the daemon will accept, so the console stays authenticated.
-function mintKey() {
+function mintKey(port = DAEMON_PORT, scopes = ["read", "ingest", "admin"]) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ name: "e2e", scopes: ["read", "ingest", "admin"] });
-    const r = http.request(`http://localhost:${DAEMON_PORT}/api/keys`, {
+    const body = JSON.stringify({ name: `e2e-${scopes.join("-")}`, scopes });
+    const r = http.request(`http://localhost:${port}/api/keys`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${ROOT_TOKEN}`,
                  "content-length": Buffer.byteLength(body) },
@@ -109,6 +113,13 @@ function waitFor(url, tries = 100) {
   const daemon = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], {
     cwd: REPO, env, stdio: "ignore",
   });
+  // the self-hosted cell: the same, with auth on and no control plane to send a person to
+  const selfEnv = { ...env, TARES_HOME: path.join(tmp, "self"), TARES_PORT: String(SELF_PORT),
+                    TARES_MCP_PORT: String(SELF_PORT + 1) };
+  delete selfEnv.TARES_LOGIN_URL;
+  const selfDaemon = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], {
+    cwd: REPO, env: selfEnv, stdio: "ignore",
+  });
 
   const base = `http://localhost:${DAEMON_PORT}`;
   ck("daemon up + serving", await waitFor(`${base}/health`));
@@ -155,8 +166,47 @@ function waitFor(url, tries = 100) {
       ck("the app shows, not the login page", !(await page.content()).includes("STUB LOGIN") && (await page.locator("#root *").count()) > 3);
       await ctx.close();
     }
+
+    // Test: self-hosted, the token form. A bad token is refused; the root token and a read or an
+    // ingest key each sign in (the form checks the token with /api/whoami, which takes any scope).
+    {
+      const selfBase = `http://localhost:${SELF_PORT}`;
+      ck("self-hosted daemon up", await waitFor(`${selfBase}/health`));
+      const keys = [["the root token", ROOT_TOKEN],
+                    ["a read key", await mintKey(SELF_PORT, ["read"])],
+                    ["an ingest key", await mintKey(SELF_PORT, ["ingest"])]];
+      const signIn = async (token) => {
+        const ctx = await browser.newContext();
+        const page = await ctx.newPage();
+        await page.goto(`${selfBase}/`, { waitUntil: "domcontentloaded" });
+        const field = page.locator(".login input[type=password]");
+        await field.waitFor({ timeout: 8000 });
+        await field.fill(token);
+        await page.locator(".login button").click();
+        return { ctx, page };
+      };
+      {
+        const { ctx, page } = await signIn("not-a-real-token");
+        let said = true;
+        try { await page.locator(".login-err").waitFor({ timeout: 8000 }); } catch { said = false; }
+        ck("self-hosted: a bad token says Invalid token",
+           said && (await page.locator(".login-err").innerText()).trim() === "Invalid token.");
+        ck("self-hosted: and keeps nothing", !(await page.evaluate(() => localStorage.getItem("tares_token"))));
+        await ctx.close();
+      }
+      for (const [what, token] of keys) {
+        const { ctx, page } = await signIn(token);
+        let shell = true;
+        try { await page.getByTestId("edition-menu").waitFor({ timeout: 8000 }); } catch { shell = false; }
+        ck(`self-hosted: ${what} signs in and the shell loads`, shell && (await page.locator(".login").count()) === 0,
+           (await page.locator(".login-err").count()) ? await page.locator(".login-err").innerText() : "no shell");
+        ck(`self-hosted: ${what} is kept`, (await page.evaluate(() => localStorage.getItem("tares_token"))) === token);
+        await ctx.close();
+      }
+    }
   } finally {
     await browser.close();
+    selfDaemon.kill("SIGTERM");
     daemon.kill("SIGTERM");
     cp.close();
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

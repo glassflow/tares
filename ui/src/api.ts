@@ -1,5 +1,5 @@
 import type {
-  ApiKey, Person, Whoami, ConnectorSpec, GithubAppTest, GithubCredential, ModelUsage, Project,
+  ApiKey, Person, Whoami, GithubAppTest, GithubCredential, ModelUsage, Project,
   ProjectSummary, Area, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, Source, Usage, Trigger,
   ModelProviders,
 } from "./types";
@@ -266,7 +266,6 @@ export const api = {
     if (!res.ok) throw new Error(`exchange failed: ${res.status}`);
     return (await res.json()).token as string;
   },
-  connectors: () => request<Record<string, ConnectorSpec>>("/api/connectors"),
   capabilities: () =>
     request<{ version?: string | null; discover_docker: boolean; agent_key_configured?: boolean;
               url_configured: boolean; slack_configured?: boolean;
