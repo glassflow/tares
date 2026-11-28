@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
        "TARES_UI_DIST": dist, "TARES_EDITION": "factory", "TARES_OTLP_GRPC_PORT": "off"}
-for k in ("TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL"):
+for k in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "TARESD_URL"):
     env.pop(k, None)
 base = f"http://127.0.0.1:{port}"
 
@@ -135,7 +135,7 @@ finally:
 sys.path.insert(0, os.getcwd())
 from tares.store import Store  # noqa: E402
 
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 now = datetime.now(timezone.utc)
 store.upsert_rule_proposal("example-org/docs-site", "missing tests", py, "project",
                            "In example-org/docs-site, check for missing tests before asking for review: it came back in 3 tickets.",

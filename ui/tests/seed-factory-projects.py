@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
        "TARES_UI_DIST": dist, "TARES_EDITION": "factory", "TARES_OTLP_GRPC_PORT": "off"}
-for k in ("TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+for k in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     env.pop(k, None)
 base = f"http://127.0.0.1:{port}"
 
@@ -127,7 +127,7 @@ from sqlalchemy import update  # noqa: E402
 from tares.session_store.tables import tickets as tickets_table, usecases  # noqa: E402
 from tares.store import Store  # noqa: E402
 
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 # how long ago each project last moved (hours): the project and its tickets
 for name, hours in (("project-b1", 0.05), ("project-b2", 2), ("project-w", 26), ("project-y", 120), ("project-q", 72),
                     ("project-z", 240)):

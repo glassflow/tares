@@ -17,7 +17,7 @@ from datetime import timedelta
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
        "TARES_UI_DIST": dist, "TARES_EDITION": "factory", "TARES_OTLP_GRPC_PORT": "off"}
-for k in ("TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+for k in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     env.pop(k, None)
 
 daemon = subprocess.Popen([tares, "up", "--port", port, "--data-dir", home], env=env,
@@ -41,7 +41,7 @@ from sqlalchemy import update  # noqa: E402
 from tares.session_store.tables import tickets  # noqa: E402
 from tares.store import Store, now_utc  # noqa: E402
 
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 ids = {}
 REPO = "example-org/service-a"
 

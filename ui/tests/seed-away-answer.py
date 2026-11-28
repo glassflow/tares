@@ -16,7 +16,7 @@ from tares.store import Store, now_utc  # noqa: E402
 
 home = sys.argv[1]
 SAM_KEY = "e2e-sam-key-away-answer"
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 now = now_utc()
 sam = store.create_person("Sam", email="sam@example.com")
 store.insert_api_key("k_sam", "sam", "nvf_sam", hashlib.sha256(SAM_KEY.encode()).hexdigest(),

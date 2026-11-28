@@ -13,7 +13,7 @@ import json, os, subprocess, sys, time, urllib.error, urllib.request
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
        "TARES_UI_DIST": dist, "TARES_EDITION": "factory", "TARES_OTLP_GRPC_PORT": "off"}
-for k in ("TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+for k in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     env.pop(k, None)
 base = f"http://127.0.0.1:{port}"
 

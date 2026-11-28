@@ -16,16 +16,17 @@ What it makes, in the order it runs (each group prints its seconds):
   reviews                reviews, findings, rule proposals, the merge queue
   docs                   docs and the links that put them in projects
   brain and usage        brain repos and calls, repo maps, model usage
-  events                 300 session lines through `Store.append`, the rest as one INSERT ... SELECT
-                         (DuckDB writes a million rows in seconds; row by row it would take an hour)
-  sessions               the sessions database: sessions, lines, facts, stations, states, usage
+  session lines          300 session lines through `Store.append`; the plan of the other sessions
+  sessions               the sessions, their stored lines, facts, stations, states and usage, made
+                         here a line at a time from the plan (`_lines`) and written in chunks
 
-Rows go in with `executemany` (state tables) or SQLAlchemy Core `insert()` (the sessions database),
-never one Store call per row: only the first project, its three tickets, one review, one desk item
-and 300 session lines go through the Store API, so a change to what the API writes shows here too.
+Rows go in with SQLAlchemy Core `insert()` into the session store, never one Store call per row:
+only the first project, its three tickets, one review, one desk item and 300 session lines go through
+the Store API, so a change to what the API writes shows here too. A session that is not complete
+holds fewer stored lines than it counts, as a cell whose lines were not all kept does.
 
-The counts hold on both backends (state in DuckDB with sessions in SQLite, or state and sessions in
-Postgres). `counts(store)` reads them back; `seed` returns the ids a test can ask a page about.
+The counts hold on both backends (SQLite or Postgres). `counts(store)` reads them back; `seed`
+returns the ids a test can ask a page about.
 """
 import hashlib
 import json
@@ -54,21 +55,19 @@ SHAPE = {
         "people": 5, "project_members": 4, "project_required_checks": 3, "project_sessions": 2270,
         "repo_map_history": 50, "repo_maps": 7,
         "review_findings": 2762, "reviews": 1602, "rule_proposals": 25, "session_commands": 94023,
-        "session_files": 2603, "session_ingest_marks": 4, "session_lines": 262977,
+        "session_files": 2603, "session_lines": 262977,
         "session_messages": 5150, "session_meters": 2050, "session_said": 6225,
         "session_states": 2123, "session_stations": 2091, "session_turns": 27918,
         "session_usage": 219361, "sessions": 2145, "settings": 30,
         "spec_questions": 3, "ticket_checks": 4052, "ticket_history": 3387, "ticket_numbers": 29,
         "tickets": 858, "usecase_log": 65, "usecase_objects": 969, "usecases": 33, "waiting_told": 23,
     },
-    # rows of `events` by source; the claude_code lines are the lines of the sessions
-    "events": {"claude_code": 1413287, "github": 37215, "linear": 3540},
     "zero": [
         "brain_repo_folders", "finding_feedback", "guardrail_pairs", "guardrail_rules",
         "handover_overrides", "incident_log", "incident_notes", "incidents",
         "milestone_acceptances", "pending_memory", "pending_writeback", "project_integrations",
         "project_merge_method", "project_secrets", "services",
-        "session_archive_parts", "session_store_copies", "shared_skills", "signoffs", "skills",
+        "session_archive_parts", "shared_skills", "signoffs", "skills",
         "watch_state",
     ],
     # how the rows are cut, so the pages find the same mix of work as the real cell's
@@ -235,49 +234,25 @@ def _words(rng: random.Random, size: int) -> str:
 
 
 def session_table(name: str):
-    """The session store's table of that name, or None when the table lives elsewhere. Read from the
-    store's own table list, so a table moved there later (TR-1480 moves `settings`) is found with
-    no edit here. `session_store_copies` is the store's ledger of the move and stays counted where
-    it was."""
+    """The session store's table of that name (every table of the cell is there)."""
     from tares.session_store import tables as T
-    return None if name == "session_store_copies" else T.metadata.tables.get(name)
+    return T.metadata.tables[name]
 
 
 def _have(store, table: str) -> int:
-    """Rows in `table` now, wherever the table lives."""
-    from tares.state_db import EVENT_TABLES
-    t = session_table(table)
-    if t is not None:
-        from sqlalchemy import func, select
-        with store.sessions_db.begin() as c:
-            return c.execute(select(func.count()).select_from(t)).scalar_one()
-    if table in EVENT_TABLES:
-        with store._lock:
-            return store.con.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-    with store._swrite:
-        return store.sc.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+    """Rows in `table` now."""
+    from sqlalchemy import func, select
+    with store.sessions_db.begin() as c:
+        return c.execute(select(func.count()).select_from(session_table(table))).scalar_one()
 
 
 def counts(store, shape=SHAPE) -> dict:
-    """Rows now by table (`events` by source as `events/<source>`), for every table SHAPE names."""
-    out = {t: _have(store, t) for t in shape["tables"]}
-    for src in shape["events"]:
-        out[f"events/{src}"] = _events(store, src)
-    return out
-
-
-def _events(store, source) -> int:
-    """The lines of `source`: the events rows, and those only the session store holds (the anchor
-    sessions' lines, written through the app, in a factory cell with an archive)."""
-    from tares import session_events
-    held = session_events.held_count(store, source)
-    with store._lock:
-        return held + store.con.execute(
-            "SELECT count(*) FROM events WHERE source = ?", [source]).fetchone()[0]
+    """Rows now by table, for every table SHAPE names."""
+    return {t: _have(store, t) for t in shape["tables"]}
 
 
 def expected(shape=SHAPE) -> dict:
-    return {**shape["tables"], **{f"events/{s}": n for s, n in shape["events"].items()}}
+    return dict(shape["tables"])
 
 
 class _Gen:
@@ -305,23 +280,11 @@ class _Gen:
             raise RuntimeError(f"{table} already holds more rows than SHAPE says")
         return n
 
-    def put(self, table: str, cols: str, rows: list, tail: str = "") -> None:
-        """executemany on the state connection: DuckDB, or Postgres when the store has it."""
-        if not rows:
-            return
-        marks = ", ".join("?" * (cols.count(",") + 1))
-        with self.store._swrite:
-            self.store.sc.executemany(f"INSERT INTO {table} ({cols}) VALUES ({marks}){tail}", rows)
-
     def put_t(self, table: str, cols: str, rows: list, tail: str = "") -> None:
-        """`put`, for a table that may have moved to the session store (people, api_keys,
-        project_members since TR-1608): there it goes through Core, so a JSON column takes the list
-        itself and not its text. `tail` is for the state connection only."""
-        t = session_table(table)
-        if t is None:
-            return self.put(table, cols, rows, tail)
+        """Rows given as lists in the order of `cols`, into the session store through Core (a JSON
+        column takes the list itself and not its text). `tail` is not used: the rows are new."""
         names = [c.strip() for c in cols.split(",")]
-        self.put_s(t, [dict(zip(names, r)) for r in rows])
+        self.put_s(session_table(table), [dict(zip(names, r)) for r in rows])
 
     def put_s(self, table, rows: list, chunk: int = 20000) -> None:
         """SQLAlchemy Core insert() into a table of the sessions database."""
@@ -398,11 +361,7 @@ class _Gen:
                                "project, person_id", rows)
         # settings: harmless keys of their own
         rows = [[f"seed.note_{i:02d}", str(i), NOW - timedelta(days=i)] for i in range(self.need("settings"))]
-        t = session_table("settings")
-        if t is not None:           # once settings has moved to the session store
-            self.put_s(t, [dict(zip(("key", "value", "updated_at"), r)) for r in rows])
-        else:
-            self.put("settings", "key, value, updated_at", rows)
+        self.put_s(session_table("settings"), [dict(zip(("key", "value", "updated_at"), r)) for r in rows])
 
     # ── projects: one through the Store API, the rest as rows ─────────────────────────────────
     def projects_group(self):
@@ -978,9 +937,9 @@ class _Gen:
                                   "cache_creation_input_tokens, cache_read_input_tokens, cost_usd, key_source, provider",
                    rows)
 
-    # ── events ─────────────────────────────────────────────────────────────────────────────────
-    def events_group(self):
-        """300 lines through Store.append, then the rest of the events with one INSERT ... SELECT."""
+    # ── session lines ──────────────────────────────────────────────────────────────────────────
+    def lines_group(self):
+        """300 lines through Store.append, then the plan of the other sessions."""
         from tares.envelope import Envelope
         rng, st = self.rng, self.store
         p0, crew0 = self.projects[0], self.crews[0]
@@ -1004,7 +963,10 @@ class _Gen:
             c.execute(update(T.sessions).where(T.sessions.c.session.in_(self.session_ids[:ANCHOR_SESSIONS]))
                       .values(lines_complete=True))
         self.plan_sessions()
-        self.load_events()
+        by_session_project = self.assign_projects()
+        for s in self.sessions:
+            s["project"] = by_session_project.get(s["id"])
+            s["person"] = self.people[int(s["id"][:4], 16) % len(self.people)]
 
     def plan_sessions(self):
         """Who the 2142 other sessions are, how long, when, and how many of their lines are stored."""
@@ -1047,44 +1009,6 @@ class _Gen:
         sess.sort(key=lambda s: s["last"])
         self.sessions = sess
 
-    def load_events(self):
-        rng, st, mix = self.rng, self.store, self.mix
-        # staging table the SQL below reads
-        with st._lock:
-            c = st.con
-            c.execute("DROP TABLE IF EXISTS _seed_s")
-            c.execute("CREATE TEMP TABLE _seed_s (session TEXT, t0 TIMESTAMPTZ, step BIGINT, n INTEGER, "
-                      "stored INTEGER, project TEXT, labels TEXT, person TEXT)")
-        by_session_project = self.assign_projects()
-        rows = []
-        for s in self.sessions:
-            proj = by_session_project.get(s["id"])
-            s["project"] = proj
-            s["person"] = self.people[hash(s["id"]) % len(self.people)] if False else self.people[int(s["id"][:4], 16) % len(self.people)]
-            lab = json.dumps({"tares_project": proj}) if proj else "{}"
-            rows.append([s["id"], s["t0"], s["step"], s["n"], s["stored"], proj, lab, s["person"]])
-        with st._lock:
-            c = st.con
-            c.executemany("INSERT INTO _seed_s VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
-            c.execute(_VIEW_L)
-            c.execute(_VIEW_E)
-            c.execute("INSERT INTO events (source, source_type, key_value, event_type, text, payload, labels, "
-                      "event_time, ingest_time) SELECT 'claude_code', 'claude_code', session, type, text, "
-                      "payload::JSON, labels::JSON, ts, ts + INTERVAL 2 SECOND FROM _seed_e")
-            # github and linear
-            for src, label in (("github", "pr"), ("linear", "ticket")):
-                n = self.shape["events"][src] - c.execute("SELECT count(*) FROM events WHERE source = ?", [src]).fetchone()[0]
-                types = _GH_TYPES if src == "github" else _LIN_TYPES
-                keys = 1172 if src == "github" else 705
-                c.execute(
-                    "INSERT INTO events (source, source_type, key_value, event_type, text, payload, labels, "
-                    "event_time, ingest_time) SELECT ?, ?, ? || (i % ?), (" + _q(types) + ")[1 + i % " + str(len(types)) + "], "
-                    "'seed event ' || i, ('{\"n\": ' || i || '}')::JSON, '{}'::JSON, "
-                    "?::TIMESTAMPTZ - to_microseconds(CAST(5184000000000.0 * pow((i * 0.6180339887) % 1.0, 3.5) AS BIGINT)), "
-                    "?::TIMESTAMPTZ - to_microseconds(CAST(5184000000000.0 * pow((i * 0.6180339887) % 1.0, 3.5) AS BIGINT)) "
-                    "+ INTERVAL 2 SECOND FROM range(?) r(i)",
-                    [src, src, "example-org/app#" if src == "github" else "TR-", keys, NOW, NOW, n])
-
     def assign_projects(self) -> dict:
         """The session -> project link the project_sessions rows and the lines' labels share."""
         rng, mix = self.rng, self.mix
@@ -1103,7 +1027,6 @@ class _Gen:
         from sqlalchemy import update
         from tares.session_store import tables as T
         rng, st, mix, sh = self.rng, self.store, self.mix, self.shape["sessions"]
-        con = st.con
         # sessions
         rows = []
         for s in self.sessions:
@@ -1113,21 +1036,23 @@ class _Gen:
                          "line_count": n, "tool_calls": tc, "coordination_calls": int(tc * sh["coordination_per_tool_call"]),
                          "lines_complete": s["complete"], "updated_at": s["last"]})
         self.put_s(T.sessions, rows)
-        # lines
-        with st._lock:
-            lines = con.execute(
-                "SELECT session, i + 1, key, ts, type, payload FROM _seed_e WHERE i < stored").fetchall()
+        # the stored lines
         flags = json.dumps({"include_thinking": False, "redact": True})
-        for k in range(0, len(lines), 50000):
-            self.put_s(T.session_lines, [
-                {"session": a, "seq": b, "line_key": c_, "at": d, "type": e, "labels": "{}", "render": flags,
-                 "payload": f} for a, b, c_, d, e, f in lines[k:k + 50000]])
-        del lines
+        chunk = []
+        for ln in self._lines():
+            if ln["i"] >= ln["stored"]:
+                continue
+            chunk.append({"session": ln["session"], "seq": ln["i"] + 1, "line_key": ln["key"], "at": ln["ts"],
+                          "type": ln["type"], "labels": "{}", "render": flags,
+                          "payload": _payload(ln["type"], ln["session"], ln["i"], ln["key"])})
+            if len(chunk) >= 50000:
+                self.put_s(T.session_lines, chunk)
+                chunk = []
+        self.put_s(T.session_lines, chunk)
         # facts: from the tool_use, user and assistant lines, a different pick for each table
         n = self.need("session_commands")
-        with st._lock:
-            r = con.execute("SELECT key, session, ts, cmd, i FROM _seed_e WHERE type = 'tool_use' "
-                            "ORDER BY hash(key || 'c') LIMIT ?", [n]).fetchall()
+        r = [(x["key"], x["session"], x["ts"], x["cmd"], x["i"])
+             for x in self._pick("tool_use", "c", n)]
         none = mix["commands_without_result"]
         rows = []
         for k, (key, sid, ts, cmd, i) in enumerate(r):
@@ -1137,40 +1062,35 @@ class _Gen:
                          "result_at": ts + timedelta(seconds=2) if res else None})
         self.put_s(T.session_commands, rows)
         n = self.need("session_turns")
-        with st._lock:
-            r = con.execute("SELECT session, key, ts, person, text FROM _seed_e WHERE type = 'user' "
-                            "ORDER BY hash(key || 't') LIMIT ?", [n]).fetchall()
+        r = [(x["session"], x["key"], x["ts"], x["person"], x["text"]) for x in self._pick("user", "t", n)]
         self.put_s(T.session_turns, [{"session": a, "line_key": b, "source": "claude_code", "at": c_, "person": d, "text": e}
                                      for a, b, c_, d, e in r])
         n = self.need("session_said")
-        with st._lock:
-            r = con.execute("SELECT session, key, ts, text FROM _seed_e WHERE type = 'assistant' "
-                            "ORDER BY hash(key || 's') LIMIT ?", [n]).fetchall()
+        r = [(x["session"], x["key"], x["ts"], x["text"]) for x in self._pick("assistant", "s", n)]
         self.put_s(T.session_said, [{"session": a, "line_key": b, "source": "claude_code", "at": c_, "text": d}
                                     for a, b, c_, d in r])
         n = self.need("session_messages")
         types = [t for t, c in mix["session_message_types"].items() for _ in range(c)]
         types += ["FYI"] * (n - len(types)) if n > len(types) else []
         rng.shuffle(types)
-        with st._lock:
-            r = con.execute("SELECT key, session, ts FROM _seed_e WHERE type = 'tool_use' "
-                            "ORDER BY hash(key || 'm') LIMIT ?", [n]).fetchall()
+        r = [(x["key"], x["session"], x["ts"]) for x in self._pick("tool_use", "m", n)]
         stations = [x for c in self.crews for x in (c["orchestrator"], c["reviewer"], c["releaser"])]
         self.put_s(T.session_messages, [
             {"tool_use_id": "tm_" + key, "source": "claude_code", "session": sid, "at": ts,
              "to_station": stations[k % len(stations)], "type": types[k % len(types)],
              "text": f"[TF:{types[k % len(types)]}] {rng.choice(REPLIES)}"} for k, (key, sid, ts) in enumerate(r)])
         n = self.need("session_files")
-        with st._lock:
-            r = con.execute(
-                "SELECT session, 'src/mod_' || (i % 40) || '.py' AS path, max(ts) FROM _seed_e WHERE type = 'tool_use' "
-                "GROUP BY 1, 2 ORDER BY hash(session || path) LIMIT ?", [n]).fetchall()
+        touched: dict = {}
+        for x in self._lines():
+            if x["type"] == "tool_use":
+                k = (x["session"], f"src/mod_{x['i'] % 40}.py")
+                touched[k] = max(touched.get(k, x["ts"]), x["ts"])
+        r = [(sid, path, touched[(sid, path)]) for sid, path in
+             sorted(touched, key=lambda k: _order(k[0] + k[1]))[:n]]
         self.put_s(T.session_files, [{"session": a, "path": b, "source": "claude_code", "last_at": c_} for a, b, c_ in r])
         # usage: one row per assistant reply
         n = self.need("session_usage")
-        with st._lock:
-            r = con.execute("SELECT session, key, ts, project, i FROM _seed_e WHERE type = 'assistant' "
-                            "ORDER BY hash(key || 'u') LIMIT ?", [n]).fetchall()
+        r = [(x["session"], x["key"], x["ts"], x["project"], x["i"]) for x in self._pick("assistant", "u", n)]
         models = [m for m, c in mix["usage_models"].items() for _ in range(1)]
         mw = list(mix["usage_models"].values())
         sub = mix["usage_with_subagent"] / max(n, 1)
@@ -1188,13 +1108,6 @@ class _Gen:
         self.put_s(T.session_usage, rows)
         # who runs which session
         self.stations_and_states()
-        # the marks that say the sessions database is caught up
-        from tares import session_ingest as si
-        from sqlalchemy import delete, insert
-        with st.sessions_db.begin() as c:
-            c.execute(delete(T.session_ingest_marks))
-            c.execute(insert(T.session_ingest_marks), [{"name": m, "at": NOW} for m in
-                      (si.MARK, si.CAUGHT_UP, si.FACTS_MARK, si.TURNS_MARK)][:self.shape["tables"]["session_ingest_marks"]])
         # the hourly usage totals a cell builds in the background after its first start (TR-1632)
         from tares import claude_usage_hourly
         claude_usage_hourly.fill(st)
@@ -1274,28 +1187,37 @@ class _Gen:
                 rows.append({"project": p["uid"], "session": sid, "repo": p["repo"], "linked_at": self._by_id()[sid]["last"]})
         self.put_s(T.project_sessions, rows[:n])
 
+    def _lines(self):
+        """Every line of the planned sessions, the stored ones and the others, a dict at a time, in
+        session and line order: what the rows of the session tables are made from."""
+        for s in self.sessions:
+            sid, t0, step = s["id"], s["t0"], s["step"]
+            for i in range(s["n"]):
+                kind = _TYPES[i % 10]
+                yield {"session": sid, "i": i, "ts": t0 + timedelta(microseconds=i * step), "type": kind,
+                       "stored": s["stored"], "project": s["project"], "person": s["person"],
+                       "key": f"{sid}:{i}", "cmd": COMMANDS[(i // 3) % len(COMMANDS)], "text": _text(kind, i)}
+
+    def _pick(self, kind: str, salt: str, n: int) -> list:
+        """`n` lines of `kind`, the same ones on every run: those whose key hashes lowest."""
+        import heapq
+        return [x for _, x in heapq.nsmallest(n, ((_order(x["key"] + salt), x) for x in self._lines()
+                                                  if x["type"] == kind), key=lambda p: p[0])]
+
     def _by_id(self):
         if not hasattr(self, "_idx"):
             self._idx = {s["id"]: s for s in self.sessions}
         return self._idx
 
-    # ── the seed's own staging, dropped at the end ──────────────────────────────────────────────
-    def tidy_group(self):
-        with self.store._lock:
-            con = self.store.con
-            for v in ("_seed_e", "_seed_l"):
-                con.execute(f"DROP VIEW IF EXISTS {v}")
-            con.execute("DROP TABLE IF EXISTS _seed_s")
 
 
-# the claude_code lines, from the sessions staged in _seed_s: ten kinds in a fixed order
+# the claude_code lines of a planned session: ten kinds in a fixed order
 _TYPES = ["user", "assistant", "tool_use", "tool_result", "system", "tool_use", "assistant", "tool_result", "assistant", "system"]
-_GH_TYPES = ["push", "pull_request", "check_run", "pull_request_review", "issue_comment", "workflow_run"]
-_LIN_TYPES = ["issue_created", "issue_updated", "comment_added", "status_changed"]
 
 
-def _q(items):
-    return "[" + ", ".join("'" + x.replace("'", "''") + "'" for x in items) + "]"
+def _order(text: str) -> int:
+    """A number that orders lines the same way on every run (the seed's stand-in for a random pick)."""
+    return int.from_bytes(hashlib.md5(text.encode()).digest()[:8], "big")
 
 
 def _text(kind: str, i: int) -> str:
@@ -1311,7 +1233,7 @@ def _text(kind: str, i: int) -> str:
 
 
 def _payload(kind: str, sid: str, i: int, key: str) -> str:
-    """The JSON of a line, the same text the SQL view builds."""
+    """The JSON text of a line."""
     head = f'{{"uuid": "{key}", "type": "{kind}", "sessionId": "{sid}", '
     if kind == "user":
         return head + f'"message": {{"role": "user", "content": "{_text(kind, i)}"}}}}'
@@ -1328,26 +1250,6 @@ def _payload(kind: str, sid: str, i: int, key: str) -> str:
     return head + '"subtype": "note"}'
 
 
-_VIEW_L = ("CREATE OR REPLACE TEMP VIEW _seed_l AS SELECT s.session AS session, r.i AS i, "
-           "s.t0 + to_microseconds(r.i * s.step) AS ts, (" + _q(_TYPES) + ")[1 + r.i % 10] AS type, "
-           "s.stored AS stored, s.project AS project, s.labels AS labels, s.person AS person "
-           "FROM _seed_s s, range(s.n) r(i)")
-_VIEW_E = (
-    "CREATE OR REPLACE TEMP VIEW _seed_e AS SELECT session, i, ts, type, stored, project, labels, person, "
-    "session || ':' || i AS key, (" + _q(COMMANDS) + ")[1 + (i // 3) % " + str(len(COMMANDS)) + "] AS cmd, "
-    "CASE type WHEN 'user' THEN (" + _q(PROMPTS) + ")[1 + i % " + str(len(PROMPTS)) + "] "
-    "WHEN 'assistant' THEN (" + _q(REPLIES) + ")[1 + i % " + str(len(REPLIES)) + "] "
-    "WHEN 'tool_use' THEN 'Bash: ' || (" + _q(COMMANDS) + ")[1 + (i // 3) % " + str(len(COMMANDS)) + "] "
-    "WHEN 'tool_result' THEN (" + _q(OUTPUTS) + ")[1 + i % " + str(len(OUTPUTS)) + "] ELSE 'session note' END AS text, "
-    "'{\"uuid\": \"' || session || ':' || i || '\", \"type\": \"' || type || '\", \"sessionId\": \"' || session || '\", ' || "
-    "CASE type "
-    "WHEN 'user' THEN '\"message\": {\"role\": \"user\", \"content\": \"' || (" + _q(PROMPTS) + ")[1 + i % " + str(len(PROMPTS)) + "] || '\"}}' "
-    "WHEN 'assistant' THEN '\"message\": {\"id\": \"msg_' || session || ':' || i || '\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"' || (" + _q(REPLIES) + ")[1 + i % " + str(len(REPLIES)) + "] || '\"}]}}' "
-    "WHEN 'tool_use' THEN '\"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"tu_' || session || ':' || i || '\", \"name\": \"Bash\", \"input\": {\"command\": \"' || (" + _q(COMMANDS) + ")[1 + (i // 3) % " + str(len(COMMANDS)) + "] || '\"}}]}}' "
-    "WHEN 'tool_result' THEN '\"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"tu_' || session || ':' || (CASE WHEN i % 10 = 3 THEN i - 1 ELSE i - 2 END) || '\", \"content\": \"' || (" + _q(OUTPUTS) + ")[1 + i % " + str(len(OUTPUTS)) + "] || '\"}]}}' "
-    "ELSE '\"subtype\": \"note\"}' END AS payload FROM _seed_l")
-
-
 def seed(store, shape=SHAPE, log=print) -> dict:
     """Fill `store` until every table holds what `shape` says. Returns the ids a test can ask pages
     about (`anchor_project`, `anchor_ticket`, `big_project`, `big_ticket`) and the seconds per group."""
@@ -1357,8 +1259,7 @@ def seed(store, shape=SHAPE, log=print) -> dict:
     for name, fn in (("people and crews", g.people_and_crews), ("projects", g.projects_group),
                      ("tickets", g.tickets_group), ("the desk", g.desk_group), ("reviews", g.reviews_group),
                      ("docs and links", g.docs_group), ("brain and usage", g.small_group),
-                     ("events", g.events_group), ("sessions", g.sessions_group),
-                     ("tidy", g.tidy_group)):
+                     ("session lines", g.lines_group), ("sessions", g.sessions_group)):
         t = time.time()
         fn()
         seconds[name] = time.time() - t

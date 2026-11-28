@@ -816,7 +816,7 @@ const until = async (fn, tries = 40) => {
 import sys, os
 sys.path.insert(0, os.getcwd())
 from tares.store import Store
-s = Store(os.path.join(sys.argv[1], "tares"))
+s = Store(sys.argv[1])
 s.create_person("Alex", "alex@example.com")
 s.create_person("Kim", "kim@example.com")
 s.con.close()
