@@ -230,8 +230,7 @@ def writable():
 @mcp.tool()
 async def set_session_flow(flow: str = "challenger") -> str:
     """Mark this Claude Code session as running a named flow, e.g. "challenger" (a second model
-    challenges your plan and every commit; Tares keeps the whole exchange and writes the session
-    summary). Pass an empty string to clear it. Call it when the user asks for the flow at the
+    challenges your plan and every commit; Tares keeps the whole exchange). Pass an empty string to clear it. Call it when the user asks for the flow at the
     start of a session. This tool only acknowledges: the Tares plugin sees the call in the
     transcript and marks the session on both the laptop and Tares."""
     flow = (flow or "").strip()

@@ -12,14 +12,8 @@ services:
   taresd:
     image: ${TARES_REGISTRY:-ghcr.io/glassflow/tares}:${TARES_VERSION:-latest}
     command: ["tares", "up", "--host", "0.0.0.0", "--data-dir", "/data"]
-    environment:
-      TARES_CATALOG: /seed/catalog.yaml # the operator's source config (real services)
-      TARES_CATALOG_SYNC: "1"           # re-import the catalog every boot: edit + restart to manage
     volumes:
       - tares-data:/data
-      - ../demo/catalog.yaml:/seed/catalog.yaml:ro
-      # docker_logs from inside the container needs the socket (and the docker CLI in the image):
-      # - /var/run/docker.sock:/var/run/docker.sock:ro
     expose: ["8787"]
     restart: unless-stopped
 
