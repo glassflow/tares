@@ -1775,6 +1775,17 @@ class Store(FactoryStore, ClaudeUsageStore):
             r = conn.execute(select(*self._PERSON_COLS).where(people_table.c.id == pid)).first()
         return self._person_row(r) if r else None
 
+    @kept
+    def people_by_ids(self, ids) -> dict[str, dict]:
+        """{id: person, as get_person gives it} for the people among `ids`, removed ones too, in
+        one read (TR-1819)."""
+        ids = sorted({i for i in ids if i})
+        if not ids:
+            return {}
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(*self._PERSON_COLS).where(people_table.c.id.in_(ids))).all()
+        return {r.id: self._person_row(r) for r in rows}
+
     def _people(self, conn=None) -> list[dict]:
         """list_people; `conn` is the caller's open session store transaction, if it has one."""
         q = select(*self._PERSON_COLS).where(people_table.c.removed_at.is_(None)).order_by(

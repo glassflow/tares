@@ -33,8 +33,9 @@ from urllib.parse import quote
 from fastapi import HTTPException, Request
 
 from .. import factory as factory_mod
+from .. import request_memo
 from ..envelope import now_utc
-from ..factory_home import _dt, for_caller, plain_ago, caller_waiting
+from ..factory_home import _dt, for_caller, plain_ago, caller_waiting, team_of
 from .factory_project import Turns, _pr_out, _review_out, station_roles, ticket_state, who_words
 from .factory_projects import ORDER, row_for
 from ..deps import Deps
@@ -70,6 +71,7 @@ def _ref_number(ref: str) -> int:
 def register(app, h: Deps):
     store = h.store
     @app.get("/api/factory/tickets")
+    @request_memo.page
     def factory_tickets(project: str | None = None, milestone: str | None = None,
                         state: str | None = None, q: str | None = None, sort: str = "new",
                         assignee: str | None = None,
@@ -107,8 +109,10 @@ def register(app, h: Deps):
 
         # the projects in the order of the Projects page: what needs you first, finished last
         # what waits for the caller, as their home has it (never another person's items)
-        waiting = caller_waiting(store, for_caller(fx, request), now, request, hidden)
+        # the stations are read once: the team home is handed the same roll-up (TR-1819)
         stations = fx.stations() if fx else []
+        fxc = for_caller(fx, request)
+        waiting = caller_waiting(store, fxc, now, request, hidden, team_of(fxc, request, now, stations))
         handovers = store.handovers_by_project(ids)
         ranked = []
         for p in projects:
@@ -207,7 +211,7 @@ def register(app, h: Deps):
             picked.sort(key=stamp, reverse=True)
         page = picked[offset:offset + limit]
         reviews = store.last_reviews([r[1]["id"] for r in page])
-        turns = Turns(store)
+        turns = Turns(store, handovers)
         out = []
         for _, t, row in page:
             row["review"] = _review_out(reviews.get(t["id"]), t)
