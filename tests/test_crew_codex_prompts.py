@@ -25,7 +25,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-SCRATCH = Path(tempfile.mkdtemp(prefix="tcp-", dir="/tmp"))
+# a short path on macOS and Linux (/tmp); Windows has no /tmp, so there the default temp folder
+SCRATCH = Path(tempfile.mkdtemp(prefix="tcp-", dir=None if os.name == "nt" else "/tmp"))
 for _k in [k for k in os.environ if k.startswith(("TARES", "FACTORY", "FAKE_CLAUDE", "FAKE_CODEX", "CLAUDE", "CODEX"))]:
     del os.environ[_k]
 os.environ.pop("TARESD_URL", None)
