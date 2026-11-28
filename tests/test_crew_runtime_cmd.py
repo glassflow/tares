@@ -29,7 +29,7 @@ BIN = SCRATCH / "bin"
 BIN.mkdir()
 (BIN / "codex").write_text("#!/bin/sh\necho 'codex-cli 0.171.0'\n")
 (BIN / "codex").chmod(0o755)
-os.environ.update(HOME=str(SCRATCH / "home"), TARES_HOME=str(SCRATCH / "tares-home"), FACTORY_NO_WATCH="1",
+os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"), TARES_HOME=str(SCRATCH / "tares-home"), FACTORY_NO_WATCH="1",
                   PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring", CODEX_BIN=str(BIN / "codex"))
 _crew_guard.install()
 sys.path.insert(0, str(HERE.parent))
