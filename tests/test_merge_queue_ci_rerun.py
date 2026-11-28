@@ -179,7 +179,7 @@ async def main():
     store.upsert_github_credential("main", "tok-main")
     store.set_choice("ci", "github", {"no_ci": False}, "test")     # the factory's CI is GitHub
     person = store.create_person("Priya", email="priya@example.com")
-    print(f"state: {type(store.sc).__module__}.{type(store.sc).__name__}")
+    print(f"state: {store.sessions_db.dialect}")
 
     class Case:
         """A project with one ticket in review and its pull request, reviewed and with a green

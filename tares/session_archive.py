@@ -21,9 +21,9 @@ Where the archive lives (read once per pass, from the environment):
   Postgres does nothing: a cell without a place to put the lines keeps them.
 
 A file is named `<session>/<part>.jsonl.gz` under the prefix (the session is percent-encoded, so no
-id can leave its folder). The one-time move of older sessions (`session_move.move_old`) writes the
-same files as `<session>/<part>-<md5>.jsonl.gz`: the name holds the content's MD5, so it never
-writes over a file that other content is in. A failure of any step leaves the rows where they
+id can leave its folder). The one-time move of older sessions of an earlier version wrote the same
+files as `<session>/<part>-<md5>.jsonl.gz`: the name holds the content's MD5, so it never wrote over
+a file that other content is in; such parts are read like any other. A failure of any step leaves the rows where they
 are and prints one line; the next pass tries the session again.
 
 Unused files (TR-1664). A replace or a try that did not finish leaves files no part row names. On a
@@ -70,7 +70,7 @@ from .session_store.tables import session_archive_parts, session_lines, sessions
 
 ARCHIVE_AFTER_DAYS = 7           # a session whose last line is older than this is archived
 EVERY = 3600.0                   # seconds between passes
-FIRST_AFTER = 300.0              # the first pass waits for the start-up reconcile to mark sessions
+FIRST_AFTER = 300.0              # the first pass waits this long after the start
 PER_PASS = 200                   # sessions moved by one pass
 SWEEP_AFTER_DAYS = 7             # a file no part names is kept this long after it was last written
 
