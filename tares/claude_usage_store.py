@@ -65,12 +65,16 @@ class ClaudeUsageStore:
 
         def price(model, *tokens):
             return cost_usd(model or "", *(t or 0 for t in tokens))
-        # a read first, which takes no write lock: most starts have nothing to do
+        # a read first, which takes no write lock: most starts have nothing to do. A model that is
+        # still unpriced stays unpriced, so only a SYNTHETIC row or one the price list can now
+        # price is work (one row per unpriced model, not per reply)
         with self.sessions_db.read() as conn:
-            todo = conn.execute(select(u.c.session).where(or_(
-                and_(u.c.cost_usd.is_(None), u.c.model.is_not(None)), u.c.model == SYNTHETIC)
-            ).limit(1)).first()
-        if todo is None:
+            synthetic = conn.execute(select(u.c.session).where(u.c.model == SYNTHETIC)
+                                     .limit(1)).first()
+            unpriced = conn.execute(select(u.c.model).where(
+                u.c.cost_usd.is_(None), u.c.model.is_not(None), u.c.model != SYNTHETIC)
+                .distinct()).scalars().all()
+        if synthetic is None and not any(price(m, 0, 0) is not None for m in unpriced):
             return
         with self.sessions_db.begin() as conn:
             hourly.hold(self, conn)

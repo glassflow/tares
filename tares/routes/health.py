@@ -48,17 +48,22 @@ def router(deps: Deps) -> APIRouter:
         HTTP 200: the status and `detail` say what is wrong, which a bare 503 could not.
         `pct_used` is on /api/usage's 0-100 scale and is null when no limit is configured — unknown,
         never 0. The probe is a SELECT 1 in the session store plus its measured size (the SQLite
-        file and WAL, or the Postgres database, and the archive); no table is scanned."""
+        file and WAL, or this cell's Postgres schema, and the archive: two SUMs over one row per
+        session or archived part, measured at most every few seconds); `session_lines` is not read."""
         status, detail, pct = "ok", None, None
         try:
             store.ping()
         except Exception as e:
             status, detail = "down", f"database unavailable: {e}"
         if status == "ok":
-            st = deps.storage()
-            pct = st["pct_used"]
-            if st["detail"]:
-                status, detail = "degraded", st["detail"]
+            try:
+                st = deps.storage()
+            except Exception as e:   # the size could not be read: say so, the store still answered
+                status, detail = "degraded", f"storage size unavailable: {e}"
+            else:
+                pct = st["pct_used"]
+                if st["detail"]:
+                    status, detail = "degraded", st["detail"]
         body = {"status": status, "auth_required": bool(deps.auth_token), "sources": [],
                 "pct_used": pct, "version": deps.version(),
                 "capabilities": list(deps.capabilities),
@@ -72,15 +77,16 @@ def router(deps: Deps) -> APIRouter:
     @r.get("/api/usage")
     def usage():
         """What this instance is using: the session store's bytes (`db_bytes`: the SQLite file, or
-        the Postgres database; `wal_bytes` the SQLite WAL), the archive's (`archive_bytes`), the
+        the tables of this cell's Postgres schema; `wal_bytes` the SQLite WAL), the archive's (`archive_bytes`), the
         volume the data directory sits on, and the lines stored (`events`).
         `max_bytes` is the operator's TARES_MAX_DB_SIZE, else that volume (`max_bytes_source` says
         which); null only when neither is known. At INGEST_PAUSE_PCT of it ingest is refused
         (`ingest_paused`), so the disk never fills.
         `pct_used` is (db + wal + archive) over max_bytes on a 0-100 scale, NOT a 0-1 fraction, so
         a "warn at 80%" consumer compares against 80, not 0.8. Null whenever max_bytes is null.
-        Cheap by construction: file stats and two sums, no table scan, so the cost does not grow
-        with the lines stored."""
+        Cheap by construction: file stats and two sums over one row per session or archived part,
+        reused for a few seconds; `session_lines` is never read, so the cost does not grow with the
+        lines stored."""
         u = store.usage()
         try:
             du = shutil.disk_usage(os.path.abspath(deps.data_dir or "."))

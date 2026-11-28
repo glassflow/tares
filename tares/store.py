@@ -226,16 +226,21 @@ class Store(FactoryStore, ClaudeUsageStore):
             conn.execute(text("SELECT 1")).scalar()
 
     def _sizes(self) -> dict:
-        """{"db": the store's own bytes (the SQLite file, or the Postgres database), "wal": the
-        SQLite WAL, "archive": the bytes of the archived parts, "lines": the lines the sessions
-        hold}. Measured at most once every SIZE_FOR seconds; nothing here scans `session_lines`."""
+        """{"db": the store's own bytes (the SQLite file, or the tables of this cell's Postgres
+        schema, indexes and TOAST included, so cells sharing one database are measured apart),
+        "wal": the SQLite WAL, "archive": the bytes of the archived parts, "lines": the lines the
+        sessions hold}. Measured at most once every SIZE_FOR seconds: two SUMs over `sessions` and
+        `session_archive_parts` (one row per session or part); `session_lines` is never read."""
         now = time.monotonic()
         if self._size is not None and now - self._size[0] < SIZE_FOR:
             return self._size[1]
         db = self.sessions_db
         with db.read() as conn:
             if db.dialect == "postgresql":
-                own = int(conn.execute(text("SELECT pg_database_size(current_database())")).scalar_one())
+                own = int(conn.execute(text(
+                    "SELECT coalesce(sum(pg_total_relation_size(c.oid)), 0) FROM pg_class c"
+                    " JOIN pg_namespace n ON n.oid = c.relnamespace"
+                    " WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'm')")).scalar_one())
                 wal = 0
             elif self.data_dir == MEMORY:
                 own = wal = 0
@@ -252,7 +257,7 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def disk_bytes(self) -> int:
         """What the cell stores, measured against its limit: the session store (the SQLite file and
-        its WAL, or the Postgres database) plus the archive."""
+        its WAL, or this cell's Postgres schema) plus the archive."""
         z = self._sizes()
         return z["db"] + z["wal"] + z["archive"]
 
@@ -1660,7 +1665,7 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def storage_usage(self) -> dict:
         """The disk half of `usage()`, measured as `disk_bytes` measures it: `db_bytes` the session
-        store (the SQLite file, or the Postgres database), `wal_bytes` its SQLite WAL,
+        store (the SQLite file, or this cell's Postgres schema), `wal_bytes` its SQLite WAL,
         `archive_bytes` the archived parts, `events` the lines the sessions hold. /metrics reads
         this on every scrape: sizes and two sums, no table scan."""
         z = self._sizes()
