@@ -1,4 +1,5 @@
 import { api } from "../api";
+import { formatCount } from "../lib/number";
 import { ErrorState, fmtCost, fmtTokens, formatBytes, usePolling } from "./bits";
 import { ClaudeCodeUsagePanel } from "./ClaudeUsage";
 import type { ModelUsage, Usage } from "../types";
@@ -25,9 +26,11 @@ export function UsagePanels({ storage = true }: { storage?: boolean }) {
   );
 }
 
-// What has this instance spent on its model providers? The whole-instance counterpart of the
-// per-agent cost cards. Covers everything that burns the key inside the cell (Tares agent runs
-// and Ask); external agents run on their own keys and are deliberately absent. The total is a
+// What has this instance spent on its model providers? Covers everything that burns the key inside
+// the cell: in Tares 2.0 that is the summaries (standup, milestones, weekly report) and the setup
+// plans, all metered under the "ask" surface (/api/usage/model). Agent runs from before 2.0 stay
+// under "agent" and are named only when a cell has some. The crew's sessions run on their own
+// keys and are deliberately absent. The total is a
 // floor: runs from before cost tracking, and models without a known price, carry no cost —
 // said out loud via the uncosted note rather than silently folded into $0.
 export function ModelSpendPanel({ usage, error, reload }: {
@@ -38,8 +41,9 @@ export function ModelSpendPanel({ usage, error, reload }: {
   const m = usage;
   const today = m?.days.length ? m.days[m.days.length - 1] : null;
   const windowCost = m?.days.reduce((s, d) => s + (d.cost_usd ?? 0), 0) ?? 0;
-  const agent = m?.by_surface.agent;
-  const ask = m?.by_surface.ask;
+  const before = m?.by_surface.agent;
+  const summaries = m?.by_surface.ask;
+  const calls = (n: number) => `${formatCount(n)} model call${n === 1 ? "" : "s"}`;
   const uncosted = m?.total.uncosted_calls ?? 0;
   return (
     <div className="panel">
@@ -50,7 +54,7 @@ export function ModelSpendPanel({ usage, error, reload }: {
 
       {m && (m.total.calls === 0 ? (
         <p className="help" style={{ marginBottom: 0 }}>
-          Nothing spent yet; the meter starts counting with the first agent run or Ask question.
+          Nothing spent yet; the meter starts counting with the first summary or setup plan.
         </p>
       ) : (
         <>
@@ -69,16 +73,16 @@ export function ModelSpendPanel({ usage, error, reload }: {
             </div>
           </div>
           <p className="help" style={{ marginBottom: 0 }}>
-            {agent && <>agents {fmtCost(agent.cost_usd)} over {agent.calls.toLocaleString()} model call{agent.calls === 1 ? "" : "s"}</>}
-            {agent && ask && " · "}
-            {ask && <>Ask {fmtCost(ask.cost_usd)} over {ask.calls.toLocaleString()} call{ask.calls === 1 ? "" : "s"}</>}
+            {summaries && <>summaries and setup plans {fmtCost(summaries.cost_usd)} over {calls(summaries.calls)}</>}
+            {summaries && before && " · "}
+            {before && <>agents before 2.0 {fmtCost(before.cost_usd)} over {calls(before.calls)}</>}
             {" · "}{fmtTokens(m.total.input_tokens)} tokens in, {fmtTokens(m.total.output_tokens)} out
             {uncosted > 0 && <> · {uncosted} call{uncosted === 1 ? "" : "s"} on an unpriced model, not in the total</>}
           </p>
           {m.by_provider && Object.keys(m.by_provider).length > 1 && (
             <p className="help" style={{ margin: "6px 0 0" }}>
               by provider: {Object.entries(m.by_provider).map(([id, b], i) => (
-                <span key={id}>{i > 0 && " · "}<span className="mono">{id}</span> {fmtCost(b.cost_usd)} over {b.calls.toLocaleString()} call{b.calls === 1 ? "" : "s"}</span>
+                <span key={id}>{i > 0 && " · "}<span className="mono">{id}</span> {fmtCost(b.cost_usd)} over {calls(b.calls)}</span>
               ))}
             </p>
           )}
@@ -118,7 +122,7 @@ export function StoragePanel({ usage, error, reload, onDisk, pct }: {
           {u.ingest_paused ? (
             <div className="alert error">
               <strong>Ingest is paused: storage {pct}% full.</strong> Producers get 507 and poll
-              connectors wait, so the database never fills its disk. Reads, agents and the console
+              connectors wait, so the database never fills its disk. Reads, the crew and the console
               keep working. Grow the volume or delete a source's events; ingest resumes on its own
               once there is room.
             </div>

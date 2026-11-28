@@ -2,7 +2,7 @@
 
 One read: the tools (connected or not, worded), the crew's settings as the page shows them, the
 grants with their words, dates and, for a desk answer like "D1 A", the decision's question, the
-model and budget, the keys, the links under Advanced; a read key is refused the page (403), an
+default model provider, the keys; a read key is refused the page (403), an
 admin key still gets it; changes go through the routes that exist and read back; no forbidden word in
 anything but a person's own grant words.
 
@@ -103,16 +103,12 @@ async def main():
                and c["challenger"] is False and c["pace"] is False
                and c["pace_text"].startswith("Pacing is off."), c)
             ck("no grants", c["grants"] == [] and c["grants_total"] == 0, c["grants"])
-            ck("a model not chosen yet and no budget",
-               a["models"]["default_provider"] == "Not chosen yet" and a["models"]["chosen"] is False
-               and a["models"]["budget_text"].startswith("No budget set."), a["models"])
+            ck("a model not chosen yet, and no budget line: spend is on Usage (TR-1823)",
+               a["models"] == {"default_provider": "Not chosen yet", "chosen": False}, a["models"])
             ck("no access keys yet, no cloud team link",
                a["people"]["keys"]["text"] == "No access keys yet" and a["people"]["keys"]["count"] == 0
                and a["people"]["cloud_team_href"] is None, a["people"])
-            e = a["edition"]
-            ck("the edition: a fixed factory value for the console, nothing to switch to",
-               e["value"] == "factory" and e["label"] == "Software Factory" and e["can_switch"] is False
-               and e["options"] == [], e)
+            ck("no edition block: Settings has no Edition item (TR-1823)", "edition" not in a, list(a))
 
             print("== changes go through the routes that exist ==")
             r = await cx.put("/api/crew/settings", json={"builders_max": 4})
@@ -196,9 +192,10 @@ async def main():
             await cx.post("/api/keys", json={"name": "writer", "scopes": ["ingest"]})
             a = (await cx.get("/api/factory/settings")).json()
             ck("keys are counted", a["people"]["keys"] == {"count": 2, "text": "2 access keys"}, a["people"])
-            ck("the edition is a fixed value with nothing to switch to (TR-1813)",
-               a["edition"]["value"] == "factory" and a["edition"]["can_switch"] is False
-               and a["edition"]["options"] == [], a["edition"])
+            ck("each tool's place is its section of Integrations (TR-1823)",
+               [t["href"] for t in a["tools"]] == ["/integrations?step=github", "/integrations?step=tickets",
+                                                    "/integrations?step=notifications", "/integrations?step=runtime"],
+               [t["href"] for t in a["tools"]])
             r = await cx.put("/api/settings/edition", json={"edition": "sre"})
             ck("the edition switch is gone", r.status_code in (404, 405), r.status_code)
             clean("the whole page", a)

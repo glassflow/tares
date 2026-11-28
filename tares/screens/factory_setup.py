@@ -74,8 +74,10 @@ KEEP_PREFIX = "setup_kept:"
 # Steps left out of setup while there is nothing to choose: one integration connected and none
 # installed to connect. They come back on their own once a second integration is installed.
 HIDE_WITHOUT_CHOICE = ("memory", "guardrails")
-# Steps left out of setup for now, whatever they offer. Monitoring (Rius, OTLP) is not tested end to
-# end yet: take it out of this tuple once it is. Hiding the step changes nothing about tracing.
+# Steps left out of setup's walk for now, whatever they offer. Monitoring (Rius, OTLP) is not tested
+# end to end yet: take it out of this tuple once it is. Integrations still shows them (the body's
+# `integrations_only`): Monitoring there is where station telemetry is set (TR-1823), and it counts
+# nothing towards setup's progress.
 HIDDEN_STEPS = ("monitoring",)
 # Installed, and not offered in setup. Codex is offered since a Codex crew works end to end (TR-1600); a crew
 # that runs keeps its runtime whatever the step says (the description below).
@@ -753,7 +755,8 @@ def register(app, h: Deps):
         ended = bool(st.get("valid") and st.get("expired"))
         state = "ended" if ended else "valid" if st.get("valid") else "none"
         lic = {"state": state, "ended_on": _day(st.get("expires")) if ended else ""}
-        steps = shown([step_of(slot, i + 1, lic, allowed) for i, slot in enumerate(STEPS)])
+        every = [step_of(slot, i + 1, lic, allowed) for i, slot in enumerate(STEPS)]
+        steps = shown(every)
         extra = around(request)
         return {
             "title": "Set up your factory", "exit_label": "Exit setup",
@@ -766,4 +769,5 @@ def register(app, h: Deps):
             "progress": progress_of(steps, extra),
             "onboarding": extra["onboarding"], "terminal": extra["terminal"],
             "tools": tool_lines(),
-            "steps": steps}
+            "steps": steps,
+            "integrations_only": [st for st in every if st["slot"] in HIDDEN_STEPS]}

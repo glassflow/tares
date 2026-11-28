@@ -4,7 +4,9 @@
  * The page has a two-level sidebar (Crew, Models, Team, Workspace, Advanced) in place of the
  * main menu, with a Back link, and shows one item at a time. Each change goes through the route that exists and is read back from the cell:
  * builders at once, the second check, pacing, how far the crew may go (merging on its own asks first),
- * a grant. The Edition item names the factory and offers no switch. A grant shows its words and, for
+ * a grant. There is no Edition, Budget, Agent tools or Observability item (TR-1823): their old addresses land on
+ * the nearest item, Providers and Usage say what the model is for in 2.0, and station telemetry is set under
+ * Monitoring on Integrations, whose saved headers the plugin's header route returns. A grant shows its words and, for
  * "D79 A", the question it answers. A read key sees the page with every control dimmed and disabled. Markup in a
  * grant stays text. Each load is one read of the cell. Every state shows only words from words.json
  * (a grant's own words and names are exempt) and none scrolls sideways.
@@ -124,9 +126,20 @@ const until = async (fn, tries = 40) => {
     await page.getByTestId("group-open-models").click();
     await page.getByTestId("pane-providers").waitFor();
     ck("a group opens on its first item, and the other closes", (await groupOpen(page)).join() === "Models" && new URL(page.url()).searchParams.get("tab") === "providers", page.url());
-    await page.getByTestId("nav-budget").click();
-    await page.getByTestId("pane-budget").waitFor();
-    ck("the second level changes the item, in the same group", (await groupOpen(page)).join() === "Models" && (await page.getByTestId("nav-budget").getAttribute("aria-current")) === "page");
+    ck("Models holds Providers only: no Budget, the agents' run budget went with them (TR-1823)",
+      (await page.getByTestId("nav-providers").isVisible()) && (await page.getByTestId("nav-budget").count()) === 0);
+    await page.getByTestId("group-open-team").click();
+    await page.getByTestId("pane-people").waitFor();
+    await page.getByTestId("nav-keys").click();
+    await page.getByTestId("pane-keys").waitFor();
+    ck("the second level changes the item, in the same group", (await groupOpen(page)).join() === "Team" && (await page.getByTestId("nav-keys").getAttribute("aria-current")) === "page");
+    await page.getByTestId("group-open-workspace").click();
+    await page.getByTestId("pane-usage").waitFor();
+    const workspaceItems = await page.getByTestId("group-workspace").locator('[data-testid^="nav-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(4)));
+    ck("Workspace has no Edition item (TR-1823)", !workspaceItems.includes("edition") && workspaceItems.includes("usage"), workspaceItems.join());
+    const allItems = await page.locator('[data-testid="settings-select"] option').evaluateAll((o) => o.map((x) => x.value));
+    ck("no Edition, Budget, Agent tools or Observability anywhere in Settings",
+      !allItems.some((v) => ["edition", "budget", "agent_tools", "tracing", "observability", "agents"].includes(v)) && allItems.includes("providers"), allItems.join());
 
     // Back goes where you came from
     await page.goto(`${BASE}/tickets`, { waitUntil: "load" });
@@ -138,7 +151,8 @@ const until = async (fn, tries = 40) => {
 
     // 2. the tools are on Integrations: each old address opens its section there
     for (const [tab, step, title] of [["github", "github", "Code"], ["linear", "tickets", "Tickets"], ["slack", "notifications", "Notifications"],
-                                      ["claude_code", "runtime", "Runtime"]]) {
+                                      ["claude_code", "runtime", "Runtime"], ["tracing", "monitoring", "Monitoring"],
+                                      ["observability", "monitoring", "Monitoring"]]) {
       await page.goto(`${BASE}/settings?tab=${tab}`, { waitUntil: "load" });
       await page.waitForURL((u) => u.pathname === "/integrations");
       await page.locator(`[data-testid=step-view][data-slot=${step}]`).waitFor();
@@ -360,7 +374,10 @@ const until = async (fn, tries = 40) => {
       const row = (id) => panel.locator(`[data-testid="providers-row"][data-id="${id}"]`);
       ck("Providers has one heading of that name", (await page.getByRole("heading", { name: "Providers", exact: true }).count()) === 1);
       ck("a cell with no provider says so, and what waits on one",
-        /^No model provider yet\. Add one: agents cannot be switched on and Ask cannot answer until then\.$/.test(await text(page, "providers-empty")), await text(page, "providers-empty"));
+        /^No model provider yet\. Add one: until then the standup, the milestones and the weekly report come without their summary\.$/.test(await text(page, "providers-empty")), await text(page, "providers-empty"));
+      ck("Providers says what the model is for in 2.0, with no agents or Ask",
+        (await text(page, "providers-what")) === "The default writes the standup summary, the milestone summaries, the weekly report and the setup plan."
+        && !/\bagents?\b|\bAsk\b/.test(await text(page, "pane-providers")), await text(page, "pane-providers"));
       await checkWords(page, ck, "Providers item");
       await panel.getByRole("button", { name: "Add a provider" }).click();
       const form = panel.getByTestId("providers-form");
@@ -388,7 +405,7 @@ const until = async (fn, tries = 40) => {
       ck("the first provider is the default, and its row says it needs no key",
         (await row("ollama").getByTestId("providers-default").count()) === 1 && (await row("ollama").getByTestId("providers-key-state").innerText()).trim() === "Needs no key.",
         await row("ollama").innerText());
-      ck("its models line says why there is no list", /^The endpoint did not answer; is it running and reachable from this daemon\? Agents can still name a model by hand\.$/.test((await row("ollama").getByTestId("providers-models").innerText()).trim()),
+      ck("its models line says why there is no list", /^The endpoint did not answer; is it running and reachable from this daemon\? The summaries wait until it lists a model\.$/.test((await row("ollama").getByTestId("providers-models").innerText()).trim()),
         await row("ollama").getByTestId("providers-models").innerText());
 
       await api(TOKEN, "PUT", "/api/settings/providers/new", { kind: "anthropic", key: "sk-ant-e2e-1392", base_url: "http://127.0.0.1:9" });
@@ -406,8 +423,8 @@ const until = async (fn, tries = 40) => {
 
       await row("ollama").getByRole("button", { name: "Remove" }).click();
       const dialog = page.getByTestId("providers-remove-dialog");
-      ck("Remove asks first, and says where its agents go", await until(async () => (await dialog.count()) === 1)
-        && /Remove Ollama\?/.test(await dialog.innerText()) && /move to the default/.test(await dialog.innerText()), await dialog.innerText().catch(() => ""));
+      ck("Remove asks first, and says the summaries keep the default", await until(async () => (await dialog.count()) === 1)
+        && /Remove Ollama\?/.test(await dialog.innerText()) && /Ollama is removed\. The summaries keep using the default\./.test(await dialog.innerText()), await dialog.innerText().catch(() => ""));
       await page.getByTestId("providers-remove-confirm").click();
       ck("Remove removes it, here and in the daemon", await until(async () => (await row("ollama").count()) === 0 && (await dialog.count()) === 0)
         && !(await api(TOKEN, "GET", "/api/settings/providers")).body?.providers.some((p) => p.id === "ollama"));
@@ -418,6 +435,35 @@ const until = async (fn, tries = 40) => {
       await n.ctx.close();
       await api(TOKEN, "DELETE", "/api/settings/providers/anthropic");
       ck("the cell ends with no provider, as it started", ((await api(TOKEN, "GET", "/api/settings/providers")).body?.providers ?? []).every((p) => !p.configured && !p.stored));
+    }
+
+    // 2b'. station telemetry (TR-1823): the old Observability tab is the Monitoring section of
+    // Integrations. Its OTLP form saves, and what the plugin's header helper fetches when a station
+    // starts (GET /api/factory/monitoring/headers) is what was saved.
+    {
+      ck("monitoring is off on a new cell: the helper gets no headers",
+        JSON.stringify((await api(TOKEN, "GET", "/api/factory/monitoring/headers")).body) === JSON.stringify({ headers: {} }));
+      await integ(page, "monitoring");
+      ck("Monitoring is a section of Integrations", (await page.getByTestId("page-title").innerText()) === "Monitoring"
+        && (await page.getByTestId("rail").getByTestId("step-monitoring").count()) === 1);
+      await page.getByTestId("available-otlp").getByTestId("action-connect").click();
+      await page.getByTestId("setup-form").waitFor();
+      const field = (n) => page.getByTestId(`field-${n}`).locator("input");
+      await field("endpoint").fill("http://127.0.0.1:9/otlp");
+      await field("headers").fill("x-e2e-team=crew-a,x-e2e-key=sekrit-1823");
+      await page.getByTestId("form-save").click();
+      ck("the form saves and closes", await until(async () => (await page.getByTestId("setup-form").count()) === 0), await page.getByTestId("step-view").innerText().catch(() => ""));
+      const got = await until(async () => {
+        const h = (await api(TOKEN, "GET", "/api/factory/monitoring/headers")).body?.headers ?? {};
+        return h["x-e2e-team"] === "crew-a" && h["x-e2e-key"] === "sekrit-1823";
+      });
+      ck("the plugin's header route returns the saved headers", got, JSON.stringify((await api(TOKEN, "GET", "/api/factory/monitoring/headers")).body));
+      ck("the step shows the OTLP endpoint connected", (await page.getByTestId("connected-otlp").count()) === 1);
+      ck("setup's walk still leaves Monitoring out", !(((await api(TOKEN, "GET", "/api/factory/setup")).body?.steps ?? []).some((x) => x.slot === "monitoring")));
+      // back to off, as the cell started
+      await api(TOKEN, "PUT", "/api/factory/integrations/monitoring", { name: "off", settings: {} });
+      ck("switched off, the helper gets no headers again",
+        JSON.stringify((await api(TOKEN, "GET", "/api/factory/monitoring/headers")).body) === JSON.stringify({ headers: {} }));
     }
 
     // 2c. access keys (TR-1392). Pictures first, of states set through the API, so the same steps
@@ -604,16 +650,39 @@ const until = async (fn, tries = 40) => {
     await settle(page);
     ck("and shows first, given today", /close stale pull requests/.test(await grants.first().innerText()) && /given today/.test(await grants.first().innerText()), await grants.first().innerText());
 
-    // 8. the edition: one kind of cell since TR-1813, nothing to switch to
-    await go(page, "edition");
-    ck("the edition is Software Factory", /Software Factory/.test(await text(page, "row-edition")), await text(page, "row-edition"));
-    ck("and no switch is offered", (await page.locator('[data-testid^="edition-"]').filter({ hasText: "Switch to" }).count()) === 0);
-    ck("the edition switch is gone from the cell", (await api(TOKEN, "GET", "/api/settings/edition")).status === 404);
+    // 8. the edition, the budget and the agents' tabs are gone (TR-1823): not in the page's data either
+    {
+      const body = (await api(TOKEN, "GET", "/api/factory/settings")).body;
+      ck("the page's data has no edition block and no budget line", !("edition" in body) && !("budget_text" in (body.models ?? {})), JSON.stringify(Object.keys(body)));
+      ck("the edition switch is gone from the cell", (await api(TOKEN, "GET", "/api/settings/edition")).status === 404);
+    }
+
+    // 9. Usage: the spend is split the way 2.0 meters it, summaries and, when a cell has some, agent runs from before
+    {
+      await go(page, "usage");
+      ck("Usage renders, with model spend", (await page.getByTestId("pane-usage").getByRole("heading", { name: "Model spend" }).count()) === 1);
+      ck("a cell that spent nothing says the meter starts with the first summary or setup plan",
+        /Nothing spent yet; the meter starts counting with the first summary or setup plan\./.test(await text(page, "pane-usage")), await text(page, "pane-usage"));
+      const bucket = (cost, calls) => ({ calls, input_tokens: 1000, output_tokens: 200, cost_usd: cost, uncosted_calls: 0 });
+      const fake = { window_days: 30, total: bucket(3.5, 12), days: [{ day: "2026-11-28", ...bucket(0.5, 2) }],
+                     by_surface: { ask: bucket(1.25, 1200), agent: bucket(2.25, 1) }, by_provider: {} };
+      await page.route("**/api/usage/model*", (r) => r.fulfill({ json: fake }));
+      await go(page, "usage");
+      const spend = await text(page, "pane-usage");
+      ck("summaries and agents before 2.0 are named, with their calls", /summaries and setup plans \$1\.25 over 1,200 model calls/.test(spend)
+        && /agents before 2\.0 \$2\.25 over 1 model call\b/.test(spend) && !/\bAsk\b/.test(spend), spend);
+      await page.route("**/api/usage/model*", (r) => r.fulfill({ json: { ...fake, by_surface: { ask: bucket(1.25, 1200) } } }));
+      await go(page, "usage");
+      ck("with no old agent spend, only the summaries", !/agents before/.test(await text(page, "pane-usage")), await text(page, "pane-usage"));
+      await checkWords(page, ck, "Usage item");
+      await page.unroute("**/api/usage/model*");
+    }
 
     // 10. the old addresses still land on the right item
     for (const [address, id] of [["/settings#crew", "crew"], ["/settings#models", "providers"], ["/settings?tab=anthropic", "providers"],
-                                 ["/settings?tab=agents", "budget"], ["/settings?tab=access", "keys"],
-                                 ["/settings/advanced", "crew"]]) {
+                                 ["/settings?tab=agents", "providers"], ["/settings?tab=budget", "providers"],
+                                 ["/settings?tab=edition", "usage"], ["/settings#edition", "usage"], ["/settings?tab=workspace", "usage"],
+                                 ["/settings?tab=access", "keys"], ["/settings/advanced", "crew"]]) {
       await page.goto(`${BASE}${address}`, { waitUntil: "load" });
       await page.getByTestId(`pane-${id}`).waitFor();
       ck(`${address} lands on ${id}`, new URL(page.url()).pathname === "/settings", page.url());

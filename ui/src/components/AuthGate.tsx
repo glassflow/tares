@@ -110,7 +110,9 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
     setErr("");
     auth.set(token.trim());
     try {
-      await api.connectors(); // a protected endpoint validates the token
+      // /api/whoami takes a credential of any scope: a read or an ingest key signs in too, and a
+      // bad one answers 401
+      await api.whoami();
       onAuthed();
     } catch {
       auth.clear();

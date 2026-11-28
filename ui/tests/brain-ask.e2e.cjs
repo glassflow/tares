@@ -285,6 +285,45 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       await ctx.close();
     }
 
+    // ---- the shell's ask field: /brain/ask?q=<question> puts the question in the box and asks it, once
+    {
+      const mock = brainMock(THREE());
+      const { ctx, page } = await open({ mock, url: "/projects", wait: null });
+      const field = page.getByTestId("edition-search");
+      await field.waitFor({ timeout: 15000 });
+      await field.fill("How does the brain sync?");
+      await field.press("Enter");
+      await page.getByTestId("brain-ask-answer").waitFor({ timeout: 15000 });
+      ck("the ask field lands on /brain/ask", new URL(page.url()).pathname === "/brain/ask", page.url());
+      eq("the question is asked once, quick", mock.asks, [{ question: "How does the brain sync?", deep: false }]);
+      eq("and waits in the box", await page.getByTestId("brain-ask-question").inputValue(), "How does the brain sync?");
+      ck("q leaves the address, so a reload does not ask again", !new URL(page.url()).searchParams.has("q"), page.url());
+      await page.reload();
+      await page.getByTestId("brain-ask-question").waitFor({ timeout: 15000 });
+      await page.waitForLoadState("networkidle");
+      eq("a reload asks nothing more", mock.asks.length, 1);
+      await ctx.close();
+    }
+    {
+      // no repo ready: nothing is asked and q stays in the address for when one is
+      const mock = brainMock([row("glassflow/new-repo", "indexing", { files_done: 10, files_total: 100 })]);
+      const { ctx, page } = await open({ mock, url: "/brain/ask?q=hello", wait: "brain-ask-empty" });
+      await page.waitForLoadState("networkidle");
+      eq("?q= with no repo ready asks nothing", mock.asks.length, 0);
+      ck("and keeps q", new URL(page.url()).searchParams.get("q") === "hello", page.url());
+      await ctx.close();
+    }
+    {
+      // a question over the limit waits in the box with its warning and is not sent
+      const mock = brainMock(THREE());
+      const long = "x".repeat(2100);
+      const { ctx, page } = await open({ mock, url: `/brain/ask?q=${long}` });
+      await page.getByTestId("brain-ask-too-long").waitFor({ timeout: 15000 });
+      eq("?q= over the limit is not asked", mock.asks.length, 0);
+      eq("and waits in the box", (await page.getByTestId("brain-ask-question").inputValue()).length, 2100);
+      await ctx.close();
+    }
+
     // ---- Look deeper
     {
       const gate = deferred();

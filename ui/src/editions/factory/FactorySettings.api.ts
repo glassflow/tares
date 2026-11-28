@@ -39,15 +39,6 @@ export interface SettingsCrew {
   grants_total: number;
 }
 
-export interface SettingsEdition {
-  value: string;
-  label: string;
-  can_switch: boolean;
-  options: { value: string; label: string }[];
-  other: { value: string; label: string };
-  note: string;
-}
-
 export interface MorningStatus {
   enabled: boolean;
   to_slack: boolean;
@@ -72,9 +63,8 @@ export interface SettingsPage {
   morning?: MorningStatus;
   tools: SettingsTool[];
   crew: SettingsCrew;
-  models: { default_provider: string; chosen: boolean; budget_text: string };
+  models: { default_provider: string; chosen: boolean };
   people: { keys: { count: number; text: string }; cloud_team_href: string | null };
-  edition: SettingsEdition;
 }
 
 export const factorySettings = () => request<SettingsPage>("/api/factory/settings");
@@ -87,9 +77,6 @@ export const changeCrew = (change: CrewChange) =>
 
 export const addGrant = (words: string) =>
   request<unknown>("/api/grants", { method: "POST", body: JSON.stringify({ words, scope: "all" }) });
-
-export const switchEdition = (edition: string) =>
-  request<unknown>("/api/settings/edition", { method: "PUT", body: JSON.stringify({ edition }) });
 
 export const saveMorning = (m: MorningStatus) =>
   request<MorningStatus>("/api/factory/settings/morning", { method: "PUT", body: JSON.stringify(m) });

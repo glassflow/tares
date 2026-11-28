@@ -4,12 +4,11 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { api, auth } from "../api";
 import { useCloud, useWorkspaceOverview } from "../cloud";
-import CommandPalette from "../components/CommandPalette";
 import LicenceBanner from "../components/LicenceBanner";
 import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
 import {
   BarChart, Book, Bot, Chat, ChevronDown, ChevronRight, Database, Eye, Flag, Folder, HomeIcon, Moon, Plug,
-  Search, Settings as SettingsIcon, Sun, Ticket, Users,
+  Settings as SettingsIcon, Sun, Ticket, Users,
 } from "../components/icons";
 import { Button, ProgressBar, usePresence } from "../components/edition";
 import { Initials, initialsOf } from "../components/edition/Initials";
@@ -31,12 +30,15 @@ import { setupProgress, type SetupProgress } from "./factory/FactorySetup.api";
 // The page keeps its own heading; the shell adds no breadcrumbs.
 //
 // Embedded in the Tares desktop (embed.ts, TR-1553) the desktop draws the cell's name, the sign-in and
-// the theme, so the header goes: search moves to the top of the menu, a page's header actions get a
-// row of their own above the page, and on a phone width only a slim bar with Menu and search stays.
+// the theme, so the header goes: the ask field moves to the top of the menu, a page's header actions get a
+// row of their own above the page, and on a phone width only a slim bar with Menu and the ask button stays.
 
 const NARROW = "(max-width: 767px)";
 
-/** True under 768px wide. The menu then sits behind a button and search becomes an icon. */
+/** The ask field's words: it sends its question to the Second Brain's Ask page. */
+const ASK_WORDS = "Ask the Second Brain";
+
+/** True under 768px wide. The menu then sits behind a button and the ask field becomes an icon. */
 function useNarrow(): boolean {
   const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW).matches);
   useEffect(() => {
@@ -363,7 +365,9 @@ export default function EditionShell() {
     return () => document.removeEventListener("keydown", onKey);
   }, [drawer]);
 
-  const ask = (detail: string) => window.dispatchEvent(new CustomEvent("tares:ask", { detail }));
+  // The ask field sends its question to the Second Brain's Ask page, which asks it (BrainAsk reads q).
+  // A cell with no brain has nowhere to ask, so the field and its buttons stay out.
+  const ask = (q: string) => navigate(q ? `/brain/ask?q=${encodeURIComponent(q)}` : "/brain/ask");
 
   return (
     <div className="flex min-h-screen w-full min-w-0 flex-col">
@@ -392,15 +396,15 @@ export default function EditionShell() {
           </>)}
         </div>
         <div className="flex shrink-0 items-center gap-2.5">
-          {narrow ? (
-            <Button variant="secondary" data-testid="edition-search-button" aria-label="Search or ask"
+          {!brain ? null : narrow ? (
+            <Button variant="secondary" data-testid="edition-search-button" aria-label={ASK_WORDS}
                     className="w-9 px-0 text-muted-foreground" onClick={() => ask("")}>
-              <Search className="size-3.5" />
+              <Chat className="size-3.5" />
             </Button>
           ) : !embed && (
             <div className="relative w-[280px]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input data-testid="edition-search" aria-label="Search or ask" placeholder="Search or ask" value={text}
+              <Chat className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input data-testid="edition-search" aria-label={ASK_WORDS} placeholder={ASK_WORDS} value={text}
                      className="pl-9" onChange={(e) => setText(e.target.value)}
                      onKeyDown={(e) => {
                        if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
@@ -423,10 +427,10 @@ export default function EditionShell() {
           <nav aria-label="Main" data-testid="edition-menu"
                className={(embed ? "top-0 h-screen" : "top-[65px] h-[calc(100vh-65px)]")
                  + " sticky flex w-[232px] shrink-0 flex-col gap-0.5 self-start overflow-y-auto border-r border-border px-3 py-5"}>
-            {embed && (
-              <Button variant="secondary" data-testid="menu-search" aria-label="Search or ask"
+            {embed && brain && (
+              <Button variant="secondary" data-testid="menu-search" aria-label={ASK_WORDS}
                       className="mb-[18px] w-full justify-start gap-2 text-muted-foreground" onClick={() => ask("")}>
-                <Search className="size-3.5" aria-hidden /> Search or ask
+                <Chat className="size-3.5" aria-hidden /> {ASK_WORDS}
               </Button>
             )}
             <MenuLinks entries={entries} narrow={false} setup={setup} />
@@ -463,7 +467,6 @@ export default function EditionShell() {
         </div>
       )}
 
-      <CommandPalette />
     </div>
   );
 }

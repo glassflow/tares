@@ -15,7 +15,7 @@ import json
 from .factory_home import _count, _dt, plain_ago
 
 REPORTING_DAYS = 7
-ADV = "/settings/advanced"
+INT = "/integrations"   # each tool's section there (TR-1823)
 _SHOWN = 3
 
 
@@ -44,7 +44,7 @@ def _open_projects(store, hidden) -> list[dict]:
 
 def github(store, hidden=()) -> dict:
     creds = _safe(store.list_github_credentials, []) or []
-    row = {"key": "github", "name": "GitHub", "connected": bool(creds), "href": f"{ADV}?tab=github",
+    row = {"key": "github", "name": "GitHub", "connected": bool(creds), "href": f"{INT}?step=github",
            "short": None, "covers": None}
     if not creds:
         return {**row, "detail": "Not connected"}
@@ -70,7 +70,7 @@ def github(store, hidden=()) -> dict:
 
 
 def linear(store, linear_mod, hidden=()) -> dict:
-    row = {"key": "linear", "name": "Linear", "href": f"{ADV}?tab=linear", "short": None, "covers": None}
+    row = {"key": "linear", "name": "Linear", "href": f"{INT}?step=tickets", "short": None, "covers": None}
     conn = _safe(lambda: linear_mod.public_connection(store), {}) or {}
     if not conn.get("connected"):
         return {**row, "connected": False, "detail": "Not connected"}
@@ -87,7 +87,7 @@ def linear(store, linear_mod, hidden=()) -> dict:
 
 def slack(store) -> dict:
     from . import slack as slack_mod
-    row = {"key": "slack", "name": "Slack", "href": f"{ADV}?tab=slack", "short": None, "covers": None}
+    row = {"key": "slack", "name": "Slack", "href": f"{INT}?step=notifications", "short": None, "covers": None}
     token = _safe(lambda: slack_mod.resolve_token(store)[0], "")
     if not token:
         return {**row, "connected": False, "detail": "Not connected"}
@@ -103,7 +103,7 @@ def slack(store) -> dict:
 
 
 def claude_code(store, now) -> dict:
-    row = {"key": "claude_code", "name": "Claude Code", "href": "/sources/claude-code", "short": None,
+    row = {"key": "claude_code", "name": "Claude Code", "href": f"{INT}?step=runtime", "short": None,
            "covers": None}
     # the newest session line the cell holds (TR-1804): no source catalog, no event counters
     last = _dt(_safe(store.newest_session_line_at, None))

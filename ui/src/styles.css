@@ -531,115 +531,6 @@ button:focus-visible, .btn:focus-visible, .tabs button:focus-visible { outline: 
   text-transform: uppercase; letter-spacing: 0.1em; font-variant-ligatures: none; margin-bottom: 2px;
 }
 
-/* Ask — in-app agent chat */
-/* The transcript scrolls with the PAGE. It used to be a 64vh inner scroller inside a page that
-   didn't scroll, so a long answer was read through a slot half the window high while the rest of
-   the viewport sat frozen — and the wheel only did what you expected with the pointer inside it. */
-.askchat { position: relative; padding-bottom: 8px; }
-.chat { padding: 4px 2px 8px; }
-
-.starters { display: flex; gap: 24px; flex-wrap: wrap; padding: 10px 0; }
-.starter-group { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 6px; }
-.starter { text-align: left; padding: 9px 12px; font: inherit; border-radius: 0; cursor: pointer; }
-
-/* One turn, clearly bounded. Before, the question was a small right-aligned pill and the answer was
-   unstyled full-bleed text with no container, label or rule, so consecutive turns ran together into
-   one wall you couldn't scan back through. */
-.turn { padding: 14px 0; border-top: 1px solid var(--line); }
-.turn:first-of-type { border-top: 0; }
-.turn-who {
-  display: flex; align-items: center; gap: 8px;
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--ink-faint); margin-bottom: 6px;
-}
-.turn-copy {
-  /* far right, not butted against the role label — inline it read as one word, "TARES COPY" */
-  margin-left: auto;
-  background: none; border: 0; padding: 0; font: inherit; font-size: 10px; letter-spacing: 0.08em;
-  text-transform: uppercase; color: var(--ink-faint); cursor: pointer; opacity: 0;
-  transition: opacity var(--dur-1) var(--ease-out);
-}
-.turn:hover .turn-copy { opacity: 1; }
-.turn-copy:hover { color: var(--accent-deep); }
-.turn.user .bubble-text {
-  white-space: pre-wrap; background: var(--accent-soft); color: var(--ink);
-  padding: 8px 12px; border-left: 2px solid var(--accent);
-}
-/* Prose caps at a readable measure; code, tables and cards still use the full width. */
-.turn.assistant .md > p, .turn.assistant .md > ul, .turn.assistant .md > ol { max-width: 78ch; }
-
-/* A run of tool calls drawn as a pipeline — one node per call on a hairline rail, each with a
-   state dot, the tool, its duration, and its input/output behind a click. Square dots and 1px
-   hairlines, not the prototype's circles and rounded cards. */
-.rail { position: relative; margin: 8px 0 10px; padding-left: 22px; }
-.rail::before {
-  content: ""; position: absolute; left: 3px; top: 10px; bottom: 12px; width: 1px;
-  background: var(--border-strong);
-}
-.node { position: relative; }
-.node::before {
-  content: ""; position: absolute; left: -22px; top: 10px; width: 7px; height: 7px;
-  background: var(--panel); border: 1px solid var(--border-strong);
-}
-.node[data-state="running"]::before { background: var(--accent); border-color: var(--accent); animation: node-pulse var(--dur-pulse) var(--ease-in-out) infinite; }
-.node[data-state="done"]::before { background: var(--ink-faint); border-color: var(--ink-faint); }
-.node[data-state="fail"]::before { background: var(--err); border-color: var(--err); }
-@keyframes node-pulse { 50% { box-shadow: 0 0 0 4px var(--accent-soft); } }
-/* Respect a reader who has asked the OS for less motion — this dot pulses for the whole run. */
-@media (prefers-reduced-motion: reduce) { .node[data-state="running"]::before { animation: none; } }
-
-.node-head {
-  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
-  background: none; border: 0; padding: 4px 0; font: inherit; font-size: 12.5px;
-  color: var(--ink-faint); cursor: pointer;
-}
-.node-head:hover .node-label { color: var(--ink); }
-.node-tool { font-size: 12px; color: var(--accent-deep); }
-.node-label { color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.node-time { margin-left: auto; font-size: 11px; color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
-.node-body { margin: 2px 0 8px; border-left: 2px solid var(--accent-soft); padding-left: 10px; }
-.kv { font-size: 11.5px; color: var(--ink-faint); white-space: pre-wrap; word-break: break-word; margin: 0 0 5px; }
-.kv b { color: var(--ink); font-weight: 500; }
-
-/* Pinned, and visibly a different surface from the transcript — the answer used to run straight
-   into the input with nothing between them, so there was no "here is where you reply". */
-.askbar {
-  position: sticky; bottom: 0; z-index: 5;
-  display: flex; gap: 8px; align-items: flex-end;
-  padding: 12px 0 10px; margin-top: 4px;
-  background: var(--bg);
-  border-top: 1px solid var(--border-strong);
-}
-/* A fade above the bar so text visibly passes UNDER it rather than stopping at a hard edge. */
-.askbar::before {
-  content: ""; position: absolute; left: 0; right: 0; top: -24px; height: 24px;
-  background: linear-gradient(180deg, transparent, var(--bg));
-  pointer-events: none;
-}
-.askbar textarea {
-  flex: 1; padding: 0.55rem 0.7rem; font: inherit; resize: none; overflow-y: auto;
-  min-height: 38px; max-height: 160px; line-height: 1.45;
-}
-
-/* Only shown once the reader has scrolled away from the tail. The wrapper does the centring: a
-   sticky element stays in flow, so `left: 50%` on the button itself did nothing and it stretched
-   to the row's width instead of sitting as a pill above the composer. */
-.jump-latest-wrap {
-  position: sticky; bottom: 84px; z-index: 6;
-  display: flex; justify-content: center; height: 0; pointer-events: none;
-}
-/* Hidden, not unmounted. Inserting and removing a sticky element mid-scroll relayouts the page
-   under the reader. `visibility` keeps it out of the way without touching layout. */
-.jump-latest-wrap.hidden { visibility: hidden; }
-.jump-latest {
-  pointer-events: auto; font-size: 12px; padding: 5px 12px;
-  background: var(--panel); border: 1px solid var(--border-strong);
-  box-shadow: 0 6px 18px var(--sheet-shadow); cursor: pointer;
-}
-
-/* Ask chat shared shell (page + ⌘K overlay) */
-.askchat { display: flex; flex-direction: column; min-height: 0; }
-
 /* centered confirm modal */
 .modal {
   position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -649,29 +540,6 @@ button:focus-visible, .btn:focus-visible, .tabs button:focus-visible { outline: 
   display: flex; flex-direction: column;
 }
 .modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
-
-/* ⌘K command palette — the Ask overlay */
-.cmdk-overlay {
-  position: fixed; inset: 0; z-index: 100;
-  background: var(--overlay);
-  display: flex; align-items: flex-start; justify-content: center; padding: 9vh 16px 16px;
-}
-.cmdk {
-  width: min(680px, 94vw); max-height: 78vh;
-  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 0;
-  box-shadow: 0 24px 64px var(--sheet-shadow);
-  display: flex; flex-direction: column; overflow: hidden;
-}
-.cmdk-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 12px 16px; border-bottom: 1px solid var(--line);
-}
-.cmdk-title { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
-.cmdk-actions { display: flex; align-items: center; gap: 12px; }
-.cmdk-link { font-size: 12px; color: var(--ink-soft); text-decoration: none; }
-.cmdk-link:hover { color: var(--accent-deep); }
-.cmdk-body { padding: 12px 16px 16px; overflow-y: auto; min-height: 0; }
-.cmdk-body .chat { max-height: 46vh; }
 
 /* rendered markdown in assistant replies */
 .md { line-height: 1.55; }
@@ -692,44 +560,6 @@ button:focus-visible, .btn:focus-visible, .tabs button:focus-visible { outline: 
 .md a { color: var(--accent-deep); }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
 .md blockquote { border-left: 3px solid var(--line); margin: 8px 0; padding-left: 12px; color: var(--ink-soft); }
-
-/* Ask as the familiar AI-chat shell: a second, full-height sidebar of conversations flush
-   against the app nav, the active chat beside it. Only /ask gets this; the page container drops
-   its padding for it (the :has() below) and the ⌘K overlay stays a single column. */
-.main:has(> .askchat.with-rail) { padding: 0; max-width: none; display: flex; }
-.askchat.with-rail { flex: 1; display: flex; flex-direction: row; align-items: stretch; min-width: 0; }
-.askchat.with-rail .ask-main {
-  flex: 1; min-width: 0;
-  padding: 24px 36px 64px;
-  max-width: 980px; margin: 0 auto;
-}
-.ask-side {
-  width: 240px; flex-shrink: 0;
-  border-right: 1px solid var(--line);
-  background: var(--bg);
-  padding: 16px 12px;
-  position: sticky; top: 46px;                 /* below the breadcrumb bar */
-  height: calc(100vh - 46px);
-  overflow-y: auto;
-}
-.ask-rail-new { width: 100%; }
-.ask-rail-list { display: flex; flex-direction: column; gap: 2px; }
-.ask-rail-item {
-  display: flex; align-items: center; gap: 6px;
-  padding: 7px 9px; border-radius: 0; cursor: pointer;
-  border: 1px solid transparent; font-size: 13.5px;
-}
-.ask-rail-item:hover { background: var(--wash); }
-.ask-rail-item.active { background: var(--accent-soft); }
-.ask-rail-item .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ask-rail-item .when { font-size: 11.5px; white-space: nowrap; }
-.ask-rail-item .x { visibility: hidden; background: none; border: none; cursor: pointer; color: var(--ink-faint); padding: 0 2px; }
-.ask-rail-item:hover .x { visibility: visible; }
-/* On a narrow window the second sidebar would crush the chat: stack it above instead. */
-@media (max-width: 900px) {
-  .askchat.with-rail { flex-direction: column; }
-  .ask-side { position: static; width: 100%; height: auto; max-height: 220px; border-right: none; border-bottom: 1px solid var(--line); }
-}
 
 /* a hint inside a field label stays on the label's line */
 .lbl .help { display: inline; margin: 0 0 0 4px; font-weight: 400; }

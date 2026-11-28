@@ -1,56 +1,3 @@
-export interface SourceHealth {
-  status: string;
-  last_poll_at: string | null;
-  last_ok_at: string | null;
-  last_error: string | null;
-  consecutive_errors: number;
-  polls: number;
-  events_since_start: number;
-  events_total: number;
-  last_ingest: string | null;
-}
-
-export interface Source {
-  name: string;
-  type: string;
-  connector: string;
-  poll: string;
-  config: Record<string, unknown>;
-  paused: boolean;
-  health: SourceHealth | null;
-  ingest_key?: string;   // stable path segment for push endpoints: /ingest/<ingest_key>
-  owned_by?: string | null;   // the project that created it, if any
-  customized?: boolean;       // edited by hand since; the project keeps that version
-  projects?: string[];        // every project the source is a member of (ids)
-}
-
-export interface ConnectorField {
-  name: string;
-  type: "string" | "number" | "json" | "map" | "list" | "bool";
-  required: boolean;
-  help: string;
-  secret?: boolean;          // render as a password input (tokens, DSNs)
-  discover_input?: boolean;  // Discover needs this field — shown above the Discover panel
-  default?: unknown;         // what the connector uses when the field is empty; prefilled on a fresh source
-  choices?: string[];        // a fixed set of values: rendered as a dropdown, anything else is refused on save
-  label?: string;            // the words shown for the field; the name stays the config key
-  item?: ConnectorField[];   // for type "list": the sub-fields of each row
-}
-
-export interface ConnectorSpec {
-  label: string;
-  mode: "poll" | "push" | "reference";   // reference: documents added by hand, no events flow
-  discover?: boolean;
-  poll?: string;   // connector-specific default poll interval (e.g. github: "2m")
-  internal?: boolean;   // provisioned by Tares itself (agent findings) — not offered in the UI
-  // created with its credential (the GitHub App source): never offered as a new kind, but an
-  // existing one is picked like any other source (under the GitHub kind)
-  credential_managed?: boolean;
-  description: string;
-  fields: ConnectorField[];
-  provides?: { name: string; primary?: boolean; help?: string }[];   // synthesized label fields
-}
-
 export interface ApiKey {
   id: string;
   name: string;
@@ -94,34 +41,6 @@ export interface TriggerFilter {
   field: string;
   op: "eq" | "neq" | "contains" | "gt" | "lt" | "gte" | "lte" | "in";
   value: string | number | string[];   // a list for `in`
-}
-
-export interface TriggerCondition {
-  aggregate: string;
-  predicate: string;
-  window: string;
-  field?: string | null;
-  group_by?: string[];
-  // a schedule instead of a condition (TR-320): fire every interval, summarized by these labels
-  every?: string;
-  summary_by?: string[];
-}
-
-// A trigger reads its own sources (members of its project), narrowed by filters, grouped by the
-// entity label (key_field; empty = the first source's primary label).
-export interface Trigger {
-  name: string;
-  project?: string;   // the project it belongs to; omitted on create = the default project
-  sources: string[];
-  filters?: TriggerFilter[];
-  key_field?: string | null;
-  description?: string | null;   // what wakes it in plain words, follows "When"; empty = said from the rule
-  condition: TriggerCondition;
-  emit: Record<string, unknown>;
-  cooldown: string;
-  paused?: boolean;   // paused triggers are not evaluated and never fire
-  owned_by?: string | null;
-  customized?: boolean;
 }
 
 // When a run concludes a finding with `verdict`, `agent` (in the same project) is started on the
@@ -328,7 +247,7 @@ export interface ProjectSession {
 }
 
 // The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,
-// split by surface (agent runs vs Ask).
+// split by surface ("ask": the summaries and setup plans; "agent": agent runs from before 2.0).
 export interface ModelUsageBucket {
   calls: number;
   input_tokens: number;

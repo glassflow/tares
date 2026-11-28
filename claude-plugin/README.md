@@ -34,9 +34,8 @@ tares, Configure). The key is only ever sent to that workspace: session shipping
 Tested with Claude Code 2.1.296. The MCP connection relies on its expansion of `${VAR:-}` and
 `${user_config.*}` in HTTP server URLs and headers, and on `headersHelper`.
 
-**No manual source setup.** The shipper creates the `claude_code` push source on Tares itself the
-first time it runs (on `SessionStart`), and re-creates it if it's ever missing. Installing the plugin
-is the only step.
+**No setup on Tares.** The shipper posts each session's lines to the cell's Claude Code intake
+(the runtime integration), so installing the plugin is the only step.
 
 ## Try it (development)
 

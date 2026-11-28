@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -22,6 +22,8 @@ import {
 // the brain's own text (markdown, never raw HTML; only http, https, mailto and relative links stay links) and is
 // exempt from the words rule; the page's own words, errors included, are not.
 // Look deeper asks the question the answer belongs to (not what is typed in the box now) and replaces the answer.
+// The shell's ask field opens /brain/ask?q=<question>: once a repo is ready the page puts the question in the
+// box, asks it, and takes q out of the address (so a reload does not ask again).
 
 const MUTED = "m-0 text-[13px] text-muted-foreground";
 
@@ -188,6 +190,19 @@ function Asker({ data, reload }: { data: AskBrainData; reload: () => void }) {
       if (alive.current && id === latest.current) setPending(null);
     }
   };
+
+  const askNow = React.useRef(ask);
+  askNow.current = ask;
+  const [params, setParams] = useSearchParams();
+  const asked = params.get("q") ?? "";
+  const canAsk = readyRepos(rows).length > 0;
+  React.useEffect(() => {
+    if (!asked || !canAsk) return;
+    const q = asked.trim();
+    setQuestion(asked);
+    setParams((p) => { const next = new URLSearchParams(p); next.delete("q"); return next; }, { replace: true });
+    if (q && questionLength(q) <= MAX_QUESTION) void askNow.current(q, false);
+  }, [asked, canAsk, setParams]);
 
   const length = questionLength(question);
   const tooLong = length > MAX_QUESTION;

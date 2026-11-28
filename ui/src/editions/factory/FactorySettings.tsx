@@ -18,13 +18,13 @@ import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
-  addGrant, changeCrew, factorySettings, saveMorning, sendMorningNow, switchEdition,
+  addGrant, changeCrew, factorySettings, saveMorning, sendMorningNow,
   type Autonomy, type CrewChange, type MorningResult, type MorningStatus, type SettingsGrant, type SettingsPage, type SettingsTool,
 } from "./FactorySettings.api";
 import { isSample, SAMPLE_PEOPLE, sampleLoad } from "./settingsSamples";
 import { MORNING_OFF, MorningStatusPane } from "./MorningStatus";
 import type { Person } from "../../types";
-import { FIRST_SETTING, settingFrom, shownGroups, type SettingGroup, type SettingId } from "./settingsNav";
+import { FIRST_SETTING, settingFrom, shownGroups, WORKSPACE_TWIN, type SettingGroup, type SettingId } from "./settingsNav";
 import { placeBeforeSettings } from "../settingsBack";
 
 // Settings has a sidebar of two levels and shows one item at a time. The crew's items and the tools'
@@ -122,13 +122,10 @@ export interface ViewProps {
   page: SettingsPage;
   /** The sidebar item shown. */
   tab: SettingId;
-  /** The agent a link to Budget came for: its limit field opens ready. */
-  agent?: string;
   /** What a change that was not saved says; empty when there is none. */
   problem?: string;
   onCrew: (c: CrewChange) => Promise<void>;
   onGrant: (words: string) => Promise<string | null>;
-  onSwitch: (edition: string) => Promise<void>;
   /** Saves Morning status; answers what went wrong, or null. */
   onMorning?: (m: MorningStatus) => Promise<string | null>;
   /** Sends one report on the saved settings; null when nothing was sent (a sample). */
@@ -141,8 +138,11 @@ export interface ViewProps {
 const HEADED = "settings-headed min-w-0";
 
 // The tools moved to Integrations (/integrations), grouped by what they do: an old address of one
-// goes to its section there.
-const TOOL_SECTIONS: Record<string, string> = { github: "github", linear: "tickets", slack: "notifications", claude_code: "runtime" };
+// goes to its section there. Station telemetry (the old Observability tab) is its Monitoring section.
+const TOOL_SECTIONS: Record<string, string> = {
+  github: "github", linear: "tickets", slack: "notifications", claude_code: "runtime",
+  tracing: "monitoring", observability: "monitoring",
+};
 
 function CellPeople() {
   return <PeopleBlock access={useAccessData()} />;
@@ -179,14 +179,12 @@ function KeysPane() {
   );
 }
 
-export function FactorySettingsView({ page, tab, problem, onCrew, onGrant, onSwitch, onMorning, onMorningSend, morningPeople = null }: ViewProps) {
-  const { crew, models, edition, tools } = page;
+export function FactorySettingsView({ page, tab, problem, onCrew, onGrant, onMorning, onMorningSend, morningPeople = null }: ViewProps) {
+  const { crew, tools } = page;
   const cloud = useCloud();
   const dim = !page.can_change;
   const [confirm, setConfirm] = React.useState(false);
-  const [target, setTarget] = React.useState<{ value: string; label: string } | null>(null);
   const [grantOpen, setGrantOpen] = React.useState(false);
-  const [switching, setSwitching] = React.useState(false);
   const level = crew.how_far.value;
   const workspaceApiUrl = cloud.health?.workspace_api_url || undefined;
 
@@ -269,13 +267,6 @@ export function FactorySettingsView({ page, tab, problem, onCrew, onGrant, onSwi
 
       {tab === "providers" && (<><Heading title="Providers" /><ProvidersPanel /></>)}
 
-      {tab === "budget" && (
-        <>
-          <Heading title="Budget" />
-          <Card dim={dim}><div className="px-4 py-3.5" data-testid="budget-text">{models.budget_text}</div></Card>
-        </>
-      )}
-
       {tab === "people" && <div className={HEADED}><PeoplePane /></div>}
       {tab === "keys" && <div className={HEADED}><KeysPane /></div>}
       {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} noTeam />}
@@ -283,43 +274,12 @@ export function FactorySettingsView({ page, tab, problem, onCrew, onGrant, onSwi
       {tab === "licence" && <LicencePanel />}
       {tab === "areas" && <EePage slot="page.settings.areas" />}
 
-      {tab === "edition" && (
-        <>
-          <Heading title="Edition" />
-          <Card>
-            <ListRow data-testid="row-edition">
-              <div className={ROW_TEXT}>
-                <div className="font-semibold" data-testid="edition-name">{edition.label}</div>
-                <div className="mt-0.5 text-[13px] text-muted-foreground">{edition.note}</div>
-                {!edition.can_switch && <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="edition-readonly">Only an admin can switch the edition.</div>}
-              </div>
-              {edition.can_switch && (
-                <div className="flex flex-none flex-wrap items-center gap-2">
-                  {edition.options.map((o) => (
-                    <Button key={o.value} variant="secondary" data-testid={`edition-${o.value}`} onClick={() => setTarget(o)}>{`Switch to ${o.label}`}</Button>
-                  ))}
-                </div>
-              )}
-            </ListRow>
-          </Card>
-        </>
-      )}
-
       <Dialog open={confirm} onOpenChange={setConfirm} data-testid="confirm-ship"
               title="Let the crew merge on its own?"
               description="It will merge a pull request once the reviewer passed it and CI is green, without waiting for you."
               footer={<>
                 <Button variant="secondary" onClick={() => setConfirm(false)}>Keep approving</Button>
                 <Button data-testid="confirm-ship-yes" onClick={() => { setConfirm(false); void onCrew({ autonomy: "L4-ship" }); }}>Let it merge</Button>
-              </>} />
-      <Dialog open={target !== null} onOpenChange={(o) => { if (!o) setTarget(null); }} data-testid="confirm-edition"
-              title={`Switch to ${target?.label ?? ""}?`} description={edition.note}
-              footer={<>
-                <Button variant="secondary" onClick={() => setTarget(null)}>Cancel</Button>
-                <Button busy={switching} data-testid="confirm-edition-yes"
-                        onClick={async () => { if (!target) return; setSwitching(true); await onSwitch(target.value); setSwitching(false); setTarget(null); }}>
-                  {`Switch to ${target?.label ?? ""}`}
-                </Button>
               </>} />
       <GrantDialog open={grantOpen} onOpenChange={setGrantOpen} onAdd={onGrant} />
     </div>
@@ -455,8 +415,11 @@ function SettingsPage() {
     navigate({ pathname: "/settings", search: `?${q}` }, { replace: true });
   }, []);
 
-  const wanted = cloudBack?.item ?? settingFrom(loc.search, loc.hash);
-  const known = !!wanted && groups.some((g) => g.items.some((i) => i.id === wanted));
+  const has = (id: SettingId | null | undefined) => !!id && groups.some((g) => g.items.some((i) => i.id === id));
+  const named0 = cloudBack?.item ?? settingFrom(loc.search, loc.hash);
+  const twin = named0 ? WORKSPACE_TWIN[named0] : undefined;
+  const wanted = named0 && !has(named0) && cloud.ready && has(twin) ? twin! : named0;
+  const known = has(wanted);
   // an item this cell may not have waits until the cell has said
   const waiting = !!wanted && !known && (!cloud.ready || eePending);
   const tab: SettingId = wanted && known ? wanted : FIRST_SETTING;
@@ -479,10 +442,6 @@ function SettingsPage() {
   const onGrant = async (words: string) => {
     if (sample) return null;
     try { await addGrant(words); reload(); return null; } catch (e) { return e instanceof ApiError && e.status !== 403 && e.message ? e.message : failed(e); }
-  };
-  const onSwitch = async (edition: string) => {
-    if (sample) return;
-    try { await switchEdition(edition); window.location.reload(); } catch (e) { setProblem(failed(e)); }
   };
   const onMorning = async (m: MorningStatus) => {
     if (sample) return null;
@@ -535,8 +494,8 @@ function SettingsPage() {
         {(!page || waiting) && !error && <LoadingBlocks data-testid="settings-loading" count={5} widths={["35%", "60%", "80%"]} />}
         {page && !waiting && (
           <TerseSettings.Provider value={true}>
-            <FactorySettingsView page={page} tab={tab} agent={new URLSearchParams(loc.search).get("agent") ?? undefined}
-                                 problem={problem} onCrew={onCrew} onGrant={onGrant} onSwitch={onSwitch}
+            <FactorySettingsView page={page} tab={tab}
+                                 problem={problem} onCrew={onCrew} onGrant={onGrant}
                                  onMorning={onMorning} onMorningSend={onMorningSend} morningPeople={sample ? SAMPLE_PEOPLE : people} />
           </TerseSettings.Provider>
         )}

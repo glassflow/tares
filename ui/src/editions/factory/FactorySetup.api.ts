@@ -148,6 +148,8 @@ export interface SetupData {
   /** GitHub and Slack, for the Integrations page's Code and Notifications. */
   tools?: Partial<Record<"github" | "slack", { connected: boolean; detail: string }>>;
   steps: SetupStep[];
+  /** Steps setup's walk leaves out that Integrations shows: Monitoring, where station telemetry is set. */
+  integrations_only?: SetupStep[];
 }
 
 export interface SetupProgress { set: number; total: number; text: string }

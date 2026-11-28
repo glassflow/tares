@@ -7,15 +7,13 @@ import {
 import { ageWords } from "../../lib/time";
 import type { ModelProvider, ModelProviders } from "../../types";
 
-// What agents and Ask run on, on the edition kit (TR-1392). Factory Settings > Models > Providers and
-// the platform Settings page (/settings/advanced?tab=anthropic, which the AI SRE edition opens) both
-// show this. A cell holds Anthropic, OpenAI or any OpenAI-compatible endpoint (LiteLLM, OpenRouter,
-// Ollama, vLLM); one is the default, what Ask uses and what an agent without a provider of its own
-// runs on. The Anthropic entry is the older key + gateway settings under another door, so a
-// deployment that fills those shows up here unchanged. No key ever comes back from the daemon.
+// What the cell's summaries run on (the standup summary, milestone summaries and the weekly report),
+// on the edition kit (TR-1392); Factory Settings > Models > Providers shows it. A cell holds
+// Anthropic, OpenAI or any OpenAI-compatible endpoint (LiteLLM, OpenRouter, Ollama, vLLM); the
+// default is the one every summary uses (TR-1823). The Anthropic entry is the older key and
+// gateway settings under another door, so a deployment that fills those shows up here unchanged. No key ever comes back from the daemon.
 
 const TEXT = "m-0 text-[13px] leading-relaxed text-muted-foreground";
-const CODE = "font-mono text-[12px] text-foreground";
 const FORM = "grid gap-4 border border-border bg-muted/40 p-4";
 
 const messageOf = (e: unknown) => String((e as Error)?.message ?? e);
@@ -30,7 +28,7 @@ const PLATFORM = "platform";
 const KIND_HELP: Record<Kind, string> = {
   anthropic: "Claude models with your Anthropic API key.",
   openai: "GPT models with your OpenAI API key.",
-  openai_compatible: "Anything that speaks OpenAI chat completions. The models it lists are what agents can pick.",
+  openai_compatible: "Anything that speaks OpenAI chat completions. The summaries use a model it lists.",
 };
 
 const PRESETS: { id: string; label: string; kind: Kind; name: string; base_url: string; key: boolean }[] = [
@@ -61,7 +59,7 @@ function modelWords(p: ModelProvider): string {
   const n = p.models.length;
   if (p.models_error) {
     // models_at moves on a failed read too, so the list's age says nothing about where it came from
-    const fallback = n > 0 ? ` Agents can pick from ${plural(n, "model", "models")}.` : " Agents can still name a model by hand.";
+    const fallback = n > 0 ? ` The ${plural(n, "model", "models")} read before stay in use.` : " The summaries wait until it lists a model.";
     const problem = sentence(p.models_problem || "the endpoint did not list its models");
     return `${problem}${/[.?]$/.test(problem) ? "" : "."}${fallback}`;
   }
@@ -69,8 +67,8 @@ function modelWords(p: ModelProvider): string {
   return `${plural(n, "model", "models")} listed by the endpoint, read ${ageWords(Date.now() - Date.parse(p.models_at))}.`;
 }
 
-/** `title` and `intro` for a page with no heading of its own (the platform Settings page). */
-export function ProvidersPanel({ title, intro = false }: { title?: string; intro?: boolean }) {
+/** Factory Settings heads the page itself, so the panel has no title of its own. */
+export function ProvidersPanel() {
   const [data, setData] = useState<ModelProviders>();
   const [loadErr, setLoadErr] = useState<string>();
   const [rowErr, setRowErr] = useState<{ id: string; text: string }>();
@@ -109,25 +107,14 @@ export function ProvidersPanel({ title, intro = false }: { title?: string; intro
   const rows = data?.providers.filter((p) => p.configured || p.stored) ?? [];
   const action = !editing && data && <Button onClick={startAdd} data-testid="providers-add">Add a provider</Button>;
 
-  // With no title (Factory Settings heads the page itself) the button sits beside a line on the
-  // default, not alone in an empty header bar
+  // The button sits beside a line on the default, not alone in an empty header bar
   return (
-    <Panel title={title} action={(title && action) || undefined} data-testid="providers">
+    <Panel data-testid="providers">
       <div className="grid gap-4">
-        {!title && (
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <p className={TEXT}>The default is what Ask uses, and what an agent without its own provider works with.</p>
-            {action}
-          </div>
-        )}
-        {intro && (
-          <p className={TEXT}>
-            What Tares agents and Ask work with. Add the providers you hold keys for. Each agent picks a provider and a
-            model, and the default is what Ask and any agent without its own choice use. Values saved here win over the
-            daemon's environment (<code className={CODE}>ANTHROPIC_API_KEY</code>, <code className={CODE}>OPENAI_API_KEY</code>,{" "}
-            <code className={CODE}>TARES_MODEL_PROVIDER</code>). Keys are never shown again and never exported.
-          </p>
-        )}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <p className={TEXT} data-testid="providers-what">The default writes the standup summary, the milestone summaries, the weekly report and the setup plan.</p>
+          {action}
+        </div>
         <Collapse>{loadErr && data && <Banner tone="error">{loadErr}</Banner>}</Collapse>
         <Collapse>{note && <Banner tone={note.tone} data-testid="providers-note">{note.text}</Banner>}</Collapse>
 
@@ -147,7 +134,7 @@ export function ProvidersPanel({ title, intro = false }: { title?: string; intro
         ) : rows.length === 0 ? (
           !editing && (
             <EmptyState data-testid="providers-empty">
-              No model provider yet. Add one: agents cannot be switched on and Ask cannot answer until then.
+              No model provider yet. Add one: until then the standup, the milestones and the weekly report come without their summary.
             </EmptyState>
           )
         ) : (
@@ -171,7 +158,11 @@ export function ProvidersPanel({ title, intro = false }: { title?: string; intro
                 title={`Remove ${confirmRemove.name}?`}
                 description={confirmRemove.kind === "anthropic"
                   ? "The saved key and gateway are removed. If the daemon's environment has a key, that one is used again."
-                  : `Agents that use ${confirmRemove.name} move to the default until you pick another provider for them.`}
+                  : confirmRemove.default
+                    ? rows.some((r) => r.id !== confirmRemove.id && r.configured)
+                      ? `The summaries move to another provider you have added.`
+                      : `The summaries stop until you add another provider.`
+                    : `${confirmRemove.name} is removed. The summaries keep using the default.`}
                 footer={<>
                   <Button variant="secondary" disabled={busy !== undefined} onClick={() => setConfirmRemove(undefined)}>Cancel</Button>
                   <Button busy={busy === `remove:${confirmRemove.id}`} data-testid="providers-remove-confirm"
@@ -223,7 +214,7 @@ function ProviderForm({ editing, existing, onChange, onCancel, onSaved }: {
       <div className="grid items-start gap-4 sm:grid-cols-2">
         {compatible && (
           <Input label="Name" className="font-mono" spellCheck={false} placeholder="LiteLLM" value={editing.name} disabled={!isNew}
-                 hint={isNew ? "What agents pick it by." : "The name stays; remove it and add a new one to rename."}
+                 hint={isNew ? "What this list calls it." : "The name stays; remove it and add a new one to rename."}
                  error={field === "name" ? err : undefined} onChange={(e) => set({ name: e.target.value })} />
         )}
         <Input label={keyOptional ? "API key (optional)" : "API key"} type="password" autoComplete="new-password"

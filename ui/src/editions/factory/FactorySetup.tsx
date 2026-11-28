@@ -1196,7 +1196,9 @@ export function FactoryIntegrations() {
   const sample = isSample(named) ? named : null;
   const [params] = useSearchParams();
   const { data, error, reload } = usePagePolling<SetupData>(() => (sample ? sampleLoad(sample).then(withSampleAround) : setupRead()), 0);
-  if (data) return <Setup data={data} reload={reload} first={params.get("step")} mode="integrations" />;
+  // Monitoring is not a step of setup's walk, but it is set here: it slots in where setup lists it
+  const all = data && { ...data, steps: [...data.steps, ...(data.integrations_only ?? [])].sort((x, y) => x.number - y.number) };
+  if (all) return <Setup data={all} reload={reload} first={params.get("step")} mode="integrations" />;
   return error ? (
     <div role="alert" className="border border-err-border bg-err-soft px-3.5 py-2.5 text-[13px] text-foreground" data-testid="integrations-error">
       <b>The integrations could not be loaded.</b> Nothing was changed.

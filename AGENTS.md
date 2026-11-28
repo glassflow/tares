@@ -88,7 +88,7 @@ deleted (TR-1820).
   the register (`ui/eslint-rules/kit-register.mjs`) with its reason: a value computed at run time
   (a bar's width), a control the kit has no primitive for yet, a native picker kept on purpose, or a
   legacy panel waiting for its move. The legacy components (the files directly under
-  `ui/src/components`, such as Ask chat and the usage, licence and sign-in panels) are frozen at their count
+  `ui/src/components`, such as the usage, licence and sign-in panels) are frozen at their count
   in `ui/kit-contract.baseline.json`. A file that gets
   cleaner lowers its count in the same PR with `npm run kit-baseline`, which never raises one
   without `--raise` and a reason in the PR.
@@ -115,10 +115,10 @@ deleted (TR-1820).
   on `motion.ts` drifting from the tokens and on a suite that loads playwright itself.
 - **Embedded in the Tares desktop.** The desktop opens the console with `?embed=desktop&theme=light|dark`
   (`ui/src/embed.ts`, and the boot script in `ui/index.html` before first paint). Embedded, the console
-  draws no header of its own (brand, cell name, workspace switcher, search box, account menu) and no
+  draws no header of its own (brand, cell name, workspace switcher, ask field, account menu) and no
   theme switch or sign out anywhere: the desktop shows the cell, owns the sign-in and sets the theme.
-  The menu stays, with search at its top; a page's header actions (`useHeaderSlots().actions`) sit in a
-  row above the page, and below 768px a slim bar keeps Menu and search. `theme` wins over a choice saved
+  The menu stays, with the ask button at its top on a cell with a Second Brain; a page's header actions (`useHeaderSlots().actions`) sit in a
+  row above the page, and below 768px a slim bar keeps Menu and the ask button. `theme` wins over a choice saved
   in a browser visit and is never saved; without it the console follows the OS. Both values are kept in
   `sessionStorage` for the tab, so a move inside the console keeps the mode; `?embed=` with another
   value leaves it. No user-agent sniffing. A browser visit without the params is unchanged.

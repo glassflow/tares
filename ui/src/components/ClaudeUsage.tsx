@@ -70,7 +70,7 @@ function projectName(p: ProjectUsage) {
     : <span>{p.name}</span>;
 }
 
-const PLAN_EMPTY = <>No reading yet. Each station reports the plan's 5-hour and weekly limits after its first reply (on a Pro or Max login), and the factory watch reads <span className="mono">/usage</span> every 10 minutes. Read it now with <span className="mono">tares factory plan</span>.</>;
+const PLAN_EMPTY = <>No reading yet. Each crew member reports the plan's 5-hour and weekly limits after its first reply (on a Pro or Max login), and the factory watch reads <span className="mono">/usage</span> every 10 minutes. Read it now with <span className="mono">tares factory plan</span>.</>;
 
 /** Settings, Usage: the plan, and what each project spent over the last week. */
 export function ClaudeCodeUsagePanel() {
@@ -113,7 +113,7 @@ export function ClaudeCodeUsagePanel() {
                 </table>
               </div>
               <p className="help" style={{ margin: "8px 0 0" }}>
-                Cost is what the tokens would cost on the API at list prices, so projects can be compared; on a subscription the plan's limits above are what runs out. A reply counts for the project its session was working in; the crew's own stations serve every project, so what they spent outside one is the crew's.
+                Cost is what the tokens would cost on the API at list prices, so projects can be compared; on a subscription the plan's limits above are what runs out. A reply counts for the project its session was working in; the crew's own members serve every project, so what they spent outside one is the crew's.
               </p>
             </>
           )}

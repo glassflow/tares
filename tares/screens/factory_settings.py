@@ -1,7 +1,7 @@
 """The factory Settings page (TR-738): GET /api/factory/settings.
 
 One read gives the whole page: the tools the crew works with, how far it may go and what it was
-allowed, the model and budget, the keys and the links to everything else. Nothing is
+allowed, the default model provider, the keys and the links to everything else. Nothing is
 stored here. Each part reads what the cell already keeps (the crew's settings, the grants
 documents, the connections, the keys) and words it for people, so every string is shown as it is.
 The words of a grant are the person's own and are exempt from the word check; a grant that only
@@ -108,18 +108,13 @@ def register(app, h: Deps):
             g.pop("_sort", None)
         return out[:MAX_GRANTS], len(out)
 
-    # ── models and budget ────────────────────────────────────────────────────
+    # ── the default model provider (what is spent is on Usage, /api/usage/model) ──
     def models() -> dict:
         listing = safe(lambda: providers_mod.list_providers(store), {}) or {}
         default = next((p for p in listing.get("providers") or []
                         if p.get("id") == listing.get("default") and p.get("configured")), None)
-        spent = ((safe(store.model_usage_summary, {}) or {}).get("total") or {}).get("cost_usd")
-        if isinstance(spent, (int, float)) and spent >= 0.005:
-            budget = f"${spent:,.2f} spent so far."
-        else:
-            budget = "No budget set."
         return {"default_provider": _text(default["name"]) if default else "Not chosen yet",
-                "chosen": default is not None, "budget_text": budget}
+                "chosen": default is not None}
 
     # ── the page ─────────────────────────────────────────────────────────────
     @app.get("/api/factory/settings")
@@ -153,17 +148,11 @@ def register(app, h: Deps):
                 "pace_text": pace_text(pace),
                 "grants": given, "grants_total": total,
             },
-            "models": safe(models, {"default_provider": "Not chosen yet", "chosen": False,
-                                    "budget_text": "No budget set."}),
+            "models": safe(models, {"default_provider": "Not chosen yet", "chosen": False}),
             "people": {"keys": {"count": len(keys),
                                 "text": ("No access keys yet" if not keys
                                          else _count(len(keys), "access key"))},
                        "cloud_team_href": team or None},
-            # a fixed value the console's Edition tab still reads, until the console drops the tab
-            # (TR-1817): there is one kind of cell, and nothing to switch to
-            "edition": {"value": "factory", "label": "Software Factory", "can_switch": False,
-                        "options": [], "other": {"value": "factory", "label": "Software Factory"},
-                        "note": "This Tares is a software factory."},
         }
 
     # ── Morning status (TR-825): an admin's, like every other change here ────
