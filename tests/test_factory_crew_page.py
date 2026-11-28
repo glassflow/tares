@@ -447,6 +447,7 @@ async def private_shares():
             store.set_project_kind(f"uc_{n}", "software_factory")
             seed_usage(store, f"s-{n}", f"m-{n}", project=f"uc_{n}", replied_at=an_hour_ago, cost_usd=cost)
         seed_usage(store, "s-own", "m-own", replied_at=an_hour_ago, cost_usd=5.4)   # "Other sessions"
+        claude_usage.clear_week_by_project()   # a start-up task may have read the week mid-seed (TR-1627)
         store.set_project_scope("uc_secret", "private")
         mia = store.create_person("Mia", "mia@example.com")["id"]
         bo = store.create_person("Bo", "bo@example.com")["id"]
