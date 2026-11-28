@@ -158,7 +158,7 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_FACTORY_MCP_URL` | the crew's shared MCP endpoint, set by `tares factory` for stations and the spec session; the plugin connects there (default: local Tares gives 127.0.0.1:8788/mcp, a remote one its own `/mcp`) |
 | `TARES_FACTORY_CRED_FILE` | path of the crew's token file, read by the plugin's MCP header helper (`claude-plugin/scripts/mcp_headers.py`); same file as `TARES_FACTORY_TOKEN_FILE` |
 | `TARES_METRICS_TOKEN` | when set, `/metrics` wants `Authorization: Bearer <token>` and answers 401 without it; unset keeps it public (the cell's auth token is not accepted there) |
-| `TARES_INSTANCE_NAME` | prefix of the trace `service.name` (`<instance>/<agent>`); default the hostname |
+| `TARES_INSTANCE_NAME` | the instance name stations put on their telemetry (`service.name`); default the hostname |
 | `TARES_SECRETS_KEY` | turns on project secrets (TR-775): any long random string, from the cell's environment only; the values are sealed with a key made from it, so a changed one leaves stored secrets unreadable until they are set again |
 | `TARES_PLUGIN_DIR` | test hook: the Claude Code plugin `tares factory` and `python -m tares.crew` use instead of the one in the install or checkout |
 | `TARES_FAKE_STRAYS_DIR` | test hook: a folder whose `ps-table.json` (a list of process rows: pid, ppid, started, cmdline, session, cwd, crew) is the process table the strays scan reads (`tares factory doctor`, `crew status`, the watch); without the file the table is empty. `TARES_FAKE_PS_DIR` does the same when this is unset |

@@ -7,7 +7,7 @@ export type SettingId =
   | "providers" | "budget"
   | "people" | "keys"
   | "general" | "usage" | "edition" | "licence"
-  | "agent_tools" | "areas";
+  | "areas";
 
 export interface SettingItem { id: string; label: string; to?: string }
 export interface SettingGroup { id: string; label: string; items: SettingItem[] }
@@ -20,20 +20,17 @@ export const SETTING_GROUPS: SettingGroup[] = [
     { id: "general", label: "General" }, { id: "usage", label: "Usage" }, { id: "edition", label: "Edition" }, { id: "licence", label: "Enterprise licence" },
   ] },
   { id: "advanced", label: "Advanced", items: [
-    { id: "agent_tools", label: "Agent tools" }, { id: "areas", label: "Areas" },
-    { id: "connections", label: "Connections", to: "/sources" }, { id: "explore", label: "Explore your data", to: "/explore" },
-    { id: "resources", label: "All resources", to: "/resources" }, { id: "connect", label: "Connect an agent", to: "/connect" },
-    { id: "reads", label: "Reads", to: "/reads" },
+    { id: "areas", label: "Areas" },
   ] },
 ];
 
 export const FIRST_SETTING: SettingId = "crew";
 
 const OLD_TABS: Record<string, SettingId> = {
-  access: "keys", anthropic: "providers", agents: "budget", workspace: "general", advanced: "agent_tools",
+  access: "keys", anthropic: "providers", agents: "budget", workspace: "general", advanced: "areas",
 };
 const OLD_SECTIONS: Record<string, SettingId> = {
-  crew: "crew", models: "providers", people: "people", edition: "edition", advanced: "agent_tools",
+  crew: "crew", models: "providers", people: "people", edition: "edition", advanced: "areas",
 };
 const PAGES = new Set(SETTING_GROUPS.flatMap((g) => g.items.filter((i) => !i.to).map((i) => i.id)));
 

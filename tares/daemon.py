@@ -564,6 +564,8 @@ def make_app() -> FastAPI:
     def _webhook_key(key: str) -> bool:
         """True when `key` is a GitHub App's webhook key. A store that cannot answer says no: the
         delivery then needs a Tares credential, and other ingest is not held up."""
+        if key in ("claude_code", "codex"):
+            return False   # the runtime intakes, the busiest ingest paths: never a webhook key
         try:
             return store.integration_key(key) is not None
         except Exception:   # noqa: BLE001
