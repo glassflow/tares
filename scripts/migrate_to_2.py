@@ -504,8 +504,9 @@ def inspect_cell(cell: Cell, args) -> Plan:
     if rev == [HEAD_1]:
         ck((True, f"revision {HEAD_1}"))
     else:
-        ck((False, f"revision {rev or 'none'}, not {HEAD_1}"))
-        plan.refusals.append(f"the session store is at revision {rev or 'none'}: only a 1.61.0 cell "
+        rev = ", ".join(rev or []) or "none"
+        ck((False, f"revision {rev}, not {HEAD_1}"))
+        plan.refusals.append(f"the session store is at revision {rev}: only a 1.61.0 cell "
                              f"({HEAD_1}) is moved. Run Tares 1.61.0 on it once, stop it, then run this again")
     want = set(INPUT["postgres" if cell.dialect == "postgresql" else "sqlite"]["tables"])
     missing, extra = sorted(want - cell.tables), sorted(cell.tables - want)
@@ -816,12 +817,17 @@ class Out:
                 cur.close()
         else:
             with self.engine.begin() as c:
-                path = c.exec_driver_sql("SHOW search_path").scalar_one()
-                first = [p.strip().strip('"') for p in path.split(",") if p.strip()][0]
-                if first == "$user":
-                    first = c.exec_driver_sql("SELECT current_user").scalar_one()
+                # the schema the DSN's connections write to: the first of the search_path that
+                # exists, else the first one it names (made here)
+                first = c.exec_driver_sql("SELECT current_schema()").scalar_one()
+                if first is None:
+                    path = c.exec_driver_sql("SHOW search_path").scalar_one()
+                    named = [p.strip().strip('"') for p in path.split(",") if p.strip()]
+                    first = next((p for p in named if p != "$user"), None)
+                    if first is None:
+                        raise Refused("the output DSN's search_path names no schema")
+                    c.exec_driver_sql(f'CREATE SCHEMA "{first}"')
                 self.schema = first
-                c.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{first}"')
             with self.engine.connect() as c:
                 have = sa.inspect(c).get_table_names(schema=self.schema)
             if have:
@@ -1371,7 +1377,7 @@ class Copier:
                 except OSError:
                     shutil.copy2(a, b)
                 k += 1
-        self.report.append(f"archive: {k} file(s) linked into {dst}")
+        self.report.append(f"archive: {k} file(s) linked into {os.path.join(self.out.final, 'archive')}")
 
 
 # ── verification ─────────────────────────────────────────────────────────────────────────────
