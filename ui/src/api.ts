@@ -1,18 +1,7 @@
 import type {
-  Edition, EditionSettings,
-  AgentInfo,
-  ApiKey, ExternalAgent, Person, Whoami,
-  CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
-  AgentPreset, AgentRun, BuiltinAgent, Handoff,
-  GithubAppTest, GithubCredential,
-  LabelFacet, ModelUsage, QueryLogEntry,
-  McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
-  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
-  Skill, SkillSummary,
-  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, DeskReplyBody, DeskReplied, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SpecQuestion, LinearLink, LinearStatus, Milestone,
-  ProjectSession, Ticket, TicketStatus,
-  Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
-  TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
+  ApiKey, Person, Whoami, ConnectorSpec, GithubAppTest, GithubCredential, ModelUsage, Project,
+  ProjectSummary, Area, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, Source, Usage, Trigger,
+  ModelProviders,
 } from "./types";
 import { ENTERPRISE_URL, licenceSentence, licenceWordsOn } from "./licenceWords";
 
@@ -22,13 +11,6 @@ export const auth = {
   set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
   clear: () => localStorage.removeItem(TOKEN_KEY),
 };
-
-// Where the console's calls come from, when a page other than Home makes them (TR-1451): the feed sets
-// "feed" while it is open, so an answer it sends through Home's handler is recorded as given there.
-let surface: string | null = null;
-export function setSurface(s: string | null): void {
-  surface = s;
-}
 
 export function authHeader(): Record<string, string> {
   const t = auth.get();
@@ -189,7 +171,6 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       "content-type": "application/json",
       ...authHeader(),
-      ...(surface ? { "X-Tares-Via": surface } : {}),
       ...(init?.headers as Record<string, string> | undefined),
     },
   });
@@ -305,33 +286,9 @@ export const api = {
   updatePerson: (id: string, body: { name?: string; email?: string | null; emails?: string[]; github?: string | null; is_admin?: boolean; picture?: string | null }) =>
     request<Person>(`/api/people/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
 
-  sources: () => request<Source[]>("/api/sources"),
   source: (name: string) => request<Source>(`/api/sources/${name}`),
-  createSource: (body: object) =>
-    request<{ ok: boolean; name: string; ingest_key: string | null }>(
-      "/api/sources", { method: "POST", body: JSON.stringify(body) }),
   updateSource: (name: string, body: object) =>
     request(`/api/sources/${name}`, { method: "PUT", body: JSON.stringify(body) }),
-  deleteSource: (name: string, purge: boolean, cascade = false) =>
-    request<{ ok: boolean; purged_events: number; deleted: string[] }>(
-      `/api/sources/${encodeURIComponent(name)}?purge_events=${purge}&cascade=${cascade}`, { method: "DELETE" }),
-  // what else goes if an object is deleted, in delete order
-  dependents: (kind: "source" | "trigger", name: string) =>
-    request<{ dependents: { kind: ProjectObjectKind; name: string }[] }>(
-      `/api/catalog/dependents?kind=${kind}&name=${encodeURIComponent(name)}`),
-  pauseSource: (name: string) => request(`/api/sources/${name}/pause`, { method: "POST" }),
-  resumeSource: (name: string) => request(`/api/sources/${name}/resume`, { method: "POST" }),
-  testSource: (body: object) =>
-    request<TestResult>("/api/sources/test", { method: "POST", body: JSON.stringify(body) }),
-  discoverSource: (connector: string, config: Record<string, unknown>) =>
-    request<DiscoverProposal>("/api/sources/discover",
-      { method: "POST", body: JSON.stringify({ connector, config }) }),
-  discoverEnvironment: (provider = "docker") =>
-    request<EnvScan>(`/api/discover/environment?provider=${provider}`),
-  sourceEvents: (name: string, limit = 50) =>
-    request<SourceEvent[]>(`/api/sources/${name}/events?limit=${limit}`),
-  sourceFields: (name: string) =>
-    request<SourceFieldsProfile>(`/api/sources/${name}/fields`),
   labelPreview: (source: string, label: Record<string, unknown>) =>
     request<{ sampled: number; distinct_before: number; distinct_after: number;
               results: { from: string; to: string; events: number }[] }>(
@@ -342,54 +299,9 @@ export const api = {
     request("/api/triggers", { method: "POST", body: JSON.stringify(body) }),
   updateTrigger: (name: string, body: TriggerBody) =>
     request(`/api/triggers/${name}`, { method: "PUT", body: JSON.stringify(body) }),
-  deleteTrigger: (name: string) => request(`/api/triggers/${name}`, { method: "DELETE" }),
-  pauseTrigger: (name: string) => request(`/api/triggers/${name}/pause`, { method: "POST" }),
-  resumeTrigger: (name: string) => request(`/api/triggers/${name}/resume`, { method: "POST" }),
-  // ── Tares agents: a first look when a trigger fires (managed under /builtin) ──
-  // with a project: each agent's trigger, handoffs and on/off are that project's wiring
-  builtinAgents: (project?: string) =>
-    request<{ agents: BuiltinAgent[]; key_configured: boolean; key_source: string;
-              models: string[]; default_model: string; slack_workspace: boolean;
-              providers: ModelProvider[]; default_provider: string | null;
-              default_models: Record<string, string>;   // per provider id, what "" resolves to
-              small_models?: Record<string, string>;    // per provider id, the Triage preset's model ("" = none)
-              default_max_rounds: number; default_max_rounds_with_mcp: number;
-              max_rounds_limit: number;
-              presets: AgentPreset[] }>(`/api/agents/builtin${project ? `?project=${encodeURIComponent(project)}` : ""}`),
-  createBuiltinAgent: (body: AgentBody) =>
-    request<{ ok: boolean; enabled: boolean }>("/api/agents/builtin",
-      { method: "POST", body: JSON.stringify(body) }),
-  updateBuiltinAgent: (name: string, body: AgentBody) =>
-    request(`/api/agents/builtin/${name}`, { method: "PUT", body: JSON.stringify(body) }),
-  deleteBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}`, { method: "DELETE" }),
-  // on or off in one project (its wiring); enable without one: the project that made it
-  enableBuiltinAgent: (name: string, project?: string) =>
-    request(`/api/agents/builtin/${name}/enable${project ? `?project=${encodeURIComponent(project)}` : ""}`, { method: "POST" }),
-  disableBuiltinAgent: (name: string, project?: string) =>
-    request(`/api/agents/builtin/${name}/disable${project ? `?project=${encodeURIComponent(project)}` : ""}`, { method: "POST" }),
-  // with a project: the runs that belong to it (its wiring started them)
-  builtinAgentRuns: (name: string, limit = 20, offset = 0, status = "", project?: string) =>
-    request<AgentRun[]>(`/api/agents/builtin/${encodeURIComponent(name)}/runs?limit=${limit}&offset=${offset}`
-      + (status ? `&status=${encodeURIComponent(status)}` : "")
-      + (project ? `&project=${encodeURIComponent(project)}` : "")),
-  rerunAgentRun: (name: string, runId: string) =>
-    request<{ ok: boolean; run_id: string }>(
-      `/api/agents/builtin/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/rerun`,
-      { method: "POST" }),
   // The cell's Anthropic spend meter: totals + per-day, split agent runs vs Ask.
   modelUsage: (days = 30) => request<ModelUsage>(`/api/usage/model?days=${days}`),
 
-  // The Anthropic key Tares agents run on. Never returned — only whether one resolves and where.
-  gatewayStatus: () =>
-    request<{ configured: boolean; url: string; source: string; stored: boolean; token_stored: boolean;
-              default_url: string }>("/api/settings/gateway"),
-  setGateway: (url: string, token: string) =>
-    request<{ ok: boolean; configured: boolean; url: string; source: string; stored: boolean;
-              token_stored: boolean }>("/api/settings/gateway",
-      { method: "PUT", body: JSON.stringify({ url, token }) }),
-  clearGateway: () =>
-    request<{ ok: boolean; configured: boolean; source: string }>("/api/settings/gateway",
-      { method: "DELETE" }),
   // The model providers a cell holds (TR-301). Credentials are write-only; blank key keeps the
   // stored one. `new` as the id creates an entry.
   providers: () => request<ModelProviders>("/api/settings/providers"),
@@ -405,27 +317,9 @@ export const api = {
   setDefaultProvider: (id: string) =>
     request<ModelProviders & { ok: boolean }>("/api/settings/providers/default",
       { method: "PUT", body: JSON.stringify({ id }) }),
-  anthropicKeyStatus: () =>
-    request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>(
-      "/api/settings/anthropic-key"),
   setAnthropicKey: (key: string) =>
     request<{ ok: boolean; source: string; note?: string }>("/api/settings/anthropic-key",
       { method: "PUT", body: JSON.stringify({ key }) }),
-  clearAnthropicKey: () =>
-    request<{ ok: boolean; configured: boolean }>("/api/settings/anthropic-key",
-      { method: "DELETE" }),
-
-  // The cell's edition (TR-724): read by anyone through whoami, changed by an admin.
-  edition: () => request<EditionSettings>("/api/settings/edition"),
-  setEdition: (edition: Edition) =>
-    request<EditionSettings & { ok: boolean }>("/api/settings/edition",
-      { method: "PUT", body: JSON.stringify({ edition }) }),
-  // Whether agents over MCP see the building-block tools (TR-757); null clears the choice.
-  mcpSettings: () => request<{ object_tools: boolean }>("/api/settings/mcp"),
-  setMcpObjectTools: (object_tools: boolean | null) =>
-    request<{ ok: boolean; object_tools: boolean }>("/api/settings/mcp",
-      { method: "PUT", body: JSON.stringify({ object_tools }) }),
-
   slackTokenStatus: () =>
     request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean;
               team?: { id: string; name: string } | null }>(   // the Slack team, set by Tares Cloud
@@ -459,31 +353,6 @@ export const api = {
   // when it can't list them — `reason` says why the list is empty — so a workspace we can't read
   // stays a fallback to typing the channel in, not an error the console has to render.
   slackChannels: () => request<SlackChannels>("/api/slack/channels"),
-  resources: () => request<Resources>("/api/resources"),
-
-  agents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
-  unsubscribe: (subscription_id: string) =>
-    request<{ ok: boolean }>("/unsubscribe",
-      { method: "POST", body: JSON.stringify({ subscription_id }) }),
-  subscribe: (trigger: string, url: string) =>
-    request<{ subscription_id: string }>("/subscribe",
-      { method: "POST", body: JSON.stringify({ trigger, url }) }),
-
-  // ── MCP connections: external tool servers agents can opt into ──
-  mcpServers: () => request<{ servers: McpServer[] }>("/api/mcp-servers"),
-  createMcpServer: (body: { name: string; url: string; auth_header?: string; auth_value?: string;
-                            headers?: Record<string, string>; project?: string }) =>
-    request<{ ok: boolean }>("/api/mcp-servers", { method: "POST", body: JSON.stringify(body) }),
-  updateMcpServer: (name: string, body: { name: string; url: string; auth_header?: string; auth_value?: string;
-                                          headers?: Record<string, string>; project?: string }) =>
-    request<{ ok: boolean }>(`/api/mcp-servers/${encodeURIComponent(name)}`,
-      { method: "PUT", body: JSON.stringify(body) }),
-  deleteMcpServer: (name: string) =>
-    request<{ ok: boolean }>(`/api/mcp-servers/${encodeURIComponent(name)}`, { method: "DELETE" }),
-  testMcpServer: (name: string) =>
-    request<{ ok: boolean; error?: string; tools: { name: string; description: string }[] }>(
-      `/api/mcp-servers/${encodeURIComponent(name)}/test`, { method: "POST" }),
-
   // ── GitHub credentials: a token stored once, referenced by sources and MCP servers ──
   githubCredentials: () =>
     request<{ credentials: GithubCredential[] }>("/api/integrations/github"),
@@ -502,68 +371,15 @@ export const api = {
   createGithubApp: (body: { name: string; org?: string; app_name?: string; public_url?: string }) =>
     request<{ action: string; manifest: string; hook_url: string; warning: string | null }>(
       "/api/integrations/github/apps", { method: "POST", body: JSON.stringify(body) }),
-  // the credential's GitHub MCP server (made once, reused): what an agent reads/writes repos with
-  githubCredentialMcp: (name: string, write: boolean) =>
-    request<{ ok: boolean; server: string }>(`/api/integrations/github/${encodeURIComponent(name)}/mcp`,
-      { method: "POST", body: JSON.stringify({ write }) }),
   githubAppInstallLink: (name: string) =>
     request<{ url: string }>(`/api/integrations/github/${encodeURIComponent(name)}/install`),
-  githubCredentialTree: (name: string, repo: string, ref = "", path = "") =>
-    request<{ ref: string; path: string; dirs: string[]; files: string[]; markdown: string[]; exists: boolean }>(
-      `/api/integrations/github/${encodeURIComponent(name)}/tree?repo=${encodeURIComponent(repo)}&ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}`),
-  githubCredentialRepos: (name: string, query = "") =>
-    request<{ repos: { full_name: string; default_branch: string; private: boolean; pushed_at: string | null }[] }>(
-      `/api/integrations/github/${encodeURIComponent(name)}/repos?query=${encodeURIComponent(query)}`),
-
-  // ── Projects: templates instantiated with params; each instance owns ordinary objects ──
-  templates: () => request<{ templates: Template[] }>("/api/projects/templates"),
-  // by key, hidden templates included (the gallery list leaves those out)
-  template: (key: string) => request<Template>(`/api/projects/templates/${encodeURIComponent(key)}`),
-  // every caller but the Projects page wants projects it can open: a private one the caller is
-  // not on comes back as a bare `hidden` entry (no objects, no status), which they leave out
-  projects: () => request<{ projects: Project[] }>("/api/projects").then((r) => ({
-    projects: r.projects.filter((p) => !p.hidden),
-  })),
   projectsWithHidden: () => request<{ projects: Project[] }>("/api/projects"),
-  project: (id: string) => request<Project>(`/api/projects/${encodeURIComponent(id)}`),
-  // Accepted memory: only what a user accepted is ever written (a proposal is just text until then).
-  remember: (body: { key: string; content: string; memory_type?: string }) =>
-    request<{ ok: boolean; source: string }>("/remember", { method: "POST", body: JSON.stringify(body) }),
   projectSummary: (id: string) =>
     request<ProjectSummary>(`/api/projects/${encodeURIComponent(id)}/summary`),
   // close a factory project whose tickets are all finished; `words` is what the person said
   finishProject: (id: string, words: string) =>
     request<{ project: string; name: string; finished: unknown }>(
       `/api/projects/${encodeURIComponent(id)}/finish`, { method: "POST", body: JSON.stringify({ words }) }),
-  // template "custom" takes `objects` ({kind, name} each) instead of params
-  // `goal`: one line, <= 200 chars; a template's own goal applies when it is left out
-  createProject: (body: { template: string; name?: string; params?: Record<string, unknown>;
-                          objects?: { kind: ProjectObjectKind; name: string }[]; goal?: string }) =>
-    request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
-  // a body with only `goal` works on every project, the default one included; "" or null clears it
-  updateProject: (id: string, body: { params?: Record<string, unknown>; name?: string;
-                                      objects?: { kind: ProjectObjectKind; name: string }[];
-                                      goal?: string | null }) =>
-    request<Project & { report?: ProjectUpdateReport }>(`/api/projects/${encodeURIComponent(id)}`,
-      { method: "PUT", body: JSON.stringify(body) }),
-  // The goal-first page: the setup in plain sentences, what the agents concluded, and whether the
-  // project is working. All computed by the daemon, no model call.
-  projectOutline: (id: string) =>
-    request<ProjectOutline>(`/api/projects/${encodeURIComponent(id)}/outline`),
-  // newest first; page with `before` = the previous page's next_before
-  // `show`: "findings" leaves out "nothing to report"; "agent:<name>" keeps one agent's conclusions
-  projectResults: (id: string, q: { limit?: number; before?: string | null; show?: string } = {}) =>
-    request<ProjectResults>(
-      `/api/projects/${encodeURIComponent(id)}/results?` + new URLSearchParams(
-        Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString()),
-  projectResult: (id: string, runId: string) =>
-    request<ProjectResultDetail>(`/api/projects/${encodeURIComponent(id)}/results/${encodeURIComponent(runId)}`),
-  // the response body is not relied on: the page refetches the result after it
-  setResultHandled: (id: string, runId: string, handled: boolean) =>
-    request<unknown>(`/api/projects/${encodeURIComponent(id)}/results/${encodeURIComponent(runId)}/handled`,
-      { method: "POST", body: JSON.stringify({ handled }) }),
-  projectHealth: (id: string) =>
-    request<ProjectHealth>(`/api/projects/${encodeURIComponent(id)}/health`),
   // Triggers, agents and MCP servers always go with the project. `deleteSources`: which of its
   // sources to delete too; one another project still uses is kept (and reported) either way.
   deleteProject: (id: string, purgeEvents = false, deleteSources: string[] = []) =>
@@ -571,218 +387,17 @@ export const api = {
       `/api/projects/${encodeURIComponent(id)}?purge_events=${purgeEvents}`
       + `&delete_sources=${encodeURIComponent(deleteSources.length ? deleteSources.join(",") : "none")}`,
       { method: "DELETE" }),
-  // Sources are shared: a project lists the ones it uses. Removing one is refused while a trigger
-  // of the project reads it.
-  addProjectSource: (id: string, name: string) =>
-    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/sources`,
-      { method: "POST", body: JSON.stringify({ name }) }),
-  removeProjectSource: (id: string, name: string) =>
-    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/sources/${encodeURIComponent(name)}`,
-      { method: "DELETE" }),
-  // Project keys and the external agents that joined a project (TR-335, TR-336). A project key
-  // reads that project only and records findings in it; its secret is in the create response only.
-  projectKeys: (id: string) =>
-    request<{ keys: ApiKey[]; enforced: boolean }>(`/api/projects/${encodeURIComponent(id)}/keys`),
-  createProjectKey: (id: string, name: string) =>
-    request<{ id: string; name: string; scopes: string[]; secret: string; project: string }>(
-      `/api/projects/${encodeURIComponent(id)}/keys`, { method: "POST", body: JSON.stringify({ name }) }),
-  externalAgents: (id: string) =>
-    request<{ agents: ExternalAgent[] }>(`/api/projects/${encodeURIComponent(id)}/external-agents`),
-  unsubscribeProject: (id: string, sid: string) =>
-    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/subscribe/${encodeURIComponent(sid)}`,
-      { method: "DELETE" }),
-  // A project's skills (TR-332). Upload takes a SKILL.md as it is: front matter, then the body.
-  skills: (id: string) => request<SkillSummary[]>(`/api/projects/${encodeURIComponent(id)}/skills`),
-  skill: (id: string, name: string) =>
-    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`),
-  // skills are shared (P-TR-216): every skill on Tares, and a project using one of them
-  cellSkills: () =>
-    request<{ name: string; description: string; used_by: { id: string; name: string }[] }[]>("/api/skills"),
-  useSkill: (id: string, name: string) =>
-    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}/use`,
-      { method: "POST" }),
-  createSkill: (id: string, body: { name: string; description: string; body: string }) =>
-    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills`,
-      { method: "POST", body: JSON.stringify(body) }),
-  updateSkill: (id: string, name: string, body: { description?: string; body?: string }) =>
-    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`,
-      { method: "PUT", body: JSON.stringify(body) }),
-  deleteSkill: (id: string, name: string) =>
-    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`,
-      { method: "DELETE" }),
-  uploadSkill: (id: string, text: string) =>
-    request<Skill & { created: boolean }>(`/api/projects/${encodeURIComponent(id)}/skills/upload`,
-      { method: "POST", body: text, headers: { "content-type": "text/markdown" } }),
-  // A project's docs and tickets (TR-403), its Claude Code sessions (TR-405), Linear (TR-408)
-  docs: (id: string) => request<DocSummary[]>(`/api/projects/${encodeURIComponent(id)}/docs`),
-  doc: (id: string, docId: string) =>
-    request<Doc>(`/api/projects/${encodeURIComponent(id)}/docs/${encodeURIComponent(docId)}`),
-  createDoc: (id: string, body: { kind: DocKind; title: string; body: string }) =>
-    request<Doc>(`/api/projects/${encodeURIComponent(id)}/docs`,
-      { method: "POST", body: JSON.stringify({ ...body, by: "console" }) }),
-  updateDoc: (id: string, docId: string, body: { kind?: DocKind; title?: string; body?: string }) =>
-    request<Doc>(`/api/projects/${encodeURIComponent(id)}/docs/${encodeURIComponent(docId)}`,
-      { method: "PUT", body: JSON.stringify({ ...body, by: "console" }) }),
-  deleteDoc: (id: string, docId: string) =>
-    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/docs/${encodeURIComponent(docId)}`,
-      { method: "DELETE" }),
-  tickets: (id: string) =>
-    request<{ tickets: Ticket[]; linear: LinearLink | null; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/tickets`),
-  ticket: (id: string, ref: string) =>
-    request<Ticket>(`/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}`),
-  createTicket: (id: string, body: { title: string; status?: TicketStatus; working_doc?: string }) =>
-    request<Ticket>(`/api/projects/${encodeURIComponent(id)}/tickets`,
-      { method: "POST", body: JSON.stringify(body) }),
-  updateTicket: (id: string, ref: string, body: { title?: string; status?: TicketStatus; position?: number; working_doc?: string | null }) =>
-    request<Ticket>(`/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}`,
-      { method: "PUT", body: JSON.stringify(body) }),
-  deleteTicket: (id: string, ref: string) =>
-    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}`,
-      { method: "DELETE" }),
-  milestones: (id: string) =>
-    request<{ milestones: Milestone[] }>(`/api/projects/${encodeURIComponent(id)}/milestones`),
-  desk: (project = "") =>
-    request<{ desk: DeskItem[] }>(`/api/desk?state=open${project ? `&project=${encodeURIComponent(project)}` : ""}`),
-  allowDesk: (ref: string, words: string, scope: "project" | "all") =>
-    request<DeskAllowed>(`/api/desk/${encodeURIComponent(ref)}/allow`,
-      { method: "POST", body: JSON.stringify({ words, scope }) }),
-  deskReply: (ref: string, body: DeskReplyBody) =>
-    request<DeskReplied>(`/api/desk/${encodeURIComponent(ref)}/reply`,
-      { method: "POST", body: JSON.stringify(body) }),
-  projectDecisions: (id: string) =>
-    request<{ decisions: Decision[] }>(`/api/projects/${encodeURIComponent(id)}/decisions`),
-  reviewQueue: () => request<{ queue: QueueItem[]; now: string }>("/api/review-queue"),
-  ruleProposals: () => request<{ proposals: RuleProposal[] }>("/api/rule-proposals"),
-  decideRule: (pid: string, decision: "accept" | "reject", text?: string) =>
-    request<RuleProposal>(`/api/rule-proposals/${encodeURIComponent(pid)}/${decision}`,
-      { method: "POST", body: JSON.stringify(text ? { text } : {}) }),
-  assumptions: (id: string) =>
-    request<{ assumptions: Assumption[] }>(`/api/projects/${encodeURIComponent(id)}/assumptions`),
-  ticketMessages: (id: string, ref: string) =>
-    request<{ messages: CrewMessage[] }>(
-      `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
   areas: () => request<Area[]>("/api/areas"),
-  grants: (project: string) => request<GrantsView>(`/api/grants?project=${encodeURIComponent(project)}`),
-  addGrant: (body: { kind: GrantKind; project: string; words: string; areas: string[] }) =>
-    request<{ added: boolean; grant: Grant }>("/api/grants", { method: "POST", body: JSON.stringify(body) }),
-  declineGrant: (id: string, reason?: string) =>
-    request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/decline`,
-      { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
-  revokeGrant: (id: string) =>
-    request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
-  personalDocs: () => request<PersonalDocs>("/api/docs/personal"),
-  addPersonalLine: (name: "agents" | "memory", text: string) =>
-    request<PersonalDoc & { added: boolean }>(`/api/docs/personal/${name}/lines`,
-      { method: "POST", body: JSON.stringify({ text }) }),
   // null = unchanged; `clear` unsets a personal value so the team's applies again
   setCrewSettings: (body: Partial<Record<CrewSettingField, string | boolean | number | null>> & { clear?: CrewSettingField[] }) =>
     request<CrewSettingsView>("/api/crew/settings", { method: "PUT", body: JSON.stringify(body) }),
-  crew: () => request<{ crews?: CrewGroup[]; stations: CrewStation[]; settings: CrewSettings; grants: string; pace?: CrewPace; now: string }>("/api/crew"),
-  crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total" | "progress"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
-  standup: (since: string, until: string) =>
-    request<Standup>(`/api/crew/standup?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`),
-  standupSummary: (since: string, until: string) =>
-    request<Standup>("/api/crew/standup/summary", { method: "POST", body: JSON.stringify({ since, until }) }),
-  slackPost: (channel: string, text: string) =>
-    request<{ ok: boolean; ts?: string }>("/api/slack/post", { method: "POST", body: JSON.stringify({ channel, text }) }),
-  // `crew` is a crew id: two crews can have a station of the same name
-  station: (name: string, crew?: string | null) =>
-    request<StationDetail>(`/api/crew/${encodeURIComponent(name)}?recent=40${crew ? `&crew=${encodeURIComponent(crew)}` : ""}`),
-  endStation: (name: string, reason?: string, crew?: string | null) =>
-    request<CrewStation>(`/api/crew/${encodeURIComponent(name)}/end${crew ? `?crew=${encodeURIComponent(crew)}` : ""}`,
-      { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   askStationContext: (name: string, crew?: string | null) =>
     request<{ session: string | null; asked_at: string }>(`/api/crew/${encodeURIComponent(name)}/context${crew ? `?crew=${encodeURIComponent(crew)}` : ""}`, { method: "POST" }),
   claudeCodeUsage: (days = 7) => request<ClaudeCodeUsage>(`/api/claude-code/usage?days=${days}`),
-  projectRepos: (id: string) =>
-    request<{ repos: ProjectRepo[] }>(`/api/projects/${encodeURIComponent(id)}/repos`),
-  projectCrew: (id: string) =>
-    request<{ stations: CrewStation[]; handover: Handover | null; now: string }>(
-      `/api/projects/${encodeURIComponent(id)}/crew`),
-  answerQuestion: (id: string, qid: string, answer: string) =>
-    request<SpecQuestion>(`/api/projects/${encodeURIComponent(id)}/questions/${encodeURIComponent(qid)}/answer`,
-      { method: "POST", body: JSON.stringify({ answer }) }),
-  projectSessions: (id: string) =>
-    request<{ sessions: ProjectSession[]; now: string }>(`/api/projects/${encodeURIComponent(id)}/sessions`),
-  projectSession: (id: string, sid: string, offset = 0) =>
-    request<{ session: string; lines: { event_type: string; text: string; event_time: string; labels: Record<string, string> }[] }>(
-      `/api/projects/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sid)}?limit=500&offset=${offset}`),
-  linear: () => request<LinearStatus>("/api/linear"),
-  linearConnectKey: (api_key: string) =>
-    request<LinearStatus>("/api/linear", { method: "POST", body: JSON.stringify({ api_key }) }),
-  linearDisconnect: () => request<LinearStatus>("/api/linear", { method: "DELETE" }),
-  linearProjects: (q = "") =>
-    request<{ projects: { id: string; name: string; url: string }[] }>(`/api/linear/projects?q=${encodeURIComponent(q)}`),
-  linkLinear: (id: string, project: string) =>
-    request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/tickets/link`,
-      { method: "PUT", body: JSON.stringify({ integration: "linear", link_fields: { project } }) }),
-  syncLinear: (id: string) =>
-    request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/linear/sync`,
-      { method: "POST" }),
-  unlinkLinear: (id: string) =>
-    request<{ tickets: Ticket[]; linear: null }>(`/api/projects/${encodeURIComponent(id)}/linear`,
-      { method: "DELETE" }),
-  linkGitHub: (id: string, repo: string, issue_label: string) =>
-    request<{ tickets: Ticket[]; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/tickets/link`,
-      { method: "PUT", body: JSON.stringify({ integration: "github", link_fields: { repo, issue_label } }) }),
-  syncGitHub: (id: string) =>
-    request<{ tickets: Ticket[]; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/github/sync`,
-      { method: "POST" }),
-  unlinkGitHub: (id: string) =>
-    request<{ tickets: Ticket[]; github: null }>(`/api/projects/${encodeURIComponent(id)}/github`,
-      { method: "DELETE" }),
-  // ── Goal-first setup: plan from a goal, adjust in plain words, apply, then connect and try ──
-  planSetup: (body: { goal: string; who?: "tares" | "own"; existing_sources?: boolean }) =>
-    request<{ plan: Plan }>("/api/setup/plan", { method: "POST", body: JSON.stringify(body) }),
-  // the guided setup's opening line from the person's GitHub repositories (TR-262)
-  setupGithubSuggestion: () =>
-    request<{ available: boolean; suggestion: string | null; repos: string[] }>("/api/setup/github-suggestion"),
-  adjustSetup: (plan: Plan, instruction: string) =>
-    request<{ plan: Plan }>("/api/setup/adjust", { method: "POST", body: JSON.stringify({ plan, instruction }) }),
-  checkSetup: (plan: Plan, project?: string) =>
-    request<{ plan: Plan; problems: SetupProblem[] }>("/api/setup/check",
-      { method: "POST", body: JSON.stringify({ plan, project }) }),
-  applySetup: (plan: Plan, project?: string) =>
-    request<{ project: Project; plan: Plan; connect: SetupConnect }>("/api/setup/apply",
-      { method: "POST", body: JSON.stringify({ plan, project }) }),
-  // a draft project: made on "Plan it", planned in the background, kept while it is edited
-  createDraft: (body: { goal: string; who?: "tares" | "own"; name?: string; description?: string }) =>
-    request<{ project: Project }>("/api/setup/drafts", { method: "POST", body: JSON.stringify(body) }),
-  replanDraft: (id: string, body: { goal?: string; who?: "tares" | "own"; name?: string; description?: string;
-                                    instruction?: string; plan?: Plan }) =>
-    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/setup/plan`,
-      { method: "POST", body: JSON.stringify(body) }),
-  saveDraftPlan: (id: string, plan: Plan) =>
-    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/setup`,
-      { method: "PUT", body: JSON.stringify({ plan }) }),
-  projectSetup: (id: string) =>
-    request<ProjectSetup>(`/api/projects/${encodeURIComponent(id)}/setup`),
-  setSetupStep: (id: string, step: SetupStep) =>
-    request<unknown>(`/api/projects/${encodeURIComponent(id)}/setup`,
-      { method: "PUT", body: JSON.stringify({ step }) }),
-  // ingests the plan's example event into a push source, marked practice=true
-  sendSetupTestEvent: (id: string, source: string) =>
-    request<unknown>(`/api/projects/${encodeURIComponent(id)}/setup/test-event`,
-      { method: "POST", body: JSON.stringify({ source }) }),
-  // Tares agents answer run_id; an own agent answers dispatch_id
-  runSetupPractice: (id: string) =>
-    request<{ run_id?: string; dispatch_id?: string }>(`/api/projects/${encodeURIComponent(id)}/setup/practice`,
-      { method: "POST" }),
   pauseProject: (id: string, sources = false) =>
     request<Project>(`/api/projects/${encodeURIComponent(id)}/pause`, { method: "POST", body: JSON.stringify({ sources }) }),
   resumeProject: (id: string) =>
     request<Project>(`/api/projects/${encodeURIComponent(id)}/resume`, { method: "POST" }),
-  detectRecipe: (key: string) =>
-    request<{ params: Record<string, unknown>; found: Record<string, string>; missing: Record<string, string>; notes: string[] }>(
-      `/api/projects/templates/${encodeURIComponent(key)}/detect`, { method: "POST" }),
-  projectAction: (id: string, name: string, args: Record<string, unknown> = {}) =>
-    request<{ ok: boolean; action: string; message?: string }>(
-      `/api/projects/${encodeURIComponent(id)}/actions/${encodeURIComponent(name)}`,
-      { method: "POST", body: JSON.stringify(args) }),
-  repairProject: (id: string, key: string) =>
-    request<Project>(`/api/projects/${encodeURIComponent(id)}/repair`,
-      { method: "POST", body: JSON.stringify({ key }) }),
-
   // ── Ask sessions: server-side chat history (state is the console's own JSON blob) ──
   askSessions: () =>
     request<{ sessions: { id: string; title: string; created_at: string; updated_at: string }[] }>(
@@ -795,72 +410,13 @@ export const api = {
   deleteAskSession: (id: string) =>
     request<{ ok: boolean }>(`/api/ask/sessions/${id}`, { method: "DELETE" }),
 
-  queries: (limit = 100) => request<QueryLogEntry[]>(`/api/activity/queries?limit=${limit}`),
-  dispatches: (limit = 100) =>
-    request<DispatchLogEntry[]>(`/api/activity/dispatches?limit=${limit}`),
-  dispatch: (id: string) => request<DispatchDetail>(`/api/activity/dispatches/${id}`),
-  subscriptions: () => request<Subscription[]>("/api/subscriptions"),
-  mcpTools: () => request<{ name: string; description: string }[]>("/api/mcp/tools"),
-
   // What this instance is using on disk. `max_bytes`/`pct_used` are null unless the operator set
   // TARES_MAX_DB_SIZE — see the Usage type before rendering any of it.
   usage: () => request<Usage>("/api/usage"),
 
-  describe: (handle: string) => request<CatalogDescribe>(`/catalog/${handle}`),
-
-  entities: (label?: string) =>
-    request<{ labels?: LabelFacet[]; label?: string; sources?: string[]; values?: Entity[] }>(
-      label ? `/api/entities?label=${encodeURIComponent(label)}` : "/api/entities"),
-
-  // Label-native read. `selector` is a {label: value} conjunction (strict AND). Without `project`
-  // or `sources` it reads every source; either narrows which sources are read. Returns the
-  // rendered payload, contributing sources, and structured rows (each with its per-event labels,
-  // for the console timeline).
-  read: (selector: Record<string, string>, window: string, scope?: { project?: string; sources?: string[] }) =>
-    request<{ payload: string; count: number; sources: string[]; rows: TimelineEventRow[] }>("/read", {
-      method: "POST",
-      body: JSON.stringify({ selector, window, client: "ui", ...(scope ?? {}) }),
-    }),
-
-  // Defaults match the agent/MCP call: all sources, secrets omitted. The UI passes options.
-  exportYaml: async (opts?: { sources?: string[]; includeSecrets?: boolean }) => {
-    const q = new URLSearchParams();
-    if (opts?.sources?.length) q.set("sources", opts.sources.join(","));
-    if (opts?.includeSecrets) q.set("include_secrets", "true");
-    const qs = q.toString();
-    const res = await fetch("/api/catalog/export" + (qs ? "?" + qs : ""), { headers: authHeader() });
-    if (res.status === 401) {
-      unauthorized();
-      throw new Error("authentication required");
-    }
-    // a refused export (a read-only key gets 403) is an error, not a file to show
-    if (!res.ok) {
-      let detail = res.statusText;
-      try { const body = await res.json(); if (typeof body?.detail === "string") detail = body.detail; } catch { /* not JSON */ }
-      throw new ApiError(detail, res.status);
-    }
-    return res.text();
-  },
-  importYaml: (yaml: string, mode: "merge" | "replace") =>
-    request<{ sources: number; triggers: number; agents: number;
-              mcp_servers: number;
-              names: { sources: string[]; triggers: string[];
-                       agents: string[]; mcp_servers: string[] } }>("/api/catalog/import", {
-      method: "POST",
-      body: JSON.stringify({ yaml, mode }),
-    }),
 };
 
 // What a trigger is saved from. `project` omitted = the default project.
 export type TriggerBody = Pick<Trigger, "name" | "sources" | "filters" | "condition" | "emit" | "cooldown">
   & { project?: string; key_field?: string | null; description?: string };
-
-export type AgentBody = {
-  name: string; trigger: string; prompt: string; project?: string;
-  slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string;
-  slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[];
-  max_rounds?: number | null; budget_usd?: number | null; budget_period?: "lifetime" | "month";
-  webhook_key_label?: string;
-  handoffs?: Handoff[];
-};
 

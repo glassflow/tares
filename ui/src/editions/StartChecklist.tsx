@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Button, ProgressBar, Skeleton } from "../components/edition";
+import { Button, ProgressBar } from "../components/edition";
 import { ROW_CLASS } from "../components/edition/ListRow";
 import { Check, CopyIcon } from "../components/icons";
 import { cn } from "@/lib/utils";
@@ -211,27 +211,3 @@ export function StartChecklistHidden({ block, title, show = showStart, onShown }
   );
 }
 
-/** The list while the home is loading: the same panel, every row saying Checking. */
-export function StartChecklistLoading({ title, rows = 3 }: { title: string; rows?: number }) {
-  return (
-    <section aria-label={title} aria-busy="true" className={PANEL} data-testid="start-checklist-loading">
-      <div className={cn(HEAD, "border-b border-border")}>
-        <div className="min-w-0">
-          <h2 className="m-0 text-base">{title}</h2>
-          <div className={MUTED}>Checking</div>
-        </div>
-      </div>
-      <ul className="m-0 list-none p-0">
-        {Array.from({ length: rows }, (_, i) => (
-          <li key={i} className={cn(ROW_CLASS, "items-start")}>
-            <span aria-hidden className="mt-0.5 size-5 flex-none border-[1.5px] border-foreground" />
-            <div className="min-w-0 flex-1">
-              <Skeleton width="38%" height={10} className="my-1.5" />
-              <div className="text-muted-foreground">Checking</div>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}

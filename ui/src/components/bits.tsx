@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import type { TriggerCondition } from "../types";
-import { copyText } from "../editions/copyText";
 import { formatRelative, formatStampUTC } from "../lib/time";
 
 /** "3h ago", with the UTC stamp in its tooltip (lib/time.ts). A time that does not parse shows as
@@ -64,32 +62,6 @@ export function ErrorState({ error, what, onRetry }: {
   );
 }
 
-/** A button that copies `text` and says "Copied" for a moment. `what` names the text for a
- *  screen reader ("Copy the address", then "Copied the address"). Keep the text itself on screen
- *  next to it: when the clipboard is refused, the person selects it by hand. Both words sit in
- *  the button, one hidden, so it is as wide as the longer one and the box beside it never moves. */
-export function CopyButton({ text, label = "Copy", what, primary, title, className }: {
-  text: string; label?: string; what?: string; primary?: boolean; title?: string; className?: string;
-}) {
-  const [done, setDone] = useState(false);
-  const timer = useRef<number>();
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  const copy = async () => {
-    try { await copyText(text); } catch { return; /* the text stays selectable next to the button */ }
-    setDone(true);
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setDone(false), 1800);
-  };
-  const cls = ["copy-btn", primary ? "primary" : "", className ?? ""].filter(Boolean).join(" ");
-  return (
-    <button type="button" className={cls} title={title} onClick={copy}
-            aria-label={what ? `${done ? "Copied" : "Copy"} ${what}` : undefined}>
-      <span className={done ? "copy-off" : undefined}>{label}</span>
-      <span className={done ? undefined : "copy-off"}>Copied</span>
-    </button>
-  );
-}
-
 /** Bytes as a human size, binary units ("2.4 GiB"). Null/undefined is *unknown*, not zero — the
  *  metering API returns null for numbers it genuinely cannot know (no configured limit, a stat()
  *  that failed), and rendering those as "0 B" would be a lie. */
@@ -117,16 +89,6 @@ export function fmtTokens(n: number | null | undefined): string {
   if (n < 1000) return String(Math.round(n));
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
   return `${(n / 1_000_000).toFixed(1)}M`;
-}
-
-/** How a label rewrites its values, in as few characters as fit a table cell. "" when it passes
- *  values straight through. One implementation so the editor and the read-only tables can never
- *  describe the same rule differently. */
-export function ruleSummary(pattern?: string, renames = 0): string {
-  if (pattern && renames) return `regex +${renames}`;
-  if (pattern) return "regex";
-  if (renames) return `${renames} rename${renames === 1 ? "" : "s"}`;
-  return "";
 }
 
 /** Pick-one dropdown wearing the same menu as `Combo` — replaces native <select>, whose OPEN menu
@@ -235,53 +197,9 @@ export function Combo({ value, onChange, options, placeholder, style, className,
   );
 }
 
-
-/** A trigger's condition in one line: the schedule, or the aggregate it watches. */
-export function conditionText(c: TriggerCondition): string {
-  if (c.every) {
-    const by = (c.summary_by ?? []).length ? `, counted by ${c.summary_by!.join(", ")}` : "";
-    return `every ${c.every}${by}`;
-  }
-  return `${c.aggregate}(${c.field || "*"}) ${c.predicate} over ${c.window}`;
-}
-
-/** What a person calls a source: the repo it watches, the table, the host it reads; null when its
- *  settings say nothing plainer than its name (then the name is the title). Mirrors the daemon's
- *  goal.source_title, so a pasted https://github.com/owner/name shows as owner/name. */
-export function sourceTitle(config: Record<string, unknown> | null | undefined): string | null {
-  const c = config || {};
-  for (const key of ["repo", "repository", "table", "container", "project"]) {
-    const v = c[key];
-    if (typeof v !== "string" || !v.trim()) continue;
-    let t = v.trim().replace(/\/+$/, "");
-    if ((key === "repo" || key === "repository") && t.includes("://")) {
-      const parts = t.split("://")[1].split("/").slice(1, 3);
-      if (parts.length === 2 && parts[0] && parts[1]) t = parts.join("/").replace(/\.git$/, "");
-    }
-    return t;
-  }
-  const url = c.url ?? c.base_url;
-  if (typeof url === "string" && url.includes("://")) {
-    try { return new URL(url).hostname || null; } catch { return null; }
-  }
-  return null;
-}
-
-/** A part's internal name, shown small under its plain title for whoever needs it (logs, the API). */
-export function InternalName({ name }: { name: string }) {
-  return <span className="internal-name">{name}</span>;
-}
-
 /** A plainer name for a key whose name a person did not choose: the workspace mints one per member
  *  for signing in to the console, named user:<id>. null for a key someone named. */
 export function keyTitle(name: string): string | null {
   return name.startsWith("user:") ? "Console sign-in for a workspace member" : null;
 }
 
-/** What a project is for, in a list: its goal; for the Default project, what it holds. The
- *  template it started from says nothing to a person ("From existing objects"). */
-export function projectGoal(p: { goal?: string | null; default?: boolean; status?: string }): string {
-  if (p.goal?.trim()) return p.goal.trim();
-  if (p.default) return "Holds whatever was made outside another project.";
-  return p.status === "draft" ? "Being set up" : "No goal set";
-}

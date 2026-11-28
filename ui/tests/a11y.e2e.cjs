@@ -1,10 +1,10 @@
 /*
- * Browser e2e for TR-1269: axe on the component gallery (light and dark) and on two edition pages,
- * Factory Home (the busy sample) and SRE Home (one incident). A serious or critical violation fails,
- * unless it is in KNOWN below with its reason; the rest are printed as notes.
- * Runs two real daemons on scratch homes, a factory cell and an AI SRE cell, serving the built console.
+ * Browser e2e for TR-1269: axe on the component gallery (light and dark) and on Factory Home (the
+ * busy sample). A serious or critical violation fails, unless it is in KNOWN below with its reason;
+ * the rest are printed as notes.
+ * Runs one real daemon on a scratch home, serving the built console.
  * Run:  npm run build && node tests/a11y.e2e.cjs     (from ui/, tares installed in ../.venv)
- * TARES_E2E_PORT sets the first daemon's port (default 8891); the SRE cell takes it +2, each MCP port +1.
+ * TARES_E2E_PORT sets the daemon's port (default 8891); its MCP port is the next one.
  * TARES_E2E_CHROME points Playwright at another Chrome binary when its own download is missing.
  */
 const http = require("http");

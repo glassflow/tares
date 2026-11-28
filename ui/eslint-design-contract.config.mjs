@@ -30,10 +30,8 @@ export default designContract({
     // Empty since TR-1266 put the factory's Calls, Decisions and GitHub cards on the paper. Keep it
     // empty: a new entry needs a reason and a ticket, like every register.
     shadow: [],
-    // A 2px neutral rail that nests child runs and rule firings under their parent on the legacy
-    // project activity page: a tree guide in --line, not an accent callout. The legacy pages move
-    // onto the edition kit or freeze (TR-1250, TR-1267); the rail goes with that.
-    stripe: ['src/components/ProjectActivity.tsx'],
+    // Empty since TR-1820 deleted the legacy project activity page and its tree rail.
+    stripe: [],
     // kit-only (TR-1258): scope, register and reasons are in eslint-rules/kit-register.mjs.
     kit: KIT_REGISTER,
     kitEdition: EDITION,

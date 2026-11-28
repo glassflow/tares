@@ -5,8 +5,8 @@ the counts of tickets by state, the few that move now, the next ticket, the mile
 compact rows (counts, checks, a link to their tickets), the decisions, the open calls, the
 documents, the command that opens a builder's session and where the tickets live. Nothing in
 the answer may name a station, a session or a folder of the crew's machine, and every shown word
-passes the edition words list. `stage_of` is checked against every branch of phaseOf() in
-ui/src/components/project/factory.tsx.
+passes the edition words list. `stage_of` is checked against every branch it has (phaseOf() in the
+console's deleted platform pages had the same branches).
 
 Run: .venv/bin/python tests/test_factory_project_page.py
 """

@@ -68,15 +68,8 @@ export const KIT_REGISTER = {
   'src/editions/factory/ProjectIcon.tsx': NO_PRIMITIVE,
   'src/editions/factory/ProjectShell.tsx': NO_PRIMITIVE,
   'src/editions/factory/SetupParts.tsx': `${NO_PRIMITIVE}; ${NATIVE}`,
-  'src/editions/sre/Incidents.tsx': NO_PRIMITIVE,
-  'src/editions/sre/Runbooks.tsx': `${NO_PRIMITIVE}; ${NATIVE}`,
-  'src/editions/sre/Settings.tsx': NO_PRIMITIVE,
-  'src/editions/sre/Timeline.tsx': NO_PRIMITIVE,
 
   'src/ee/people/SettingsPeople.tsx': LEGACY_PANEL,
-  'src/ee/project/access.tsx': LEGACY_PANEL,
-  'src/ee/project/grants.tsx': LEGACY_PANEL,
-  'src/ee/project/signoffs.tsx': LEGACY_PANEL,
   'src/ee/settings/AreasPanel.tsx': LEGACY_PANEL,
 }
 

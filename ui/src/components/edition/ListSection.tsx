@@ -15,7 +15,7 @@ export interface ListSectionProps extends Omit<React.HTMLAttributes<HTMLElement>
   /** Short text or a link at the right of the title. */
   aside?: React.ReactNode;
   /** On the paper (TR-1274): a 1px rule over the title and the rows flush with it, no box. Rows that
-   *  pad with `--row-x` (ListRow, ServiceRows, the SRE Home lists) lose their inset. Off by default, so
+   *  pad with `--row-x` (ListRow) lose their inset. Off by default, so
    *  pages not yet moved keep the box. */
   paper?: boolean;
 }
