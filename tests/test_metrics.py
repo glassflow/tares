@@ -1,6 +1,6 @@
 """The daemon's /metrics endpoint (tares/metrics.py, TR-308): public, Prometheus text format,
-and every hook counted where it fires: ingest, polls, source state, agent runs, model usage,
-trigger evaluation, storage gauges, event loop lag.
+and every hook counted where it fires: ingest, polls, source state, model usage, storage gauges,
+event loop lag (agent runs and trigger evaluations went in TR-1810).
 
 Run: .venv/bin/python tests/test_metrics.py   (in-process daemon, no external services)
 """
@@ -22,8 +22,6 @@ for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "TARE
     os.environ.pop(var, None)
 
 import httpx
-
-from tares import metrics
 
 PASS = FAIL = 0
 
@@ -66,7 +64,7 @@ async def main():
             r2 = await cx.get("/api/sources")
             ck("the API itself still needs the token", r2.status_code == 401, str(r2.status_code))
 
-            print("== ingest, sources, triggers ==")
+            print("== ingest and sources ==")
             store.upsert_catalog_source("evt", "webhook", "webhook", "5s",
                                         {"labels": [{"name": "service", "field": "service", "primary": True}]},
                                         ingest_key="ik_evt")
@@ -79,8 +77,7 @@ async def main():
             body = (await cx.get("/metrics")).text
             ck("events counted per source", sample(body, "tares_events_ingested_total", source="evt") == 3.0, str(sample(body, "tares_events_ingested_total", source="evt")))
             ck("a push source reads as push", sample(body, "tares_source_state", source="evt", state="push") == 1.0 and sample(body, "tares_source_state", source="evt", state="error") == 0.0)
-            ck("trigger passes counted and timed", (sample(body, "tares_trigger_evaluations_total") or 0) >= 3 and sample(body, "tares_trigger_evaluation_seconds_count") is not None)
-            ck("the trigger fired once and was counted", sample(body, "tares_trigger_firings_total", trigger="errors") == 1.0, str(sample(body, "tares_trigger_firings_total", trigger="errors")))
+            ck("no trigger or agent counters (TR-1810)", "tares_trigger_" not in body and "tares_agent_run" not in body)
             ck("stored events gauge", (sample(body, "tares_events_stored") or 0) >= 3)
 
             # a scrape reads only the disk and the DuckDB file, never the state database (Postgres
@@ -116,11 +113,9 @@ async def main():
             body = (await cx.get("/metrics")).text
             ck("a removed source drops out of the state gauge", sample(body, "tares_source_state", source="bad", state="error") is None)
 
-            print("== model usage and agent runs ==")
+            print("== model usage ==")
             store.record_model_usage("agent", "sre", "run_1", "gpt-4.1", 2, 1000, 100, cost_usd=0.0028, provider="openai")
             store.record_model_usage("ask", "", "", "llama-x", 1, 500, 50, cost_usd=None, provider="ollama")
-            metrics.agent_run("sre", "ok", 12.5)
-            metrics.agent_run("sre", "failed", 0.2)
             body = (await cx.get("/metrics")).text
             ck("model calls and tokens per provider and surface",
                sample(body, "tares_model_calls_total", provider="openai", surface="agent") == 2.0
@@ -130,10 +125,6 @@ async def main():
                abs((sample(body, "tares_model_spend_usd_total", provider="openai", surface="agent") or 0) - 0.0028) < 1e-9
                and sample(body, "tares_model_unpriced_calls_total", provider="ollama") == 1.0
                and sample(body, "tares_model_spend_usd_total", provider="ollama", surface="ask") is None)
-            ck("agent runs per outcome, with a duration histogram",
-               sample(body, "tares_agent_runs_total", agent="sre", status="ok") == 1.0
-               and sample(body, "tares_agent_runs_total", agent="sre", status="failed") == 1.0
-               and sample(body, "tares_agent_run_seconds_count", agent="sre") == 2.0)
 
             print("== event loop lag ==")
             await asyncio.sleep(1.3)

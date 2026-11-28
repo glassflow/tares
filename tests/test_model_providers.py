@@ -58,10 +58,6 @@ async def main():
             st = (await cx.get("/api/capabilities")).json()
             ck("status: no agent key", st["agent_key_configured"] is False)
             ck("resolve_provider -> None", pv.resolve_provider(store) == (None, ""))
-            store.upsert_catalog_agent("a1", "t1", "prompt")
-            r = await cx.post("/api/agents/builtin/a1/enable")
-            ck("enabling an agent without a provider -> 400 naming the fix",
-               r.status_code == 400 and "no model provider" in r.text, r.text[:200])
 
             print("== an OpenAI-compatible endpoint ==")
             r = await cx.put("/api/settings/providers/new", json={"kind": "openai_compatible", "name": "LiteLLM", "key": "k1"})
@@ -201,14 +197,14 @@ async def main():
                 os.environ.pop(v)
             ck("gone from the listing when the env is gone", by_id((await cx.get("/api/settings/providers")).json(), "platform") is None)
 
-            print("== the builtin agents listing ==")
-            d = (await cx.get("/api/agents/builtin")).json()
-            ck("key_configured reflects the default provider", d["key_configured"] is True and d["key_source"] == "env:ANTHROPIC_API_KEY", str((d["key_configured"], d["key_source"])))
+            print("== the capabilities say a provider resolves ==")
+            st = (await cx.get("/api/capabilities")).json()
+            ck("agent_key_configured reflects the default provider", st["agent_key_configured"] is True
+               and pv.resolve_provider(store)[1] == "env:ANTHROPIC_API_KEY", str((st["agent_key_configured"], pv.resolve_provider(store)[1])))
 
             print("== provider plus model per agent (TR-302) ==")
             import json as _json
             import threading
-            import yaml
             from http.server import BaseHTTPRequestHandler, HTTPServer
             SEEN: list = []
 
@@ -343,70 +339,22 @@ async def main():
             ck("an OpenRouter URL adds the app headers",
                pv._headers({"key": "k", "base_url": "https://openrouter.ai/api/v1"}).get("X-Title") == "Tares"
                and "X-Title" not in pv._headers({"key": "k", "base_url": "http://x/v1"}))
-            store.upsert_catalog_source("evt", "webhook", "webhook", "5s", {"labels": [{"name": "service", "field": "service", "primary": True}]})
-            store.upsert_catalog_trigger("t1", ["evt"], {"field": "service", "aggregate": "count", "predicate": ">= 1", "window": "5m"}, {}, "5m")
-            app.state.runtime.reload_catalog()
-
-            body = {"name": "on-vllm", "trigger": "t1", "prompt": "investigate", "provider": "local-vllm", "model": "llama-x"}
-            r = await cx.post("/api/agents/builtin", json=body)
-            ck("agent created with a provider and a model", r.status_code == 201, r.text[:200])
-            r = await cx.post("/api/agents/builtin", json={**body, "name": "bad-prov", "provider": "Not Valid!"})
-            ck("a provider id must be a slug", r.status_code == 400, r.text[:200])
-            r = await cx.post("/api/agents/builtin", json={**body, "name": "bad-model", "provider": "anthropic", "model": "gpt-5"})
-            ck("a non-Claude model on the Anthropic entry is refused", r.status_code == 400 and "Claude" in r.text, r.text[:200])
-            r = await cx.post("/api/agents/builtin", json={**body, "name": "gone-prov", "provider": "not-here", "model": "m"})
-            ck("an agent may name a provider the cell lacks (a template, an import)", r.status_code == 201, r.text[:200])
-            d = (await cx.get("/api/agents/builtin")).json()
-            a = next(x for x in d["agents"] if x["name"] == "on-vllm")
-            g = next(x for x in d["agents"] if x["name"] == "gone-prov")
-            ck("listing carries provider and effective provider", a["provider"] == "local-vllm" and a["effective_provider"] == "local-vllm", str((a["provider"], a["effective_provider"])))
-            ck("a missing provider resolves to the default", g["effective_provider"] == d["default_provider"] == "anthropic", str((g["effective_provider"], d["default_provider"])))
-            ck("the listing offers the providers with per-provider default models",
-               any(p["id"] == "local-vllm" for p in d["providers"]) and d["default_models"]["anthropic"].startswith("claude-")
-               and d["default_models"]["local-vllm"] == "llama-x" and d["default_models"]["ollama"] == "", str(d["default_models"]))
-            p, origin, pid, note = pv.resolve_for_agent(store, g)
-            ck("resolve_for_agent: fallback with a note", isinstance(p, AnthropicProvider) and pid == "anthropic" and "not-here" in note and "does not exist" in note, note)
-            p, origin, pid, note = pv.resolve_for_agent(store, a)
-            ck("resolve_for_agent: the named provider, no note", isinstance(p, OpenAIProvider) and pid == "local-vllm" and note == "", note)
+            print("== a call through a router entry (the summaries' path) ==")
+            prov, origin = pv.resolve_provider(store, "local-vllm")
+            ck("the router entry resolves to an OpenAI-compatible provider", isinstance(prov, OpenAIProvider), str(prov))
             ck("default_model_for a router with no listed models is empty", pv.default_model_for(store, "ollama") == "")
-            r = await cx.post("/api/agents/builtin/on-vllm/enable")
-            ck("an agent on a configured provider can be enabled", r.status_code == 200, r.text[:200])
-
-            runner = app.state.agents
-            runner.attach_loop()
-            rid = runner.run_now("on-vllm", "t1", "billing", "the timeline")
-            run = None
-            for _ in range(100):
-                run = next((x for x in store.list_agent_runs("on-vllm") if x["id"] == rid), None)
-                if run and run["status"] not in (None, "running"):
-                    break
-                await asyncio.sleep(0.1)
-            ck("the run concluded on the router", run is not None and run["status"] == "ok" and "deploy at 09:00" in (run["finding"] or ""), str(run)[:300])
-            ck("the run records provider and model", run is not None and run["provider"] == "local-vllm" and run["model"] == "llama-x", str((run and run["provider"], run and run["model"])))
-            ck("the request went to the router with the agent's model and the bearer key",
+            reply = await prov.complete(model="llama-x", system="investigate", tools=[],
+                                        messages=[{"role": "user", "content": "the timeline"}],
+                                        max_tokens=200, tools_allowed=False)
+            ck("the router answered", "deploy at 09:00" in (reply.text or ""), str(reply.text)[:200])
+            ck("the request went to the router with the model and the bearer key",
                SEEN and SEEN[-1]["body"]["model"] == "llama-x" and SEEN[-1]["auth"] == "Bearer vk"
                and SEEN[-1]["body"]["messages"][0] == {"role": "system", "content": "investigate"}, str(SEEN[-1:])[:300])
-            ck("usage recorded from the router's reply", run is not None and run["input_tokens"] == 11 and run["output_tokens"] == 7, str((run and run["input_tokens"], run and run["output_tokens"])))
-            ck("an unpriced router model records tokens with no cost", run is not None and run["cost_usd"] is None, str(run and run["cost_usd"]))
+            ck("usage read from the router's reply", reply.usage["input_tokens"] == 11 and reply.usage["output_tokens"] == 7, str(reply.usage))
+            store.record_model_usage("ask", "", "", "llama-x", 1, reply.usage["input_tokens"], reply.usage["output_tokens"],
+                                     0, 0, reply.usage.get("cost_usd"), key_source=origin or None, provider="local-vllm")
             um = (await cx.get("/api/usage/model")).json()
             ck("the spend meter splits by provider", "local-vllm" in um.get("by_provider", {}) and um["by_provider"]["local-vllm"]["uncosted_calls"] >= 1, str(um.get("by_provider")))
-
-            # a model that answers with nothing at all: the run says what to check
-            EMPTY[0] = True
-            rid = runner.run_now("on-vllm", "t1", "billing-2", "the timeline")
-            run = None
-            for _ in range(100):
-                run = next((x for x in store.list_agent_runs("on-vllm") if x["id"] == rid), None)
-                if run and run["status"] not in (None, "running"):
-                    break
-                await asyncio.sleep(0.1)
-            EMPTY[0] = False
-            ck("no conclusion and no tool call -> an empty run that names tool calling as the thing to check",
-               run is not None and run["status"] == "empty" and "tool calling" in (run["error"] or ""), str(run and run["error"]))
-
-            doc = yaml.safe_load((await cx.get("/api/catalog/export")).text)
-            ag = next((x for x in doc.get("agents", []) if x["name"] == "on-vllm"), None)
-            ck("catalog export carries the agent's provider", ag is not None and ag.get("provider") == "local-vllm", str(ag))
             chat.shutdown()
 
     print(f"\n{PASS} passed, {FAIL} failed")

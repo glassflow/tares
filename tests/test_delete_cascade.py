@@ -3,7 +3,9 @@
 GET /api/catalog/dependents lists what stops working if an object goes; DELETE on a source with
 cascade=true removes the triggers that read it and their agents too, in order. DELETE on a project
 takes its triggers, agents and MCP servers; `delete_sources=a,b` also deletes those of its sources
-no other project uses, and keeps (and reports) the ones another project still reads.
+no other project uses, and keeps (and reports) the ones another project still reads. The
+triggers, agents and MCP servers are made and listed through the store: their routes went in
+TR-1810, the catalog keeps them until it goes.
 
 Run: .venv/bin/python tests/test_delete_cascade.py
 """
@@ -59,33 +61,47 @@ def src(name):
                        "labels": [{"name": "service", "field": "service", "primary": True}]}}
 
 
+COND = {"aggregate": "count", "predicate": "> 0", "window": "1m"}
+APP = {}
+
+
+def trigger(name, sources, project=""):
+    """What POST /api/triggers did: the trigger, with its sources, in `project` (else the default)."""
+    st = APP["app"].state.store
+    uid = project or st.default_project_id()
+    st.upsert_catalog_trigger(name, sources, COND, {"kind": "x"}, "1m")
+    st.put_in_project("trigger", name, uid)
+    for s in sources:
+        st.put_in_project("source", s, uid)
+    APP["app"].state.runtime.reload_catalog()
+
+
 async def build(cx, prefix, project=""):
     """source -> two triggers -> one agent, all named with the prefix, in `project`."""
     body = {**src(f"{prefix}_src"), **({"project": project} if project else {})}
     assert (await cx.post("/api/sources", json=body)).status_code == 201
     for t in ("a", "b"):
-        r = await cx.post("/api/triggers", json={
-            "name": f"{prefix}_trig_{t}", "sources": [f"{prefix}_src"], "project": project,
-            "condition": {"aggregate": "count", "predicate": "> 0", "window": "1m"},
-            "emit": {"kind": "x"}, "cooldown": "1m"})
-        assert r.status_code == 201, r.text
-    r = await cx.post("/api/agents/builtin", json={
-        "name": f"{prefix}_agent", "trigger": f"{prefix}_trig_a", "prompt": "look", "project": project})
-    assert r.status_code == 201, r.text
+        trigger(f"{prefix}_trig_{t}", [f"{prefix}_src"], project)
+    st = APP["app"].state.store
+    st.upsert_catalog_agent(f"{prefix}_agent", f"{prefix}_trig_a", "look")
+    st.put_in_project("agent", f"{prefix}_agent", project or st.default_project_id(), creator=True)
+    APP["app"].state.runtime.reload_catalog()
 
 
 async def names(cx):
+    st = APP["app"].state.store
     return {
         "source": {s["name"] for s in (await cx.get("/api/sources")).json()},
-        "trigger": {t["name"] for t in (await cx.get("/api/triggers")).json()},
-        "agent": {a["name"] for a in (await cx.get("/api/agents/builtin")).json()["agents"]},
-        "mcp_server": {m["name"] for m in (await cx.get("/api/mcp-servers")).json()["servers"]},
+        "trigger": {t["name"] for t in st.list_catalog_triggers()},
+        "agent": {a["name"] for a in st.list_catalog_agents()},
+        "mcp_server": {m["name"] for m in st.list_mcp_servers()},
     }
 
 
 async def main():
     from tares.daemon import make_app
     app = make_app()
+    APP["app"] = app
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
 
@@ -115,8 +131,6 @@ async def main():
         n = await names(cx)
         ck("source, triggers and agent are all gone",
            not ({"w_src"} & n["source"] or {"w_trig_a", "w_trig_b"} & n["trigger"] or {"w_agent"} & n["agent"]), str(n))
-        subs = (await cx.get("/api/subscriptions")).json()
-        ck("no subscription left behind", not any("w_" in (s.get("trigger") or "") for s in subs), str(subs))
 
         print("== a shared source: cascade reaches every project's triggers ==")
         r = await cx.post("/api/projects", json={"template": "custom", "name": "V1", "objects": []})
@@ -124,10 +138,7 @@ async def main():
         r = await cx.post("/api/projects", json={"template": "custom", "name": "V2", "objects": []})
         v2 = r.json()["id"]
         await build(cx, "v", project=v1)
-        r = await cx.post("/api/triggers", json={
-            "name": "v_other", "sources": ["v_src"], "project": v2,
-            "condition": {"aggregate": "count", "predicate": "> 0", "window": "1m"}})
-        ck("a second project's trigger over the same source", r.status_code == 201, r.text)
+        trigger("v_other", ["v_src"], v2)
         src_row = next(s for s in (await cx.get("/api/sources")).json() if s["name"] == "v_src")
         ck("the source is in both projects", sorted(src_row["projects"]) == sorted([v1, v2]),
            str(src_row["projects"]))
@@ -142,9 +153,8 @@ async def main():
         r = await cx.post("/api/projects", json={"template": "custom", "name": "P", "objects": []})
         uid = r.json()["id"]
         await build(cx, "p", project=uid)
-        r = await cx.post("/api/mcp-servers", json={"name": "p_mcp", "url": "https://example.invalid/m",
-                                                    "project": uid})
-        ck("an MCP server in the project", r.status_code == 201 and r.json()["project"] == uid, r.text)
+        app.state.store.upsert_mcp_server("p_mcp", "https://example.invalid/m", "", "", {})
+        app.state.store.put_in_project("mcp_server", "p_mcp", uid)
         r = await cx.get(f"/api/projects/{uid}")
         ck("the project lists its five objects",
            sorted((o["kind"], o["name"]) for o in r.json()["objects"])
@@ -173,8 +183,6 @@ async def main():
            and next(s for s in (await cx.get("/api/sources")).json() if s["name"] == "p_src")["projects"] == [default]
            and not next(s for s in (await cx.get("/api/sources")).json() if s["name"] == "p_src").get("owned_by"),
            str(n))
-        subs = (await cx.get("/api/subscriptions")).json()
-        ck("no subscription left behind", not any("p_" in (s.get("trigger") or "") for s in subs), str(subs))
 
         r = await cx.post("/api/projects", json={"template": "custom", "name": "Q", "objects": []})
         uid = r.json()["id"]

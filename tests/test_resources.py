@@ -53,15 +53,16 @@ async def main():
                                             "config": {"labels": [{"name": "app", "field": "app", "primary": True}]}})
         await cx.post("/api/sources", json={"name": "repo_commits", "connector": "github", "poll": "5m",
                                             "config": {"repo": "acme/shop"}})
-        r = await cx.post("/api/triggers", json={"name": "checkout_spike", "project": uid,
-                                                 "sources": ["checkout_logs", "repo_commits"],
-                                                 "condition": COND})
-        ck("trigger made", r.status_code == 201, r.text)
-        await cx.post("/api/triggers", json={"name": "default_watch", "sources": ["repo_commits"],
-                                             "condition": COND})
-        r = await cx.post("/api/agents/builtin", json={"name": "checkout-look", "trigger": "checkout_spike",
-                                                       "prompt": "Look.", "project": uid})
-        ck("agent made", r.status_code in (200, 201), r.text)
+        # triggers and agents are catalog rows only now (their routes went in TR-1810)
+        for name, srcs, proj in (("checkout_spike", ["checkout_logs", "repo_commits"], uid),
+                                 ("default_watch", ["repo_commits"], default["id"])):
+            store.upsert_catalog_trigger(name, srcs, COND, {}, "5m")
+            store.put_in_project("trigger", name, proj)
+            for x in srcs:
+                store.put_in_project("source", x, proj)
+        store.upsert_catalog_agent("checkout-look", "checkout_spike", "Look.")
+        store.put_in_project("agent", "checkout-look", uid, creator=True)
+        app.state.runtime.reload_catalog()
         k = (await cx.post(f"/api/projects/{uid}/keys", json={"name": "claude-code"})).json()
         gone = (await cx.post(f"/api/projects/{uid}/keys", json={"name": "old-key"})).json()
         await cx.delete(f"/api/keys/{gone['id']}")

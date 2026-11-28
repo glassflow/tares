@@ -6,8 +6,8 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 ## Layout
 
 - `tares/` the package: `daemon.py` (HTTP API + console), `cli.py` (`tares up`, `tares mcp`),
-  `store.py` (DuckDB), `connectors/`, `agent*.py` (Tares agents), `models.py` (the model
-  provider adapter both agent loops call), `mcp*.py` (the MCP proxy),
+  `store.py` (DuckDB), `connectors/`, `providers.py` and `models.py` (the model provider layer the
+  standup, milestone and report summaries call), `mcp*.py` (the MCP proxy),
   `projects/` (projects and the Tares templates they start from).
 - `ui/` the console, a Vite + React app. The daemon serves `ui/dist` and the wheel bundles it.
 - `ee/` the enterprise code, the package `tares_ee`, under `ee/LICENSE`. It is loaded through the
@@ -137,13 +137,13 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_AUTH_TOKEN` | turns auth on; also the token `tares-mcp` presents |
 | `TARES_KEYRING` | `on` lets `tares login` keep its key in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of `login.json`; off by default, because the plugin's MCP header helper and `ship.py` still read the file |
 | `TARES_CATALOG` | a catalog file to import on first boot (only while the catalog is empty) |
-| `ANTHROPIC_API_KEY` | model key for Tares agents and Ask; a key saved in the console wins |
+| `ANTHROPIC_API_KEY` | model key for the cell's summaries (standup, milestones, report); a key saved in the console wins |
 | `ANTHROPIC_AUTH_TOKEN` | a bearer token instead of the key, for a gateway that wants `Authorization: Bearer`; beats the key when both are set |
 | `ANTHROPIC_BASE_URL` | an Anthropic-compatible gateway (LiteLLM, Portkey, a Bedrock or Vertex proxy) instead of api.anthropic.com; `TARES_ANTHROPIC_BASE` is the old name, still read |
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL` | seed an OpenAI provider entry; a provider saved in the console wins |
 | `TARES_PLATFORM_PROVIDER_URL`, `TARES_PLATFORM_PROVIDER_KEY`, `TARES_PLATFORM_PROVIDER_NAME` | seed an OpenAI-compatible provider entry the deployment hands the cell (Tares Cloud's LiteLLM with a per-cell key); the default unless a console choice or `TARES_MODEL_PROVIDER` says otherwise; not editable in the console |
 | `TARES_MODEL_PROVIDER` | id of the default provider (`anthropic`, `openai`, or a saved endpoint's id) when none is chosen in the console |
-| `TARES_AGENT_MODEL` | model for Tares agents on the default provider |
+| `TARES_MODEL` | model the summaries use on the default provider; `TARES_AGENT_MODEL` is the old name, still read |
 | `TARES_ARCHIVE_URL` | where the hourly job archives sessions idle for a week, and the one-time move writes older ones: `file:///path` or `s3://bucket/prefix/`; unset gives `<data dir>/archive/` on SQLite and nothing on Postgres |
 | `TARES_ARCHIVE_ENDPOINT`, `TARES_ARCHIVE_REGION`, `TARES_ARCHIVE_ACCESS_KEY_ID`, `TARES_ARCHIVE_SECRET_ACCESS_KEY` | the S3 endpoint, region and keys for the archive (needs the `archive-s3` extra); unset, boto3's own credential chain applies |
 | `TARES_MAX_DB_SIZE` | storage limit `/api/usage` and `/health` measure against; unset = the volume the database sits on |
@@ -151,11 +151,10 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
 | `TARES_EDITION` | the cell's edition on its first start: factory, sre or platform; after that the value saved in the cell wins and Settings, Edition changes it |
 | `TARES_SEED_PROJECT` | template of the project to seed on a brand-new cell, one with no projects yet; otherwise skipped (`TARES_SEED_USECASE` still read) |
-| `TARES_WEBHOOK_ALLOW_PRIVATE` | let a project key subscribe a webhook on an internal address (loopback, private, link-local); off by default |
-| `TARES_AGENT_DAILY_CAP` | runs per Tares agent per day (default 50); a value saved under Settings, Agents wins over it |
-| `TARES_TRACING_ENABLED` | agent tracing on/off (a console setting wins over it) |
-| `TARES_TRACING_PROVIDER`, `TARES_TRACING_ENDPOINT` | `rius` (endpoint preset) or `otlp` (any OTLP/HTTP endpoint) |
-| `TARES_TRACING_API_KEY`, `TARES_TRACING_HEADERS` | bearer key, or `k=v,k2=v2` headers for the exporter |
+| `TARES_WEBHOOK_ALLOW_PRIVATE` | let an integration's URL point at an internal address (loopback, private, link-local); off by default |
+| `TARES_TRACING_ENABLED` | station telemetry on/off: where the crew stations' Claude Code sends its OTLP logs, traces and metrics (the monitoring choice saved on the cell wins over it) |
+| `TARES_TRACING_PROVIDER`, `TARES_TRACING_ENDPOINT` | the station telemetry backend: `rius` (endpoint preset) or `otlp` (any OTLP/HTTP endpoint) |
+| `TARES_TRACING_API_KEY`, `TARES_TRACING_HEADERS` | bearer key, or `k=v,k2=v2` headers, the stations send to that backend |
 | `TARES_PUBLIC_URL` | the address people reach the cell at, for the ingest URLs the guided setup shows; default the request's own |
 | `TARES_MCP_URL` | the MCP address the guided setup gives an outside agent; default `TARES_PUBLIC_URL` plus `/mcp` |
 | `TARES_FACTORY_MCP_URL` | the crew's shared MCP endpoint, set by `tares factory` for stations and the spec session; the plugin connects there (default: local Tares gives 127.0.0.1:8788/mcp, a remote one its own `/mcp`) |

@@ -19,7 +19,7 @@ from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_session_readers_held as held  # noqa: E402  (sets the factory environment)
-from test_session_readers_held import HIDDEN, NOW, SRC, ck, line, open_store, patched  # noqa: E402
+from test_session_readers_held import NOW, SRC, ck, line, open_store, patched  # noqa: E402
 
 from sqlalchemy import insert  # noqa: E402
 
@@ -62,10 +62,6 @@ def count(s, ago, **kw):
 MONTH, DAY = timedelta(days=30), timedelta(days=1)
 
 
-def hidden_repos(s) -> list:
-    s._saved_counts.clear()     # the count itself is timed, not the saved one (TR-1716)
-    return sorted((e["value"], e["events"], str(e["last_ingest"]))
-                  for e in s.list_entities("repo", [SRC], exclude=HIDDEN))
 
 # (name, how many times as fast as the stored lines, the read)
 READS = [
@@ -76,7 +72,6 @@ READS = [
     ("ingest gaps over 30 days", 5, lambda s: [round(g, 5) for g in
                                                 s.recent_ingest_gaps(SRC, NOW - MONTH)]),
     ("ingest hours over 30 days", 5, lambda s: sorted(s.recent_ingest_hours(SRC, NOW - MONTH))),
-    ("repos, a project hidden", 2, hidden_repos),
 ]
 
 

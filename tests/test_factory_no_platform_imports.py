@@ -45,7 +45,6 @@ KNOWN = {
     ("tares/screens/factory_settings.py", "tares.edition"): "TR-1813",
     ("tares/session_ingest.py", "tares.session_move"): "TR-1815",
     ("tares/session_ingest.py", "tares.session_drain"): "TR-1815",
-    ("tares/screens/factory_settings.py", "tares.builtin_agents"): "TR-1810",
 }
 
 

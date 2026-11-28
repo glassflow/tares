@@ -100,8 +100,8 @@ async def main():
         ck("a daemon that could not start lists no capabilities", h and h.get("capabilities") == [], h)
         ck("names the problem", h and BAD_DB in (h.get("detail") or ""), h)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{PORT}") as cx:
-            r = await cx.get("/api/triggers", timeout=5)
-            ck("/api/triggers is 503, not a bare 500", r.status_code == 503, r.status_code)
+            r = await cx.get("/api/sources", timeout=5)
+            ck("/api/sources is 503, not a bare 500", r.status_code == 503, r.status_code)
             ck("…with a reason the console can render",
                "unavailable" in (r.json().get("detail") or ""), r.text)
             r = await cx.post("/read", json={"selector": {"service": "y"}}, timeout=5)
@@ -168,7 +168,7 @@ async def main():
             ck("…and still says why", r is not None and r.json().get("status") == "down"
                and "database" in (r.json().get("detail") or ""), r and r.text)
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{PORT}") as cx:
-                r = await cx.get("/api/triggers", timeout=5)
+                r = await cx.get("/api/sources", timeout=5)
                 ck("its API is 503", r.status_code == 503, r.status_code)
         finally:
             proc.terminate(); proc.wait(timeout=10)

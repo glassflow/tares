@@ -4,8 +4,7 @@ Stateless: every tool call becomes one HTTP call to taresd. This is the only Tar
 agent sees.
 
 Two tool groups: the READ surface (read/catalog/list_*) and the WRITE/SETUP surface
-(subscribe/remember/discover_*/create_source/create_trigger/…), which lets an agent wire up its own
-data sources and the triggers over them, inside a project. The design doc keeps admin ops off the MCP surface; exposing them here is a
+(discover_*/create_source/…), which lets an agent wire up its own data sources inside a project. The design doc keeps admin ops off the MCP surface; exposing them here is a
 deliberate MVP test of agent-operable onboarding (no auth — the proxy talks to the local daemon).
 """
 from __future__ import annotations
@@ -148,8 +147,7 @@ def _cx(timeout: float = 10):
 # cell unless an admin turns them on; the crew's tools stay on everywhere.
 OBJECT_TOOLS = frozenset({
     "read", "stats", "catalog_list", "catalog_describe", "list_connectors", "discover_source",
-    "discover_docker", "test_source", "create_source", "list_sources", "source_fields",
-    "create_trigger", "update_trigger", "subscribe"})
+    "discover_docker", "test_source", "create_source", "list_sources", "source_fields"})
 # The outcome tools, listed first on a factory cell (tares/mcp_outcomes.py registers them).
 # The two that read the home page need the factory home, so they stay off platform.
 FACTORY_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
@@ -307,8 +305,7 @@ async def read(selector: dict, window: str = "15m", include_payload: bool = Fals
     {label: value} conjunction, matched with strict AND, e.g. {"repo": "frontend"} or
     {"service": "api-server", "endpoint": "/login"}. An event matches only if it carries every
     named label with that value, so adding a label narrows and removing one widens. Use this to
-    investigate any entity on the fly; once you know which sources matter, create_trigger() over
-    them. Set `include_payload` when the one-line summaries aren't enough and you need each
+    investigate any entity on the fly. Set `include_payload` when the one-line summaries aren't enough and you need each
     event's full lossless record: the return becomes JSON {timeline, events[]} where each event
     carries `raw`. With a project key the read covers that project only, its findings
     included."""
@@ -328,68 +325,6 @@ async def read(selector: dict, window: str = "15m", include_payload: bool = Fals
     return data["payload"]
 
 
-def _trigger_body(name: str, sources: list[str], condition: dict, filters, key_field: str,
-                  emit, cooldown: str, project: str, description: str | None = None) -> dict:
-    body = {"name": name, "sources": sources, "filters": filters or [],
-            "key_field": key_field, "condition": condition, "emit": emit or {},
-            "cooldown": cooldown}
-    if project:
-        body["project"] = project
-    if description is not None:
-        body["description"] = description
-    return body
-
-
-@writable()
-async def create_trigger(name: str, sources: list[str], condition: dict,
-                         filters: list[dict] | None = None, key_field: str = "",
-                         emit: dict | None = None, cooldown: str = "5m",
-                         project: str = "", description: str | None = None) -> str:
-    """Create a trigger: a condition Tares evaluates continuously over one or more sources; when
-    it trips, subscribed agents are woken with the correlated timeline. `sources` names the
-    sources it watches (at least one). `filters` [{field, op, value}] (ops: eq, neq, in (a list), contains, gt,
-    lt, gte, lte) narrows them. `key_field` is the entity label (default: the primary label of the
-    first source). `condition` is {aggregate: any|avg|count|max|min|sum, field: numeric label to
-    aggregate (omit for count), predicate: e.g. '> 1.0' / '>= 5' / '== 0', window: detection
-    window e.g. '1m'}. `emit` is {kind: what a firing is called e.g. error_spike, context_window:
-    timeline the woken agent receives e.g. '15m'}. `project` is the project id the trigger belongs
-    to (default: the default project); its sources join that project. `description` (optional)
-    says in one plain line what wakes it, phrased to follow "When", e.g. "an alert fires in the
-    checkout service"; the project page uses it instead of the rule's own wording (at most 160
-    characters, one line). catalog_describe a source to confirm its labels first. Wire agents
-    to it with subscribe()."""
-    body = _trigger_body(name, sources, condition, filters, key_field, emit, cooldown, project,
-                         description)
-    async with _cx(10) as cx:
-        r = await cx.post(f"{TARESD}/api/triggers", json=body)
-    return r.text
-
-
-@writable()
-async def update_trigger(name: str, sources: list[str], condition: dict,
-                         filters: list[dict] | None = None, key_field: str = "",
-                         emit: dict | None = None, cooldown: str = "5m",
-                         project: str = "", description: str | None = None) -> str:
-    """Edit an EXISTING trigger in place: replace its sources, filters, key_field, condition,
-    emit and cooldown, and move it to another `project` when given. Create new triggers with
-    create_trigger(); this only updates one that already exists (renaming isn't supported, so
-    keep `name` the same). `description` left out keeps the current one, "" clears it. See
-    create_trigger for the shapes."""
-    body = _trigger_body(name, sources, condition, filters, key_field, emit, cooldown, project,
-                         description)
-    async with _cx(10) as cx:
-        r = await cx.put(f"{TARESD}/api/triggers/{name}", json=body)
-    return r.text
-
-
-@writable()
-async def subscribe(trigger: str, url: str) -> str:
-    """Register a webhook to be woken (pushed) when a trigger fires. Returns a subscription id."""
-    async with _cx(10) as cx:
-        r = await cx.post(f"{TARESD}/subscribe", json={"trigger": trigger, "url": url})
-    return r.json()["subscription_id"]
-
-
 @mcp.tool()
 async def catalog_list() -> str:
     """List available sources, triggers and projects."""
@@ -402,21 +337,9 @@ async def catalog_list() -> str:
 async def catalog_describe(handle: str) -> str:
     """Describe one catalog entry in full: schema (event types + typed fields, inferred from
     stored events), freshness, lineage, and sample records. Handles look like source:logs or
-    trigger:error_spike. Use this to discover label names before creating a trigger or reading
-    an unfamiliar source."""
+    trigger:error_spike. Use this to discover label names before reading an unfamiliar source."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/catalog/{handle}")
-    return r.text
-
-
-@writable()
-async def remember(key: str, content: str, memory_type: str = "observation") -> str:
-    """Write an observation back to Tares's agent-memory lane. It becomes a source like any
-    other: joined into correlated reads, so what you learned this incident appears in the
-    timeline next time the same key acts up. memory_type: observation | aggregation | decision."""
-    async with _cx(10) as cx:
-        r = await cx.post(f"{TARESD}/remember",
-                          json={"key": key, "content": content, "memory_type": memory_type})
     return r.text
 
 
@@ -559,20 +482,6 @@ async def list_projects() -> str:
 
 
 @mcp.tool()
-async def join_project(url: str, project: str = "") -> str:
-    """Join a project: Tares POSTs every firing of every trigger in the project to `url` (your
-    agent's webhook), the triggers added later included. The body carries dispatch_id, trigger,
-    project, key (the entity), fired_at, payload (the timeline) and run_ids (the Tares agents it
-    woke). Returns the subscription id."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/subscribe", json={"url": url})
-    return r.text
-
-
-@mcp.tool()
 async def stats(by: str, window: str = "30m", where: dict | None = None, top: int = 20,
                 sources: list[str] | None = None, project: str = "") -> str:
     """Counts per value of the label `by` over the project's sources, the last `window` against
@@ -589,74 +498,6 @@ async def stats(by: str, window: str = "30m", where: dict | None = None, top: in
             return why
         r = await cx.post(f"{TARESD}/api/projects/{uid}/stats", json=body)
     return r.json()["stats"] if r.status_code == 200 else r.text
-
-
-@mcp.tool()
-async def list_skills(project: str = "") -> str:
-    """List the project's skills: name and description. Load one with get_skill before relying
-    on it, only when your task matches its description."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.get(f"{TARESD}/api/projects/{uid}/skills")
-    if r.status_code >= 400:
-        return r.text
-    return json.dumps([{"name": s["name"], "description": s["description"]} for s in r.json()])
-
-
-@mcp.tool()
-async def get_skill(name: str, project: str = "") -> str:
-    """The instructions of one of the project's skills, as markdown."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.get(f"{TARESD}/api/projects/{uid}/skills/{name}")
-    return r.json()["body"] if r.status_code == 200 else r.text
-
-
-@mcp.tool()
-async def list_findings(entity: str = "", agent: str = "", limit: int = 20,
-                        project: str = "") -> str:
-    """The findings recorded in the project, newest first: its Tares agents' and the ones
-    external agents recorded. `entity` and `agent` narrow them. Read them before concluding, so
-    you build on what is known instead of repeating it."""
-    params = {"limit": limit, **({"entity": entity} if entity else {}),
-              **({"agent": agent} if agent else {})}
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.get(f"{TARESD}/api/projects/{uid}/findings", params=params)
-    return json.dumps(r.json()["findings"], default=str) if r.status_code == 200 else r.text
-
-
-@mcp.tool()
-async def record_finding(entity: str, finding: str, verdict: str = "", label: str = "",
-                         project: str = "", headline: str = "", next_step: str = "") -> str:
-    """Record what you concluded about an entity (a service, a repo, a customer) in the project.
-    It lands on the entity's timeline next to the Tares agents' findings and in the project's
-    activity, under your key's name. `finding` is markdown; `verdict` one lowercase word (for
-    example rca or resolved); `label` the label the entity is a value of when it is not the
-    project's usual one (for example service). `headline` is one line (at most 100 characters)
-    saying what you found, and `next_step` what a person should do (empty when nothing needs
-    doing): both show on the project's Overview."""
-    body = {"entity": entity, "finding": finding}
-    if headline:
-        body["headline"] = headline
-    if next_step:
-        body["next_step"] = next_step
-    if verdict:
-        body["verdict"] = verdict
-    if label:
-        body["label"] = label
-    async with _cx(15) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/findings", json=body)
-    return r.text
 
 
 @mcp.tool()

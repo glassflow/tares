@@ -28,6 +28,13 @@ def _res(svc):
     return resource_pb2.Resource(attributes=[
         common_pb2.KeyValue(key="service.name", value=common_pb2.AnyValue(string_value=svc))])
 
+def label_counts(app, source, label):
+    """{value: lines} for one label of a source, over all time (the entity listing went, TR-1810)."""
+    from datetime import datetime, timezone
+    return app.state.store.aggregate([source], None, "count", datetime(2000, 1, 1, tzinfo=timezone.utc),
+                                     group_by=label)
+
+
 async def main():
     app = make_app()
     async with app.router.lifespan_context(app):
@@ -57,10 +64,8 @@ async def main():
         ck("gRPC span ingested (event_type=span, ERROR)",
            any(e["event_type"] == "span" and "GET /pay" in e["text"] and "ERROR" in e["text"] for e in evs),
            str([(e["event_type"], e["text"]) for e in evs]))
-        facets = {f["label"]: f for f in (await cx.get("/api/entities")).json()["labels"]}
-        ck("service is the primary facet from gRPC data",
-           facets.get("service", {}).get("primary") is True
-           and any(v["value"] == "checkout" for v in facets["service"]["values"]), str(list(facets)))
+        sv = label_counts(app, "otlp", "service")
+        ck("service is a label from gRPC data", "checkout" in sv, str(sv))
         await cx.aclose()
     print(f"\n{P} passed, {F} failed"); raise SystemExit(1 if F else 0)
 

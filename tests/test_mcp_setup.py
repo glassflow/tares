@@ -1,5 +1,5 @@
 """Agent-driven source setup over MCP — exercises the MCP tools against a real taresd:
-list_connectors -> create_source -> (data flows) -> list_sources -> create_trigger -> read.
+list_connectors -> create_source -> (data flows) -> list_sources -> read.
 """
 import asyncio, os, signal, subprocess, sys, time
 
@@ -65,16 +65,9 @@ async def main():
     desc = _json.loads(await m.catalog_describe("source:evt"))
     ck("catalog_describe shows the app label axis", "app" in desc.get("labels", {}), str(list(desc.get("labels", {}))))
 
-    # the agent puts a trigger over its new source and reads the source back
-    res = _json.loads(await m.create_trigger(
-        "evt_errors", ["evt"], {"aggregate": "count", "predicate": "> 5", "window": "1m"},
-        key_field="app"))
-    ck("create_trigger over the source -> ok, in the default project",
-       res.get("ok") is True and res.get("project"), str(res))
-    res = _json.loads(await m.update_trigger(
-        "evt_errors", ["evt"], {"aggregate": "count", "predicate": "> 9", "window": "1m"},
-        filters=[{"field": "app", "op": "eq", "value": "checkout"}], key_field="app"))
-    ck("update_trigger -> ok", res.get("ok") is True, str(res))
+    # the agent reads its new source back; triggers went in TR-1810
+    ck("the MCP surface has no trigger tools",
+       not any(hasattr(m, n) for n in ("create_trigger", "update_trigger", "subscribe")))
     ck("the MCP surface has no view tools",
        not any(hasattr(m, n) for n in ("query", "derive", "update_view")))
     payload = await m.read({"app": "checkout"}, sources=["evt"])

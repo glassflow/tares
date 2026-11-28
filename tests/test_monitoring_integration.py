@@ -2,8 +2,8 @@
 
 One in-process cell with auth on. Covered:
  - off, rius and otlp are installed for the monitoring slot, with their settings;
- - one storage: a choice made through the integrations API shows in /api/settings/tracing, and one made
-   through that route is what the slot reads; off keeps the stored values so switching back needs nothing
+ - one storage: a choice made through the integrations API shows in the tracing settings, and one an older
+   cell's /api/settings/tracing wrote is what the slot reads; off keeps the stored values so switching back needs nothing
    typed again; no response holds a secret value;
  - station_env: the Claude Code telemetry variables for the endpoint, the endpoint without a user, query
    or fragment, the resource attributes percent-encoded, {} while off or for another provider, and never a
@@ -109,6 +109,24 @@ def ru(r):
     return r
 
 
+
+def _tracing_status(store) -> dict:
+    """The tracing settings as the cell resolves them (the old /api/settings/tracing view)."""
+    from tares import station_telemetry
+    return station_telemetry.status(store)
+
+
+def _old_route_write(store, body: dict) -> None:
+    """What an older cell's PUT /api/settings/tracing wrote (the route went in TR-1810): the same
+    keys the monitoring slot reads, an empty string clearing one."""
+    for field, key in (("provider", "tracing_provider"), ("endpoint", "tracing_endpoint"),
+                       ("api_key", "tracing_api_key"), ("headers", "tracing_headers")):
+        if field in body:
+            v = str(body[field] or "").strip()
+            store.set_setting(key, (v.lower() if field == "provider" else v) or None)
+    if "enabled" in body:
+        store.set_setting("tracing_enabled", "1" if body["enabled"] else "0")
+
 async def main():
     from tares.daemon import make_app
     app = make_app()
@@ -148,8 +166,8 @@ async def main():
                              "api_key": KEY}}))
             ck("choosing otlp is 200", r.status_code == 200, r.text[:300])
             ck("the answer has no secret", not any(s in r.text for s in SECRETS), r.text[:300])
-            t = ru(await root.get("/api/settings/tracing")).json()
-            ck("the old tracing route shows the same choice",
+            t = _tracing_status(store)
+            ck("the tracing settings show the same choice",
                t["provider"] == "otlp" and t["enabled"] and t["active"]
                and t["endpoint"] == "https://collector.example.com:4318", t)
             r = ru(await root.get("/api/factory/integrations"))
@@ -198,7 +216,7 @@ async def main():
             print("== off keeps what was stored ==")
             r = ru(await root.put("/api/factory/integrations/monitoring", json={"name": "off"}))
             ck("off is 200", r.status_code == 200, r.text[:300])
-            t = ru(await root.get("/api/settings/tracing")).json()
+            t = _tracing_status(store)
             ck("tracing is switched off, the provider stays", t["enabled"] is False and t["provider"] == "otlp", t)
             ck("while off: no env, no settings, no config",
                otlp.station_env(labels) == {} and otlp.station_settings() == {} and otlp.exporter_config() == {})
@@ -210,7 +228,7 @@ async def main():
                and store.get_setting("tracing_api_key") == KEY, otlp.exporter_config())
 
             print("== the other route is read by the slot ==")
-            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+            _old_route_write(store, {"provider": "rius", "enabled": True, "api_key": KEY,
                                                            "endpoint": "", "headers": ""})
             slot = next(s for s in ru(await root.get("/api/factory/integrations")).json()["slots"]
                         if s["slot"] == "monitoring")
@@ -223,7 +241,7 @@ async def main():
                 "otelHeadersHelper": "tares hook otel-headers"}, rius.station_settings())
 
             print("== a save writes only the settings the integration has ==")
-            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+            _old_route_write(store, {"provider": "rius", "enabled": True, "api_key": KEY,
                                                            "endpoint": "", "headers": "x-org=acme"})
             ck("headers set on the old route are stored", store.get_setting("tracing_headers") == "x-org=acme")
             r = ru(await root.put("/api/factory/integrations/monitoring", json={"name": "rius", "settings": {}}))
@@ -235,7 +253,7 @@ async def main():
                mon.fields_of("rius") == ("api_key", "endpoint") and mon.fields_of("otlp")
                == ("endpoint", "headers", "api_key") and mon.fields_of("off") == ()
                and mon.fields_of("other") == (), (mon.fields_of("rius"), mon.fields_of("otlp")))
-            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+            _old_route_write(store, {"provider": "rius", "enabled": True, "api_key": KEY,
                                                            "endpoint": "", "headers": ""})
 
             print("== switching the provider drops the old backend's headers ==")
@@ -266,7 +284,7 @@ async def main():
             ck("a re-save of the same provider keeps what it has",
                r.status_code == 200 and store.get_setting("tracing_headers") == "x-token=NEXT-ONE",
                (r.status_code, store.get_setting("tracing_headers")))
-            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+            _old_route_write(store, {"provider": "rius", "enabled": True, "api_key": KEY,
                                                            "endpoint": "", "headers": ""})
 
             print("== the provider comes from tracing.resolve ==")
@@ -284,7 +302,7 @@ async def main():
                    store.get_setting("tracing_api_key"))
             finally:
                 del os.environ["TARES_TRACING_ENDPOINT"]
-            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+            _old_route_write(store, {"provider": "rius", "enabled": True, "api_key": KEY,
                                                            "endpoint": "", "headers": ""})
 
             print("== a choice row left in the slot is dropped ==")

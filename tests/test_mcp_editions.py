@@ -21,8 +21,7 @@ URL = f"http://127.0.0.1:{MPORT}/mcp"
 D = f"http://127.0.0.1:{DPORT}"
 ROOT = {"Authorization": f"Bearer {TOKEN}"}
 OBJECTS = ("read", "stats", "catalog_list", "catalog_describe", "list_connectors", "discover_source",
-           "discover_docker", "test_source", "create_source", "list_sources", "source_fields",
-           "create_trigger", "update_trigger", "subscribe")
+           "discover_docker", "test_source", "create_source", "list_sources", "source_fields")
 OUTCOMES = ("what_needs_me", "how_is_project", "start_project", "hand_project_to_crew")
 SRE_OUTCOMES = ("what_is_broken", "how_is_service", "what_happened", "mark_incident")
 

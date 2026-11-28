@@ -13,7 +13,7 @@ Session flows (the challenger workflow): when Claude calls the `set_session_flow
 call is a tool_use line in the transcript. The shipper is the one component that sees the transcript
 together with the session id, so it is the bridge: it writes a per-session marker file the local
 challenger hooks gate on, stamps `flow` on every line it ships from then on, and writes synthetic
-`session_flow` / `session_end` lines so Tares can tell a challenger session and its end apart.
+`session_flow` line so Tares can tell a challenger session apart; at the session's end the marker goes.
 Tares is never asked whether a session is marked; the decision travels through the transcript.
 
 Idempotent: the offset only advances after a successful POST. Best-effort: never raises into the
@@ -820,8 +820,7 @@ def main() -> None:
             report_state(cfg, hook, event, flow)
 
         if event == "SessionEnd" and session_id and flow:
-            # the line the challenger_session_ended trigger watches; the marker goes with the session
-            ship_lines(cfg, [synthetic_line(hook, "session_end", flow)])
+            # the marker goes with the session (no session_end line: nothing on Tares reads it)
             write_flow(data_dir, session_id, "")
 
         if event == "SessionEnd" and ships and shipped_ok:

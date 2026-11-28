@@ -10,9 +10,9 @@ counted (DuckDB: `store.con`, which `store.sc` is too; Postgres state: `store.sc
 sessions database, when the store has one: SQLAlchemy's cursor events). A route that runs more than
 its BUDGET fails the test.
 
-Then a private project is made and deleted, and the event reads and the entities page are counted
-again (TR-1716): each may run at most DELETED_EXTRA statements more than before there was one, and
-a warm entities read does not scan the events table.
+Then a private project is made and deleted, and the event reads are counted again (TR-1716): each
+may run at most DELETED_EXTRA statements more than before there was one. (The entities page went
+with entity counts, TR-1810.)
 
 The pages answer the same thing on every run: the clock is frozen, ids are numbered in the order they
 appear, and the bodies are compared with ee/tests/fixtures/factory_pages_golden.json. A later change
@@ -119,17 +119,13 @@ DONE_EXTRA = 5
 # statements to a request, however many labels the page reads. A read of event rows or fields runs
 # three more reads: the caller's hidden sources, the sessions of the deleted project and the project
 # records. With state on DuckDB each of the three is a transaction of the session store, so each costs
-# its BEGIN too. A warm describe or entities page answers from saved counts, so it stays within the
-# same limit.
+# its BEGIN too.
 DELETED_EXTRA = {"duckdb": 6, "postgres": 3}
 EVENT_READS = [
     ("read", "POST", "/read"),
     ("source_events", "GET", "/api/sources/evts/events"),
     ("source_fields", "GET", "/api/sources/evts/fields"),
     ("describe", "GET", "/catalog/source:evts"),
-    ("entities", "GET", "/api/entities"),
-    ("entities_service", "GET", "/api/entities?label=service"),
-    ("entities_project", "GET", "/api/entities?label=tares_project"),
 ]
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
@@ -539,10 +535,8 @@ _EVENTS_SCAN = re.compile(r"\bFROM\s+events\b", re.IGNORECASE)
 
 async def deleted_private_reads(app, store, backend, root, sam):
     """A private project with a session and rows of its own is made and deleted (TR-1716). The event
-    reads and the entities page then run at most DELETED_EXTRA statements more than on the same cell
-    before it, for the system credential, a person who was its member and a person who was not, and
-    a warm entities read takes its counts without a scan of the events table, also after new events
-    arrive."""
+    reads then run at most DELETED_EXTRA statements more than on the same cell before it, for the
+    system credential, a person who was its member and a person who was not."""
     async def send(hdr, method, path, **kw):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                      headers=hdr, timeout=60) as cx:
@@ -595,8 +589,6 @@ async def deleted_private_reads(app, store, backend, root, sam):
     for (caller, route), (resp, _, scans) in before.items():
         ck(f"before, {caller}, {route}: answers 200", resp.status_code == 200,
            f"{resp.status_code} {resp.text[:200]}")
-        if route.startswith("entities"):
-            ck(f"before, {caller}, {route}: a warm read does not scan the events", scans == 0, scans)
 
     uid = "uc_budgetgone"
     store.create_project(uid, "custom", "Budget gone", {})
@@ -608,9 +600,6 @@ async def deleted_private_reads(app, store, backend, root, sam):
     assert r.status_code < 300 and store.get_project(uid) is None, r.text
     store.append(rows("later"))
 
-    first = await counted(sam, "GET", "/api/entities")
-    ck("the first entities read after the delete scans the events (the check below sees a scan)",
-       first[2] > 0, first[2])
     after = await every_read()
     for (caller, route), (resp, n, scans) in after.items():
         was = before[caller, route][1]
@@ -620,26 +609,6 @@ async def deleted_private_reads(app, store, backend, root, sam):
            f"{resp.status_code} {resp.text[:200]}")
         ck(f"after, {caller}, {route}: {n - was} statements more than before it, at most {most}",
            n - was <= most, f"{was} before, {n} after")
-        if route.startswith("entities"):
-            ck(f"after, {caller}, {route}: a warm read does not scan the events", scans == 0, scans)
-
-    for round_ in ("newer", "newest"):   # twice: what is saved stays saved
-        store.append(rows(round_) + rows(f"zz-hidden-{round_}", uid)
-                     + rows(f"zz-hidden-linked-{round_}", key="hidden-session"))
-        for caller, hdr in callers.items():
-            for route, method, path in EVENT_READS:
-                if not route.startswith("entities"):
-                    continue
-                resp, n, scans = await counted(hdr, method, path)
-                was = before[caller, route][1]
-                ck(f"{round_} events, {caller}, {route}: counted without a scan, at most "
-                   f"{most} statements more ({n - was}, {scans} scans)",
-                   scans == 0 and n - was <= most, f"{was} before, {n} after, {scans} scans")
-                seen = (f"{round_}-env" if route == "entities"
-                        else f"{round_}-svc1" if route == "entities_service" else None)
-                ck(f"{round_} events, {caller}, {route}: the new values are there, nothing of the "
-                   "deleted project", resp.status_code == 200 and (seen is None or seen in resp.text)
-                   and "zz-hidden" not in resp.text and uid not in resp.text, resp.text[:300])
 
 
 async def main():

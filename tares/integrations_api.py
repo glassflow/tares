@@ -254,8 +254,8 @@ def register(app, store, h):
         """The headers a crew station's Claude Code sends to the monitoring backend (TR-866), for
         its `otelHeadersHelper`. A key never rides in a station's environment, so the helper
         fetches it here at start with the crew's own key. The credential decides, never a header
-        the client sets: this holds the cell's monitoring secret, so it needs the admin scope, like
-        /api/settings/tracing, which the crew's person-bound key carries. `{}` while monitoring is
+        the client sets: this holds the cell's monitoring secret, so it needs the admin scope, which
+        the crew's person-bound key carries. `{}` while monitoring is
         off. Never cached."""
         h.require_admin(request)
         eff = resolve.effective("monitoring", None, store=store)

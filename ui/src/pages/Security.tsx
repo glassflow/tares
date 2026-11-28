@@ -10,7 +10,6 @@ import LinearSettings from "../components/LinearSettings";
 import LicencePanel from "../components/LicencePanel";
 import { EePage, useEeLoaded } from "../eeSlots";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../editions/settings/SlackPanels";
-import { TracingPanel } from "../editions/settings/TracingPanel";
 import { GithubPanel } from "../editions/settings/GithubPanel";
 import { ProvidersPanel } from "../editions/settings/ProvidersPanel";
 import { ApiKeysPanel } from "../editions/settings/ApiKeysPanel";
@@ -29,7 +28,7 @@ import { copyText } from "../editions/copyText";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "edition" | "licence" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "observability" | "advanced";
+type SettingsTab = "workspace" | "usage" | "access" | "edition" | "licence" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "advanced";
 // The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
 const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
@@ -39,7 +38,6 @@ const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "licence", label: "Enterprise licence" },
   { key: "anthropic", label: "Model providers", group: "Agents" },
   { key: "agents", label: "Limits", group: "Agents" },
-  { key: "observability", label: "Observability", group: "Agents" },
   { key: "areas", label: "Areas" },
   { key: "github", label: "GitHub", group: "Integrations" },
   { key: "linear", label: "Linear", group: "Integrations" },
@@ -183,7 +181,6 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
           a self-hosted Slack tab never waits on it; a cloud cell swaps to its panel once it does. */}
       {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} title="Slack" />
         : <SlackSelfHostedPanels />)}
-      {tab === "observability" && <TracingPanel title="Agent tracing" intro />}
       {tab === "advanced" && <AdvancedPanel />}
       </div>
       </div>

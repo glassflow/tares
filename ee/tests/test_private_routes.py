@@ -192,11 +192,6 @@ async def main():
             ck("the system credential sees it whole", "hidden" not in next(p for p in lst if p["id"] == uid))
 
             print("== naming it ==")
-            r = await cx.get(f"{B}/api/triggers", headers=B_, params={"project": "Secret"})
-            ck("by name, to a stranger, it is as unknown as a name that does not exist",
-               r.status_code == (await cx.get(f"{B}/api/triggers", headers=B_,
-                                              params={"project": "No such"})).status_code, f"{r.status_code} {r.text[:100]}")
-
             for ref, what in (("Secret", "by name"), (uid, "by id")):
                 r = await cx.post(f"{B}/api/keys", headers=B_, json={"name": "peek", "project": ref})
                 nope = await cx.post(f"{B}/api/keys", headers=B_, json={"name": "peek", "project": "No such"})

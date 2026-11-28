@@ -99,12 +99,12 @@ async def main():
 
     print("== a new cell with the var gets the demo ==")
     fresh()
-    proc, up = await boot(daemon_env(sp, "challenger_workflow"))
+    proc, up = await boot(daemon_env(sp, "custom"))
     try:
         ck("daemon up", up)
         async with httpx.AsyncClient(timeout=20) as cx:
             got = await projects(cx)
-            ck("the demo is there", len(got) == 1 and got[0]["template"] == "challenger_workflow",
+            ck("the demo is there", len(got) == 1 and got[0]["template"] == "custom",
                json.dumps(got)[:200])
     finally:
         stop(proc)
@@ -121,7 +121,7 @@ async def main():
     finally:
         stop(proc)
     for n in (1, 2):
-        proc, up = await boot(daemon_env(sp, "challenger_workflow"))   # the var appears on an upgrade
+        proc, up = await boot(daemon_env(sp, "custom"))   # the var appears on an upgrade
         try:
             ck(f"daemon up with the var (boot {n})", up)
             async with httpx.AsyncClient(timeout=20) as cx:
@@ -132,7 +132,7 @@ async def main():
             stop(proc)
 
     print("== the skip is recorded: deleting the project later does not bring the demo ==")
-    proc, up = await boot(daemon_env(sp, "challenger_workflow"))
+    proc, up = await boot(daemon_env(sp, "custom"))
     try:
         async with httpx.AsyncClient(timeout=20) as cx:
             got = await projects(cx)
@@ -140,7 +140,7 @@ async def main():
             ck("deleted its project", r.status_code == 200, r.text[:200])
     finally:
         stop(proc)
-    proc, up = await boot(daemon_env(sp, "challenger_workflow"))
+    proc, up = await boot(daemon_env(sp, "custom"))
     try:
         async with httpx.AsyncClient(timeout=20) as cx:
             ck("still no demo", await projects(cx) == [])

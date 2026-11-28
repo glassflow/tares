@@ -23,7 +23,6 @@ from fastapi import Body, Request
 from .. import edition as edition_mod
 from .. import linear as linear_mod
 from .. import providers as providers_mod
-from .. import builtin_agents
 from .. import factory_tools
 from ..envelope import now_utc
 from ..factory_home import _count, _dt, _how_far, for_caller, plain_ago
@@ -115,12 +114,10 @@ def register(app, store, h, ctx):
         default = next((p for p in listing.get("providers") or []
                         if p.get("id") == listing.get("default") and p.get("configured")), None)
         spent = ((safe(store.model_usage_summary, {}) or {}).get("total") or {}).get("cost_usd")
-        cap = safe(lambda: builtin_agents.daily_cap(store)[0], None)
-        limit = f"Each agent may start up to {_count(cap, 'time')} a day." if cap else ""
         if isinstance(spent, (int, float)) and spent >= 0.005:
-            budget = f"${spent:,.2f} spent so far. {limit}".strip()
+            budget = f"${spent:,.2f} spent so far."
         else:
-            budget = f"No budget set. {limit}".strip()
+            budget = "No budget set."
         return {"default_provider": _text(default["name"]) if default else "Not chosen yet",
                 "chosen": default is not None, "budget_text": budget}
 

@@ -17,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 
 from .config import agent_url, parse_duration, trigger_entity_label
 from .connectors import SPECS
-from .store import day_month_words
 from . import timeline as _timeline
 
 GOAL_MAX = 200
@@ -1249,22 +1248,8 @@ def _root_of(store, run: dict, uid: str | None = None) -> tuple | None:
 
 
 def _firing_value(store, trig, fired: dict):
-    """The condition's value for the firing's entity over the window that ended when it fired,
-    or None when it cannot be told (the trigger changed, the events are gone)."""
-    from .triggers import _fire_key, _group_by
-    c = trig.condition
-    try:
-        at = _aware(fired["fired_at"])
-        since = at - timedelta(seconds=parse_duration(c.window))
-        group_by = _group_by(c)
-        per = store.aggregate(trig.sources, c.field, c.aggregate, since, filters=trig.filters,
-                              group_by=group_by, until=at + timedelta(seconds=1))
-    except Exception:
-        return None
-    for grp, value in per.items():
-        grp = grp if isinstance(grp, tuple) else (grp,)
-        if _fire_key(group_by, list(grp)) == fired.get("key"):
-            return value
+    """The condition's value for the firing's entity: no longer told, since triggers stopped
+    being evaluated (TR-1810). Old firings read as their trigger's description."""
     return None
 
 
@@ -1373,7 +1358,6 @@ def result_detail(store, catalog, uid: str, run_id: str, scheduled: set | None =
 # ── health ───────────────────────────────────────────────────────────────────
 def project_health(store, catalog, uid: str, project: dict, runtime_health: dict | None = None,
                    now=None) -> dict:
-    from .builtin_agents import effective_daily_cap, next_run_words
     from . import providers
     now = now or datetime.now(timezone.utc)
     parts = _parts(store, catalog, uid)
@@ -1427,34 +1411,7 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
             errors.append({"severity": "warning",
                            "message": f"Nothing has arrived on {n} for {span_words(age)}.",
                            "fix": "Check the connection", "view": f"source:{n}"})
-    capped = []
-    for a in ready:
-        cap, src = effective_daily_cap(a, store)
-        if store.agent_runs_today(a["name"], include_practice=False) >= cap:
-            capped.append(a["name"])
-            wait = next_run_words(store.agent_cap_frees_at(a["name"], cap, include_practice=False),
-                                  now)
-            issue = {"severity": "warning",
-                     "message": f"{a['name']} reached its limit of {_plural(cap, 'run')} "
-                                "a day, so it does not run until its earlier runs are a "
-                                f"day old{'; ' + wait if wait else ''}.",
-                     "fix": "Raise the limit", "view": f"agent:{a['name']}"}
-            if src != "agent":   # the instance-wide cap is a console setting (Settings, Limits)
-                issue.update(view="settings:agents", agent=a["name"])
-            warnings.append(issue)
-            continue
-        budget = a.get("budget_usd")
-        if budget and store.agent_budget_spend(a, now) >= float(budget):
-            capped.append(a["name"])
-            if a.get("budget_period") == "month":
-                words = (f"{a['name']} used its ${float(budget):.2f} budget for this month, so it "
-                         f"does not run again until {day_month_words(store.budget_resets_on(a, now))}"
-                         " or until the budget is raised.")
-            else:
-                words = (f"{a['name']} used its budget of ${float(budget):.2f}, so "
-                         "it does not run until the budget is raised.")
-            warnings.append({"severity": "warning", "message": words,
-                             "fix": "Raise the budget", "view": f"agent:{a['name']}"})
+    capped: list = []   # agent runs stopped (TR-1810): no daily cap or budget to reach
     for n, st in states.items():
         mode = SPECS.get(sources[n].connector, {}).get("mode")
         if st["state"] == "waiting" and mode == "push":

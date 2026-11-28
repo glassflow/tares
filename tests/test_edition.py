@@ -174,7 +174,7 @@ def stop(proc):
 
 async def seeding_order():
     print("== a seeded empty cell is not settled as platform ==")
-    proc = start(tempfile.mkdtemp(), TARES_SEED_PROJECT="challenger_workflow")
+    proc = start(tempfile.mkdtemp(), TARES_SEED_PROJECT="custom")
     try:
         async with httpx.AsyncClient(timeout=10) as cx:
             await wait_up(cx)

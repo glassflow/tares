@@ -3023,7 +3023,7 @@ class FactoryStore:
 
     def _set_monitoring(self, name: str, settings: dict | None, secret: set | None, by: str) -> dict:
         """Monitoring off, Rius and OTLP live in the tracing settings, the one storage the old
-        /api/settings/tracing route also writes (TR-866). A secret left blank keeps the stored one
+        /api/settings/tracing route also wrote (TR-866; the route went in TR-1810). A secret left blank keeps the stored one
         while the provider stays the same; another provider starts from nothing. Any choice row an
         earlier version kept for the slot is dropped, so the two never disagree."""
         from .integrations.builtin import monitoring_tares as mon

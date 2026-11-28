@@ -267,9 +267,6 @@ async def event_reads(app, world, who) -> dict:
             out[f"events {src}"] = (await cx.get(f"/api/sources/{src}/events",
                                                  params={"limit": 200})).text
         out["fields evts"] = (await cx.get("/api/sources/evts/fields")).text
-        out["entities"] = (await cx.get("/api/entities", params={"limit": 50})).text
-        out["entities tares_project"] = (await cx.get(
-            "/api/entities", params={"label": "tares_project", "limit": 200})).text
         out["describe evts"] = (await cx.get("/catalog/source:evts")).text
         out["describe claude_code"] = (await cx.get("/catalog/source:claude_code")).text
         out["describe solo"] = (await cx.get("/catalog/source:solo")).text

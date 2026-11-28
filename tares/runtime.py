@@ -16,7 +16,6 @@ from .config import Catalog, SourceCfg, catalog_from_db
 from .connectors import REGISTRY, SPECS, build_connector
 from .envelope import now_utc
 from . import metrics
-from .triggers import clear_cooldowns, eval_triggers
 
 # Catalog sources of an older cell that the integrations sync themselves now (TR-1806): never polled.
 SYNCED_BY_INTEGRATIONS = frozenset({"linear", "github_issues"})
@@ -41,20 +40,17 @@ class SourceRuntime:
 
 
 class Runtime:
-    def __init__(self, store, dispatcher):
+    def __init__(self, store):
         self.store = store
         # Set by the daemon: returns a reason while ingest is paused for storage, else None.
         # Poll connectors skip their fetch while it is set, so a full disk stops growth from
         # every direction, not only the push endpoints.
         self.storage_full = None
-        self.dispatcher = dispatcher
         self.catalog: Catalog = catalog_from_db(store)
         # reload_catalog numbers each read, so a reload that read earlier never replaces a later one
         self._reload_lock = threading.Lock()
         self._reload_seq = self._applied_seq = 0
         self.sources: dict[str, SourceRuntime] = {}
-        # {trigger_name: last_eval_datetime} — debounces trigger re-evaluation across ingest ticks.
-        self._trigger_eval_at: dict = {}
         # {source: deliveries refused for a bad or missing signature since start}
         self.rejected_deliveries: dict[str, int] = {}
         # Functions `fn(source_name, envelopes)` called, on the event loop, for every batch of
@@ -69,8 +65,6 @@ class Runtime:
             self._start(cfg)
 
     def shutdown(self) -> None:
-        from .triggers import cancel_catchups
-        cancel_catchups()
         for rt in self.sources.values():
             if rt.task:
                 rt.task.cancel()
@@ -109,12 +103,7 @@ class Runtime:
 
     def _prime_metrics(self) -> None:
         """Every counter's label set at zero for what the catalog holds now (see metrics.prime)."""
-        try:
-            agents = [a["name"] for a in self.store.list_catalog_agents()]
-        except Exception:
-            agents = []
-        metrics.prime(sources=list(self.catalog.sources), triggers=[t.name for t in self.catalog.triggers],
-                      agents=agents)
+        metrics.prime(sources=list(self.catalog.sources))
 
     def _stop(self, name: str) -> None:
         rt = self.sources.pop(name, None)
@@ -145,10 +134,6 @@ class Runtime:
                 metrics.poll(rt.cfg.name, "ok")
                 metrics.source_state(rt.cfg.name, "ok")
                 metrics.events_ingested(rt.cfg.name, len(envelopes))
-                if envelopes:
-                    await eval_triggers(self.store, self.catalog, self.dispatcher,
-                                        affected_sources={rt.cfg.name},
-                                        eval_state=self._trigger_eval_at)
             except Exception as e:  # never let one source kill the loop
                 # some exceptions (timeouts, a few connection errors) have an empty str() — always
                 # surface the type (and repr as a fallback) so the error is never a blank line.
@@ -173,30 +158,22 @@ class Runtime:
             self._reload_seq += 1
             seq = self._reload_seq
         new = catalog_from_db(self.store)
-        try:
-            agents = [a["name"] for a in self.store.list_catalog_agents()]
-        except Exception:
-            agents = []
         # the reading above runs wherever the caller is (a request handler's worker thread); only
         # swapping the catalog and starting or stopping poll tasks happens on the loop
         try:
-            loop_mod.on_loop(self._apply_catalog, new, seq, agents)
+            loop_mod.on_loop(self._apply_catalog, new, seq)
         except concurrent.futures.TimeoutError:
             # the loop is busy: the swap still runs when it frees up, so the change stands
             print("taresd: the catalog reload is waiting for a busy event loop; it applies shortly")
 
-    def _apply_catalog(self, new: Catalog, seq: int = 0, agents: list | None = None) -> None:
+    def _apply_catalog(self, new: Catalog, seq: int = 0) -> None:
         # two reloads read at once can arrive in either order: keep the one that read last
         if seq and seq < self._applied_seq:
             return
         self._applied_seq = max(self._applied_seq, seq)
         old_sources = self.catalog.sources
         self.catalog = new
-        if agents is None:
-            self._prime_metrics()
-        else:
-            metrics.prime(sources=list(new.sources), triggers=[t.name for t in new.triggers],
-                          agents=agents)
+        self._prime_metrics()
 
         for name in set(old_sources) - set(new.sources):
             self._stop(name)
@@ -247,11 +224,8 @@ class Runtime:
             raise ValueError(f"source {cfg.name!r} is paused")
         return cfg
 
-    async def _store_envelopes(self, source_name: str, envelopes: list,
-                               bypass_cooldown: bool = False) -> int:
-        """Append envelopes, update health, fire triggers — the common ingest tail.
-        `bypass_cooldown` forgets the cooldown for the keys these envelopes fire under, so the
-        evaluation below fires for a key that is still cooling down."""
+    async def _store_envelopes(self, source_name: str, envelopes: list) -> int:
+        """Append envelopes, update health and tell the listeners: the common ingest tail."""
         await asyncio.to_thread(self.store.append, envelopes)    # off the loop, like a poll's
         rt = self.sources.get(source_name)
         if rt:
@@ -271,14 +245,6 @@ class Runtime:
                     listener(source_name, envelopes)
                 except Exception as e:   # noqa: BLE001  (a listener must not fail the ingest)
                     print(f"taresd: an envelope listener failed: {type(e).__name__}")
-        if envelopes:
-            if bypass_cooldown:
-                # Synchronous, and no await between it and the evaluation: on the single event
-                # loop nothing else can consume the cleared state first.
-                clear_cooldowns(self.store, self.catalog, source_name, envelopes)
-            await eval_triggers(self.store, self.catalog, self.dispatcher,
-                                affected_sources={source_name},
-                                eval_state=self._trigger_eval_at)
         return len(envelopes)
 
     def _ensure_push_wins(self, cfg) -> None:
@@ -317,7 +283,7 @@ class Runtime:
         self.rejected_deliveries[source] = self.rejected_deliveries.get(source, 0) + 1
         print(f"taresd: refused a delivery to {source!r}: {reason}")
 
-    async def ingest(self, token: str, payload, bypass_cooldown: bool = False,
+    async def ingest(self, token: str, payload,
                      headers: dict | None = None, stamp_person: bool = False,
                      person_id: str | None = None) -> int:
         """Push events into a source. `stamp_person` is set by the HTTP route, which knows the
@@ -337,7 +303,7 @@ class Runtime:
             for e in envs:
                 if person_id:
                     e.labels["tares_person"] = person_id
-        return await self._store_envelopes(cfg.name, envs, bypass_cooldown=bypass_cooldown)
+        return await self._store_envelopes(cfg.name, envs)
 
     async def ingest_otlp(self, source_name: str, signal: str, body) -> int:
         cfg = self._push_cfg(source_name)

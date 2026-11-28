@@ -10,7 +10,6 @@ from .base import PlannedObject, Template, ProjectError
 from .engine import Engine
 from .registry import get_template, list_templates, register
 from . import shared_code_context as _shared_code_context  # noqa: F401  (registers itself)
-from . import challenger_workflow as _challenger_workflow  # noqa: F401  (registers itself)
 from . import custom as _custom  # noqa: F401  (registers itself)
 from . import rius_rca as _rius_rca  # noqa: F401  (registers itself)
 

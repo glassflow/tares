@@ -15,7 +15,7 @@ from __future__ import annotations
 import traceback
 import uuid
 
-from .. import skills as _skills
+from ..config import SkillError, validate_skill
 from ..config import CatalogError, agent_url, import_catalog_dict
 from ..goal import normalize_goal
 from .base import PlannedObject, ProjectError
@@ -606,9 +606,9 @@ class Engine:
         for o in plan:
             if o.kind == "skill":
                 try:
-                    skills.append((o, _skills.validate(o.name, o.spec.get("description"),
+                    skills.append((o, validate_skill(o.name, o.spec.get("description"),
                                                        o.spec.get("body"))))
-                except _skills.SkillError as e:
+                except SkillError as e:
                     raise ProjectError(str(e)) from e
         plan = [o for o in plan if o.kind != "skill"]
         doc: dict = {}

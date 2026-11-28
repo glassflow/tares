@@ -2,9 +2,8 @@
 
 The tracing settings (`tracing_enabled`, `tracing_provider`, `tracing_endpoint`,
 `tracing_api_key`, `tracing_headers`, with their `TARES_TRACING_*` environment fallbacks) stay
-the only storage. `tares.tracing.resolve` reads them for the cell's own agent traces, and
-`/api/settings/tracing` writes them. The slot reads and writes the same keys, so choosing a
-monitoring integration through the integrations API and through the old route never disagree.
+the only storage; the slot reads and writes them (the cell's own agent traces and the old
+`/api/settings/tracing` route that also wrote them went in TR-1810).
 The store hands the monitoring slot's writes to `save` and its stored settings to `stored`.
 
 A crew station's Claude Code sessions report to the same backend. `station_env` gives the
@@ -93,8 +92,8 @@ def save(store, name: str, merged: dict) -> None:
     nothing typed again. Rius and OTLP write the provider and the values their own settings have
     (an empty one clears the stored value, the environment's takes over again) and switch tracing
     on. A value the integration has no setting for, such as the headers of a Rius choice that were
-    set on /api/settings/tracing, is left as it is while the provider stays the same. When the
-    provider changes it is cleared: tracing.resolve reads every stored key whatever the provider,
+    set by an older cell's /api/settings/tracing, is left as it is while the provider stays the
+    same. When the provider changes it is cleared: every stored key is read whatever the provider,
     so the old backend's headers would go to the new one, and the new integration's view cannot
     show or clear them."""
     if name == "off":

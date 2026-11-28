@@ -27,9 +27,16 @@ from urllib.parse import urlsplit
 
 from .config import API_BASE
 
-# The cell's default model on Anthropic (TARES_AGENT_MODEL), and the Anthropic models offered when a
-# provider lists none. Moved here from builtin_agents (TR-1808), which imports them from here.
-MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
+# The cell's default model on Anthropic (TARES_MODEL, or TARES_AGENT_MODEL, its old name), and the
+# Anthropic models offered when a provider lists none.
+MODEL_ENV, MODEL_ENV_OLD = "TARES_MODEL", "TARES_AGENT_MODEL"
+
+
+def _model_env() -> str:
+    return os.getenv(MODEL_ENV, "").strip() or os.getenv(MODEL_ENV_OLD, "").strip()
+
+
+MODEL = _model_env() or "claude-sonnet-4-6"
 AGENT_MODELS = list(dict.fromkeys(
     [MODEL, "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]))
 from .models import AnthropicProvider, OpenAIProvider, Provider
@@ -484,7 +491,7 @@ def entry(store, provider_id: str) -> dict | None:
 
 
 def default_model_for(store, provider_id: str | None) -> str:
-    """The model an agent runs on when it names none: TARES_AGENT_MODEL on Anthropic (and on the
+    """The model a summary runs on: TARES_MODEL (or TARES_AGENT_MODEL) on Anthropic (and on the
     cell default, when the variable is set on purpose); on OpenAI the first of OPENAI_MODELS the
     key can use; on xAI XAI_MODELS["default"]; else the first model the provider lists. Empty when a router lists nothing yet:
     the agent must then name one."""
@@ -492,7 +499,7 @@ def default_model_for(store, provider_id: str | None) -> str:
     e = entry(store, pid) if pid else None
     if e is None or e["kind"] == "anthropic":
         return MODEL
-    if os.getenv("TARES_AGENT_MODEL", "").strip() and pid == default_id(store):
+    if _model_env() and pid == default_id(store):
         return MODEL
     models = models_for(e)
     if e["kind"] == "openai":
@@ -516,21 +523,3 @@ def small_model_for(store, provider_id: str | None) -> str:
 
 def _is_xai(e: dict) -> bool:
     return e.get("kind") == "openai_compatible" and "api.x.ai" in (e.get("base_url") or "")
-
-
-def resolve_for_agent(store, agent: dict) -> tuple[Provider | None, str, str | None, str]:
-    """(provider, credential origin, provider id, note) for one agent. The agent's own provider
-    when it names one that is configured; else the cell default, with a note saying why, so a
-    template that names a provider this cell lacks still runs instead of failing (TR-302)."""
-    want = (agent.get("provider") or "").strip()
-    if want:
-        e = entry(store, want)
-        if e is not None and _configured(e):
-            return build(e), e.get("source") or "", want, ""
-        why = ("is not configured" if e is not None else "does not exist")
-    pid = default_id(store)
-    if not pid:
-        return None, "", None, ""
-    e = entry(store, pid)
-    note = f"provider {want!r} {why}; ran on the default ({pid})" if want else ""
-    return build(e), e.get("source") or "", pid, note

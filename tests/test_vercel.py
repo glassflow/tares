@@ -42,6 +42,14 @@ ck("vercel is schema-backed", full_schema("vercel") is not None)
 
 # --- ingest end to end through the daemon ---
 from tares.daemon import make_app
+
+def label_counts(app, source, label):
+    """{value: lines} for one label of a source, over all time (the entity listing went, TR-1810)."""
+    from datetime import datetime, timezone
+    return app.state.store.aggregate([source], None, "count", datetime(2000, 1, 1, tzinfo=timezone.utc),
+                                     group_by=label)
+
+
 async def main():
     app = make_app()
     async with app.router.lifespan_context(app):
@@ -49,18 +57,15 @@ async def main():
         await cx.post("/api/sources", json={"name": "vercel", "connector": "vercel", "config": {"labels": LABELS}})
         r = await cx.post("/ingest/vercel", json=ENTRIES)
         ck("POST /ingest/vercel -> 202", r.status_code == 202 and r.json()["ingested"] == 2, r.text)
-        facets = {f["label"]: f for f in (await cx.get("/api/entities")).json()["labels"]}
-        ck("project is the primary facet", facets.get("project", {}).get("primary") is True, str(list(facets)))
-        pv = {v["value"]: v["events"] for v in facets["project"]["values"]}
-        ck("per-project entities my-app + prj_x", pv == {"my-app": 1, "prj_x": 1}, str(pv))
+        pv = label_counts(app, "vercel", "project")
+        ck("per-project lines my-app + prj_x", pv == {"my-app": 1, "prj_x": 1}, str(pv))
 
         # editing a source is going-forward only (no inline backfill). `project` is synthesized at
         # ingest via label_context, so it stays on the already-stored events across an edit.
         r = await cx.put("/api/sources/vercel",
                          json={"name": "vercel", "connector": "vercel", "config": {"labels": LABELS}})
         ck("PUT source -> 200, no inline relabel", r.status_code == 200 and r.json().get("relabeled") is False, r.text)
-        facets2 = {f["label"]: f for f in (await cx.get("/api/entities")).json()["labels"]}
-        pv2 = {v["value"]: v["events"] for v in facets2.get("project", {}).get("values", [])}
+        pv2 = label_counts(app, "vercel", "project")
         ck("synthesized project persists across an edit", pv2 == {"my-app": 1, "prj_x": 1}, str(pv2))
 
         # field profile: make the connector's normalized structure visible + honest about coverage.
