@@ -36,7 +36,7 @@ def ago(**kw):
 
 def project(name, level="L4-ship", kind="software_factory"):
     uid = f"uc_{name.replace('-', '')}"
-    store.create_project(uid, "custom", name, {}, goal="A project for the merge queue page.")
+    store.create_project(uid, name, goal="A project for the merge queue page.")
     store.set_project_kind(uid, kind)
     store.set_handover(uid, [{"path": "/w/a", "name": name}], level, None, now_utc(), person_id=lee["id"])
     ids[name] = uid
