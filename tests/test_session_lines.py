@@ -28,7 +28,7 @@ from alembic import command  # noqa: E402
 from sqlalchemy import func, inspect, select, text  # noqa: E402
 
 from tares import metrics, session_archive, session_ingest, session_read  # noqa: E402
-from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
+from tares.session_map import ClaudeCodeLines  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_archive import FileBackend  # noqa: E402
@@ -38,7 +38,7 @@ from tares.store import Store  # noqa: E402
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
-HEAD = "0025_integration_keys_pr_events"
+HEAD = "0026_drop_catalog_sources"
 SRC = "claude_code"
 _N = [0]
 
@@ -162,12 +162,10 @@ def revision():
 def lines_in_both():
     print("== a line is in both stores after Store.append ==")
     s = open_store()
-    s.upsert_catalog_source("plain", "claude_code", "claude_code", "", {})
-    s.upsert_catalog_source("open", "claude_code", "claude_code", "", {"redact": False, "include_thinking": True})
     batch = [line("a", "user", {"uuid": "k1", "message": {"content": "hi"}}, {"tares_person": "ann"}),
              line("a", "assistant", {"uuid": "k2"}), line("a", "tool_use", {"x": 1}),
-             line("b", "user", {"uuid": "kb", "text": "é ✓ \u0000 nul"}, source="open"),
-             line("c", "assistant", {}, source="plain")]
+             line("b", "user", {"uuid": "kb", "text": "é ✓ \u0000 nul"}),
+             line("c", "assistant", {})]
     s.append(batch)
     a, b, c = stored(s, "a"), stored(s, "b"), stored(s, "c")
     ck("every line is in session_lines, numbered from 1 in order", [r[0] for r in a] == [1, 2, 3]
@@ -182,11 +180,9 @@ def lines_in_both():
     ck("a NUL byte and non-ASCII text keep their meaning", json.loads(b[0][6])["text"] == "é ✓ \u0000 nul")
     ck("the non-ASCII payload is the same text DuckDB stores, character for character",
        b[0][6] == duck(s, "b")[0][2] and b[0][6].isascii(), (b[0][6], duck(s, "b")))
-    ck("the render flags are the connector's defaults for a source with no setting",
-       json.loads(a[0][5]) == {"include_thinking": False, "redact": True}
-       and json.loads(c[0][5]) == {"include_thinking": False, "redact": True}, (a[0][5], c[0][5]))
-    ck("and the source's own setting when it has one", json.loads(b[0][5]) == {
-        "include_thinking": True, "redact": False}, b[0][5])
+    ck("the render flags are the intake's defaults (no source catalog holds others, TR-1811)",
+       all(json.loads(x[0][5]) == {"include_thinking": False, "redact": True} for x in (a, b, c)),
+       (a[0][5], b[0][5], c[0][5]))
     ck("the empty payload is stored as {}", c[0][6] == "{}", c[0][6])
     ck("sessions.line_count agrees with the rows", row(s, "a")[0] == 3 and row(s, "b")[0] == 1)
     s.append([line("a", "assistant", {"uuid": "k9"}), line("a", "user", {"uuid": "k10"})])
@@ -314,17 +310,6 @@ def concurrent_appends():
 
 
 def purge_and_gauges():
-    print("== purging a source ==")
-    s = open_store()
-    s.upsert_catalog_source("laptop", "claude_code", "claude_code", "", {})
-    s.append([line("p", "user", {"uuid": "p1"}, source="laptop"), line("keep", "user", {"uuid": "k1"})])
-    s.purge_events("laptop")
-    ck("the purged source's lines are gone from session_lines", stored(s, "p") == [])
-    ck("another source's lines stay", len(stored(s, "keep")) == 1)
-    s.append([line("p", "user", {"uuid": "p1"}, source="laptop")])
-    ck("a re-ship starts at 1 again, without a clash", [r[0] for r in stored(s, "p")] == [1], stored(s, "p"))
-    s.close()
-
     print("== the size gauges ==")
     s = open_store()
     s.append([line("z", "user", {"uuid": f"z{i}"}) for i in range(7)])
@@ -420,8 +405,9 @@ def raw(session, kind, seq, **kw):
 
 def envelopes(source, lines, config=None):
     """What the claude_code connector makes of raw lines, the way ingest does (text, labels, payload)."""
-    c = ClaudeCodeConnector(type("Cfg", (), {"name": source, "type": "claude_code", "config": config or {}})(),
-                            store=None)
+    cfg = config or {}
+    c = ClaudeCodeLines(None, source=source, source_type="claude_code", redact=cfg.get("redact", True),
+                        include_thinking=cfg.get("include_thinking", False))
     out = []
     for r in lines:
         out += c.map_payload(r)
@@ -522,20 +508,14 @@ def tool_equal(s, session, tool_id, source=SRC):
 def reads():
     print("== a session whose lines are complete is read from the table, with DuckDB's answer ==")
     s = open_store()
-    s.upsert_catalog_source("open", "claude_code", "claude_code", "", {"redact": False, "include_thinking": True})
     make_session(s, "t1")
     make_session(s, "t2", n=3)
-    make_session(s, "o1", config={"redact": False, "include_thinking": True}, source="open")
-    ck("the lines are complete", row(s, "t1") == (6, True) and row(s, "o1") == (6, True), (row(s, "t1"), row(s, "o1")))
+    ck("the lines are complete", row(s, "t1") == (6, True), row(s, "t1"))
     ck("the three readers answer what DuckDB answers, whole and by page", reads_equal(s, "t1", label="t1"))
-    ck("a source with redact off and thinking on is read the same way", reads_equal(s, "o1", "open", "o1"))
     ev, where = s.key_events_from(SRC, "t1")
     ck("lines_from says table", where == "table" and s.key_payload_rows_from(SRC, "t1")[1] == "table", where)
     ck("the secret is hidden in the text, and the thinking is left out",
        SECRET not in json.dumps(ev, default=str) and not any("private reasoning" in e["text"] for e in ev), ev[:1])
-    ov, _ = s.key_events_from("open", "o1")
-    ck("a source with redact off shows the secret in the text, and thinking", any(SECRET in e["text"] for e in ov)
-       and any("private reasoning" in e["text"] for e in ov), [e["text"][:40] for e in ov])
     ck("the long turn is cut at the same length DuckDB cut it", any(len(e["text"]) > 500 for e in ev)
        and reads_equal(s, "t1"), [len(e["text"]) for e in ev])
     ok, want = tool_equal(s, "t1", "toolu_t1")

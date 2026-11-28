@@ -9,17 +9,16 @@ value written here is made up (a project is "Lantern billing", a person "Ada Qui
 NOW, so two runs write the same rows.
 
 What it makes, in the order it runs (each group prints its seconds):
-  people and crews       people, keys, crews, grants, members, connections, the catalog
+  people and crews       people, keys, crews, grants, members, connections
   projects               projects (one through the Store API), their objects and log, hand-overs
   tickets                milestones, tickets with their history, checks and milestone checks
   the desk               desk items, decisions, assumptions, answers, spec questions
   reviews                reviews, findings, rule proposals, the merge queue
   docs                   docs and the links that put them in projects
-  brain and usage        brain repos and calls, repo maps, model usage, the query log
+  brain and usage        brain repos and calls, repo maps, model usage
   events                 300 session lines through `Store.append`, the rest as one INSERT ... SELECT
                          (DuckDB writes a million rows in seconds; row by row it would take an hour)
   sessions               the sessions database: sessions, lines, facts, stations, states, usage
-  event counts           source_stats (entity counts went in TR-1810)
 
 Rows go in with `executemany` (state tables) or SQLAlchemy Core `insert()` (the sessions database),
 never one Store call per row: only the first project, its three tickets, one review, one desk item
@@ -40,36 +39,37 @@ NOW = datetime(2026, 11, 24, 10, 0, tzinfo=timezone.utc)
 SEED = 1124
 
 # Row counts of a real factory cell, 2026-11-24. Tables that held no rows are in "zero" and are not
-# seeded (the store makes the 2 metadata tables itself).
+# seeded (the store makes the 2 metadata tables itself). The tables of the source catalog, the query
+# log, Ask, triggers and agents are left out: Tares 2.0 makes none of them (TR-1810, TR-1811), and the
+# usecase_objects rows that named a source, a trigger or an agent with them.
 SHAPE = {
     "date": "2026-11-24",
     "tables": {
-        "answers": 20, "api_keys": 37, "ask_sessions": 1, "assumptions": 323, "brain_calls": 19,
-        "brain_repo_updates": 39, "brain_repos": 3, "catalog_agents": 1, "catalog_sources": 3,
-        "catalog_triggers": 1, "challenges": 2, "crews": 9, "decisions": 360, "desk_items": 415,
+        "answers": 20, "api_keys": 37, "assumptions": 323, "brain_calls": 19,
+        "brain_repo_updates": 39, "brain_repos": 3,
+        "challenges": 2, "crews": 9, "decisions": 360, "desk_items": 415,
         "docs": 899, "github_credentials": 2,
         "grants": 22, "handovers": 21, "integration_choices": 1, "integration_connections": 2,
         "merge_queue": 271, "milestone_check_results": 191, "milestones": 121, "model_usage": 20,
         "people": 5, "project_members": 4, "project_required_checks": 3, "project_sessions": 2270,
-        "project_wiring": 1, "query_log": 8, "repo_map_history": 50, "repo_maps": 7,
+        "repo_map_history": 50, "repo_maps": 7,
         "review_findings": 2762, "reviews": 1602, "rule_proposals": 25, "session_commands": 94023,
         "session_files": 2603, "session_ingest_marks": 4, "session_lines": 262977,
         "session_messages": 5150, "session_meters": 2050, "session_said": 6225,
         "session_states": 2123, "session_stations": 2091, "session_turns": 27918,
-        "session_usage": 219361, "sessions": 2145, "settings": 30, "source_stats": 3,
+        "session_usage": 219361, "sessions": 2145, "settings": 30,
         "spec_questions": 3, "ticket_checks": 4052, "ticket_history": 3387, "ticket_numbers": 29,
-        "tickets": 858, "usecase_log": 65, "usecase_objects": 1029, "usecases": 33, "waiting_told": 23,
+        "tickets": 858, "usecase_log": 65, "usecase_objects": 969, "usecases": 33, "waiting_told": 23,
     },
     # rows of `events` by source; the claude_code lines are the lines of the sessions
     "events": {"claude_code": 1413287, "github": 37215, "linear": 3540},
     "zero": [
-        "agent_runs", "brain_repo_folders", "cursors", "dispatch_deliveries", "dispatch_log",
-        "dispatch_projects", "finding_feedback", "guardrail_pairs", "guardrail_rules",
-        "handover_overrides", "incident_log", "incident_notes", "incidents", "mcp_servers",
+        "brain_repo_folders", "finding_feedback", "guardrail_pairs", "guardrail_rules",
+        "handover_overrides", "incident_log", "incident_notes", "incidents",
         "milestone_acceptances", "pending_memory", "pending_writeback", "project_integrations",
-        "project_merge_method", "project_secrets", "run_projects", "services",
+        "project_merge_method", "project_secrets", "services",
         "session_archive_parts", "session_store_copies", "shared_skills", "signoffs", "skills",
-        "subscriptions", "trigger_state", "watch_state",
+        "watch_state",
     ],
     # how the rows are cut, so the pages find the same mix of work as the real cell's
     "mix": {
@@ -93,7 +93,7 @@ SHAPE = {
                       "spec": 25, "memory": 16, "grants": 12, "personal_agents": 2,
                       "personal_memory": 1},
         "doc_links_beyond_first": 73,
-        "usecase_objects": {"doc": 969, "source": 58, "agent": 1, "trigger": 1},
+        "usecase_objects": {"doc": 969},
         "api_keys_with_person": 25,
         "stations": 120,
         "station_roles": {"builder": 547, "reviewer": 711, "releaser": 561, "orchestrator": 272},
@@ -457,8 +457,6 @@ class _Gen:
             # the project with no kind: the default one
             c.execute(update(projects_t).where(projects_t.c.id == self.projects[total - 1]["uid"]).values(
                 recipe="default", kind=None))
-        # objects, log
-        self.catalog_names = [f"seed-source-{k}" for k in range(self.shape["tables"]["catalog_sources"])]
 
     # ── tickets ────────────────────────────────────────────────────────────────────────────────
     def tickets_group(self):
@@ -881,12 +879,6 @@ class _Gen:
             uid, did, at = links[(k * 11) % len(links)]
             other = projects[(next(i for i, p in enumerate(projects) if p["uid"] == uid) + 1 + k) % len(projects)]
             orows.append([other["uid"], "doc", f"doc:{did}", did, False, at])
-        o = mix["usecase_objects"]
-        for k in range(o["source"]):
-            orows.append([projects[k % len(projects)]["uid"], "source", f"source:{self.catalog_names[k % 3]}",
-                          self.catalog_names[k % 3], False, NOW - timedelta(days=k % 50)])
-        orows.append([projects[0]["uid"], "agent", "agent:seed-agent", "seed-agent", False, NOW - timedelta(days=9)])
-        orows.append([projects[0]["uid"], "trigger", "trigger:seed-trigger", "seed-trigger", False, NOW - timedelta(days=9)])
         seen, uniq = set(), []
         for r in orows:
             if (r[0], r[1], r[2]) not in seen:
@@ -942,33 +934,11 @@ class _Gen:
         self.put_t("project_required_checks", "project, commands, updated_at, updated_by",
                  [[self.ticket_projects[k]["uid"], ["npm run lint", "python tests/test_cart.py"],
                    NOW - timedelta(days=k + 1), "Ada Quill"] for k in range(n)])
-        n = self.need("project_wiring")
-        self.put("project_wiring", "project, kind, trigger, agent, from_agent, verdict, cooldown, enabled, created_at",
-                 [[self.ticket_projects[0]["uid"], "trigger", "seed-trigger", "seed-agent", None, None, "10m", False,
-                   NOW - timedelta(days=9)] for _ in range(n)])
-
     # ── brain, usage and the small tables ──────────────────────────────────────────────────────
     def small_group(self):
         rng, st = self.rng, self.store
         pr = self.ticket_projects
         repos = sorted({t["repo"] for t in self.tickets})
-        n = self.need("catalog_sources")
-        self.put_t("catalog_sources", "name, type, connector, poll, config, paused, created_at, updated_at, ingest_key, "
-                                      "owned_by, customized",
-                 [[self.catalog_names[k], "poll", "claude_code", "5m", {}, True, NOW - timedelta(days=40),
-                   NOW - timedelta(days=40), None, None, False] for k in range(n)])
-        self.put("catalog_triggers", "name, sources, filters, key_field, condition, emit, cooldown, created_at, "
-                                     "updated_at, paused, owned_by, customized, description",
-                 [["seed-trigger", json.dumps([self.catalog_names[0]]), "[]", "key_value", "{}", "{}", "10m",
-                   NOW - timedelta(days=40), NOW - timedelta(days=40), True, None, False, "A trigger of the seed."]
-                  for _ in range(self.need("catalog_triggers"))])
-        self.put("catalog_agents", "name, trigger, prompt, slack_webhook, created_at, updated_at, model, slack_channel, "
-                                   "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, budget_period, "
-                                   "daily_cap, owned_by, customized, webhook_key_label, provider, handoffs, concludes, "
-                                   "github, verdicts",
-                 [["seed-agent", "seed-trigger", "Say what changed.", None, NOW - timedelta(days=40), NOW - timedelta(days=40),
-                   None, None, None, None, "[]", 5, None, None, 50, None, False, None, None, "[]", False, None, "[]"]
-                  for _ in range(self.need("catalog_agents"))])
         self.put_t("github_credentials", "name, kind, token, api_url, account, created_at, updated_at, config",
                  [[f"seed-github-{k}", "pat", "not-a-token", "https://api.github.com", "example-org",
                    NOW - timedelta(days=30), NOW - timedelta(days=30), "{}"] for k in range(self.need("github_credentials"))])
@@ -979,9 +949,6 @@ class _Gen:
         self.put_t("challenges", "source, key_value, event_time, event_type, branch, tares_project, payload",
                  [["github", f"example-org/x#{k}", NOW - timedelta(days=k + 1), "challenge", "main", pr[0]["uid"], "{}"]
                   for k in range(self.need("challenges"))])
-        self.put("ask_sessions", "id, title, state, created_at, updated_at, person_id",
-                 [[self.id("ask"), "A question about exports", "open", NOW - timedelta(days=2), NOW - timedelta(days=2),
-                   self.people[0]] for _ in range(self.need("ask_sessions"))])
         # the brain
         n = self.need("brain_repos")
         self.put_t("brain_repos", "repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
@@ -1010,9 +977,6 @@ class _Gen:
         self.put_t("model_usage", "id, ts, surface, agent, run_id, model, calls, input_tokens, output_tokens, "
                                   "cache_creation_input_tokens, cache_read_input_tokens, cost_usd, key_source, provider",
                    rows)
-        rows = [[self.id("ql"), "events", f"key-{k}", "1h", rng.randint(0, 50), "mcp", NOW - timedelta(hours=k * 9), None]
-                for k in range(self.need("query_log"))]
-        self.put("query_log", "id, scope, key_value, time_window, rows_returned, client, queried_at, project", rows)
 
     # ── events ─────────────────────────────────────────────────────────────────────────────────
     def events_group(self):
@@ -1315,17 +1279,10 @@ class _Gen:
             self._idx = {s["id"]: s for s in self.sessions}
         return self._idx
 
-    # ── event counts ───────────────────────────────────────────────────────────────────────────
-    def event_counts_group(self):
-        st = self.store
-        sh = self.shape
-        totals = {s: _events(st, s) for s in sh["events"]}
-        with st._lock:
-            con = st.con
-            for s, n in totals.items():
-                con.execute("INSERT INTO source_stats (source, events, last_ingest) VALUES (?, ?, ?) "
-                            "ON CONFLICT (source) DO UPDATE SET events = excluded.events, last_ingest = excluded.last_ingest",
-                            [s, n, NOW - timedelta(minutes=1)])
+    # ── the seed's own staging, dropped at the end ──────────────────────────────────────────────
+    def tidy_group(self):
+        with self.store._lock:
+            con = self.store.con
             for v in ("_seed_e", "_seed_l"):
                 con.execute(f"DROP VIEW IF EXISTS {v}")
             con.execute("DROP TABLE IF EXISTS _seed_s")
@@ -1401,7 +1358,7 @@ def seed(store, shape=SHAPE, log=print) -> dict:
                      ("tickets", g.tickets_group), ("the desk", g.desk_group), ("reviews", g.reviews_group),
                      ("docs and links", g.docs_group), ("brain and usage", g.small_group),
                      ("events", g.events_group), ("sessions", g.sessions_group),
-                     ("event counts", g.event_counts_group)):
+                     ("tidy", g.tidy_group)):
         t = time.time()
         fn()
         seconds[name] = time.time() - t

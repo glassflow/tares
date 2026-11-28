@@ -83,9 +83,8 @@ const userLine = (sid, text) => JSON.stringify({
 
   ck("daemon up", await waitFor(`${BASE}/health`));
   const rootH = { authorization: `Bearer ${ROOT}` };
-  let r = await call("POST", "/api/sources", { name: "claude_code", connector: "claude_code", poll: "10s", config: { push: true } }, rootH);
-  ck("the claude_code source is made", r.status < 300, r.body);
 
+  let r;
   const keys = {}, people = {};
   for (const [who, mail] of [["ashish", "ashish@example.com"], ["kiran", "kiran-test@example.com"]]) {
     r = await call("POST", "/api/keys", { name: `${who}-laptop`, scopes: ["admin"], person: { email: mail, name: who } }, rootH);
@@ -244,8 +243,6 @@ const userLine = (sid, text) => JSON.stringify({
       const plain = await startDaemon({ port: PORT + 2, dataDir: path.join(tmp, "plain"), edition: "platform", licence: "none", auth: ROOT });
       cells.push(plain);
       BASE = plain.base;
-      r = await call("POST", "/api/sources", { name: "claude_code", connector: "claude_code", poll: "10s", config: { push: true } }, rootH);
-      ck("the claude_code source is made (unlicensed)", r.status < 300, r.body);
       // without a licence a cell has one person: whoever holds the cell's own token
       const key = ROOT;
       const lines = [

@@ -46,9 +46,6 @@ async def seed(app) -> dict:
     store = app.state.store
     ids = {}
     async with reads.client(app, {}) as cx:
-        r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}})
-        assert r.status_code < 300, r.text
         for name in ("Atlas", "Zephyrvault"):
             r = await cx.post("/api/projects", json={"template": "custom", "name": name,
                                                      "objects": [], "kind": "software_factory"})

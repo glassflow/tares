@@ -33,7 +33,7 @@ const SHOTS = process.env.SHOTS_DIR;
 const TOKEN = "e2e-admin-token-settings";
 const SAMPLES = ["busy", "newc", "ro", "rel", "long", "many", "load", "err", "morning", "morningoff", "morningemail", "morningself", "morningblocked"];
 // The tools (GitHub, Linear, Slack, Claude Code) moved to Integrations; their old addresses go there.
-const GROUPS = ["Crew", "Models", "Team", "Workspace", "Advanced"];
+const GROUPS = ["Crew", "Models", "Team", "Workspace"];   // Advanced holds only Areas now, an enterprise item
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -623,20 +623,10 @@ const until = async (fn, tries = 40) => {
     await settle(page);
     await api(TOKEN, "PUT", "/api/settings/edition", { edition: "factory" });
 
-    // 9. Advanced has its own place in the sidebar
-    await go(page, "agent_tools");
-    ck("Advanced is open and lists its items", (await groupOpen(page)).join() === "Advanced" && (await page.getByTestId("nav-agent_tools").isVisible()));
-    for (const [id, href] of [["connections", "/sources"], ["explore", "/explore"], ["resources", "/resources"], ["connect", "/connect"], ["reads", "/reads"]]) {
-      await go(page, "agent_tools");
-      await page.getByTestId(`nav-${id}`).click();
-      await page.waitForURL((u) => u.pathname === href);
-      ck(`${id} reaches ${href}`, new URL(page.url()).pathname === href, page.url());
-    }
-
     // 10. the old addresses still land on the right item
     for (const [address, id] of [["/settings#crew", "crew"], ["/settings#models", "providers"], ["/settings?tab=anthropic", "providers"],
                                  ["/settings?tab=agents", "budget"], ["/settings?tab=access", "keys"],
-                                 ["/settings/advanced", "agent_tools"]]) {
+                                 ["/settings/advanced", "crew"]]) {
       await page.goto(`${BASE}${address}`, { waitUntil: "load" });
       await page.getByTestId(`pane-${id}`).waitFor();
       ck(`${address} lands on ${id}`, new URL(page.url()).pathname === "/settings", page.url());
@@ -695,7 +685,7 @@ const until = async (fn, tries = 40) => {
     }
 
     // 12b. a mid-size window: a wide table scrolls inside its card, not the page; a focused select
-    // keeps one chevron; a checkbox sits apart from its label
+    // keeps one chevron
     {
       const n = await newPage(1000);
       const p = n.page;
@@ -716,11 +706,6 @@ const until = async (fn, tries = 40) => {
         ck("a focused select draws its chevron once", rep === "no-repeat", rep);
         await m.ctx.close();
       }
-      await go(p, "agent_tools");
-      const box = p.locator('[data-testid="pane-agent_tools"] label.field input[type=checkbox]').first();
-      await box.waitFor();
-      const gap = await box.evaluate((e) => Math.round(e.nextElementSibling.getBoundingClientRect().left - e.getBoundingClientRect().right));
-      ck("the Agent tools checkbox sits apart from its label", gap >= 8, `${gap}px`);
       await n.ctx.close();
     }
 

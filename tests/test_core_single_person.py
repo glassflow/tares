@@ -146,9 +146,6 @@ async def one_person_cell():
         eq("two desk items were added", len(store.list_desk(None, None)), 2)
 
         print("== the trivial rows: mine is the unfiltered list on a cell of one ==")
-        r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}})
-        ck("the claude_code source is made", r.status_code < 300, r.text[:200])
         r = await cx.post("/ingest/claude_code", content=nd(
             station_lines("o-1", "crew-orchestrator", "orchestrator", "ready")
             + station_lines("r-1", "crew-reviewer", "reviewer", "reviewing")),

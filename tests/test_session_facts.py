@@ -260,7 +260,7 @@ def revision():
             kept = c.execute(select(session_commands.c.command).where(
                 session_commands.c.tool_use_id == "kept")).scalar()
         ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0025_integration_keys_pr_events"] and kept == "x", (v, kept))
+           v == ["0026_drop_catalog_sources"] and kept == "x", (v, kept))
         sdb.close()
     finally:
         if PG:
@@ -270,15 +270,14 @@ def revision():
 
 
 def codex():
-    """A Codex station's lines (TR-1595): what `tares.connectors.codex` makes of the recorder's facts, stored
+    """A Codex station's lines (TR-1595): what `tares.session_codex` makes of the recorder's facts, stored
     like any session line. A command's row is made at its start and takes its end from the item."""
-    from types import SimpleNamespace
 
-    from tares.connectors import codex as cell
-    from tares.connectors.claude_code import ClaudeCodeConnector
+    from tares import session_codex as cell
+    from tares.session_map import ClaudeCodeLines
     print("== a Codex station's commands (TR-1595) ==")
     s = open_store(tempfile.mkdtemp())
-    conn = ClaudeCodeConnector(SimpleNamespace(name=SRC, type="agent_session", config={}), s)
+    conn = ClaudeCodeLines(s, source=SRC, source_type="agent_session")
     ms = int(at(10).timestamp() * 1000)
 
     def fact(kind, **more):
@@ -477,16 +476,6 @@ def main():
     session_ingest.fill_facts(s)
     ck("the next fill writes it", [c["command"] for c in s.recorded_commands(SRC, ["sF"])] == ["echo f"])
 
-    print("== purging a source removes its facts ==")
-    s.purge_events(SRC)
-    with s.sessions_db.begin() as c:
-        left = (c.execute(select(func.count()).select_from(session_commands).where(
-                    session_commands.c.source == SRC)).scalar(),
-                c.execute(select(func.count()).select_from(session_messages).where(
-                    session_messages.c.source == SRC)).scalar())
-    ck("no command or message of the source is left", left == (0, 0), left)
-    ck("and the readers show none", s.protocol_messages(SRC) == []
-       and s.recorded_commands(SRC, ["sA", "sC", "sN", "sF"]) == [])
     s.con.close()
 
     print("== a resumed session repeats lines ==")

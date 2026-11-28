@@ -75,7 +75,6 @@ try:
     ] + [(f"Builders may delete the merged branch number {i} in example-org/service-a", {"scope": "all"}) for i in range(1, 7)]
     for words, scope in grants:
         call("/api/grants", {"words": words, **scope})
-    call("/api/sources", {"name": "claude-code", "type": "ingest", "connector": "claude_code", "config": {}})
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     r = urllib.request.Request(base + "/ingest/claude_code", (json.dumps(
         {"type": "user", "sessionId": "s1", "cwd": "/w", "timestamp": ts,

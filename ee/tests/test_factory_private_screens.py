@@ -125,8 +125,6 @@ async def main():
                                    "Atlas: write the docs page", [], now_utc())
 
         # Lee's crew has a builder on Vault
-        r = await call("root", "POST", "/api/sources", {"name": "claude_code", "connector": "claude_code",
-                                                         "poll": "10s", "config": {"push": True}})
         stamp = lambda m: (now_utc() - timedelta(minutes=m)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         lines = [{"type": "session_station", "sessionId": "l1", "cwd": "/w/crew", "timestamp": stamp(3),
                   "station": "zephyrvault-build-m1", "role": "builder", "parent": "",

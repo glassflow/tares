@@ -156,8 +156,6 @@ async def main() -> int:
             show("open_question", answered=len(await answered()),
                  open=len((await api("GET", "/api/desk?state=open"))["desk"]))
 
-            await api("POST", "/api/sources", {"name": "claude_code", "connector": "claude_code", "poll": "10s",
-                                               "config": {"push": True}})
             await user_says("Keep it, please")
             await api("POST", "/api/desk/D1/answer", {"words": "Keep it, please", "choice": "keep it"})
             show("answered", answered=len(await answered()))

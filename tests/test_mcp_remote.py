@@ -57,15 +57,12 @@ async def main():
                 ck("MCP client connected over HTTP + initialized", True)
 
                 names = {t.name for t in (await session.list_tools()).tools}
-                ck("read tools advertised over remote MCP", {"read", "catalog_list", "list_connectors"} <= names, str(sorted(names)))
-                ck("write tools present (not read-only)", "create_source" in names, str(sorted(names)))
+                ck("read tools advertised over remote MCP", {"list_projects", "list_tickets", "get_doc"} <= names, str(sorted(names)))
+                ck("write tools present (not read-only)", "write_ticket" in names, str(sorted(names)))
 
-                res = await session.call_tool("list_connectors", {})
+                res = await session.call_tool("list_projects", {})
                 text = res.content[0].text
-                ck("call_tool proxies to taresd over remote transport", "postgres" in text and "webhook" in text, text[:80])
-
-                cat = await session.call_tool("catalog_list", {})
-                ck("catalog_list reachable remotely", cat.content[0].text.strip().startswith(("{", "[")), cat.content[0].text[:60])
+                ck("call_tool proxies to taresd over remote transport", text.strip().startswith("["), text[:80])
 
         # Stateless: the server hands out no session id, and a request with no session works.
         # A kept session per client grew the cell's MCP sidecar until it was killed.
@@ -79,7 +76,7 @@ async def main():
                r.status_code == 200 and "mcp-session-id" not in r.headers, f"{r.status_code} {dict(r.headers)}")
             r = await cx.post(f"http://127.0.0.1:{MPORT}/mcp", headers=hdr,
                               json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-            ck("tools/list works with no session", r.status_code == 200 and "list_connectors" in r.text, f"{r.status_code} {r.text[:80]}")
+            ck("tools/list works with no session", r.status_code == 200 and "list_projects" in r.text, f"{r.status_code} {r.text[:80]}")
     finally:
         for proc in (mcpsrv, daemon):
             proc.send_signal(signal.SIGTERM)

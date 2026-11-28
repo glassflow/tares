@@ -111,7 +111,8 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Backend — tests
         run: |
-          pip install -e ".[postgres-state,archive-s3]"
+          # pyyaml: test-only (the workflow and changelog tests read YAML); tares itself reads none
+          pip install -e ".[postgres-state,archive-s3]" pyyaml
           if [ "${{ matrix.suite }}" = mit ]; then
             python -c "import importlib.util as u; assert u.find_spec('tares_ee') is None, 'tares_ee is importable in the mit run'"
           fi

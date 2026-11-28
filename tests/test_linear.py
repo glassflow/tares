@@ -28,8 +28,26 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 import httpx
 
 from tares import linear
-from tares.config import SourceCfg
-from tares.connectors.linear import LinearConnector
+
+
+class LinearPoll:
+    """What the 1.x Linear connector's poll did, kept here: every linked project synced through
+    tares.linear.sync_project, the change events returned (the sync runner does it on a cell now)."""
+
+    def __init__(self, store):
+        self.store = store
+
+    async def poll(self):
+        out, errors = [], []
+        for uid, _link in self.store.linear_projects():
+            try:
+                out.extend(await linear.sync_project(self.store, uid))
+            except linear.LinearError as e:
+                errors.append(str(e))
+        if errors and not out:
+            raise linear.LinearError(errors[0])
+        return out
+
 
 P = F = 0
 
@@ -188,8 +206,8 @@ async def main():
            [t["status"] for t in tickets] == ["todo", "todo", "todo"], tickets)
         ck("the link records the sync", r.json()["linear"]["name"] == "Invoicing"
            and r.json()["linear"]["synced_at"] and r.json()["linear"]["error"] is None, r.text)
-        ck("linking makes no catalog source: the sync runner keeps the tickets in step (TR-1806)",
-           "linear" not in app.state.runtime.catalog.sources and not store.list_catalog_sources())
+        ck("linking makes no source: the sync runner keeps the tickets in step (TR-1806)",
+           not hasattr(app.state, "runtime"))
         with store._lock:
             n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear'").fetchone()[0]
         ck("the sync's change events are not stored", n_created == 0, n_created)
@@ -209,8 +227,7 @@ async def main():
         iss.append({"id": "i4", "identifier": "FAC-4", "title": "Retry failed emails",
                     "url": "https://linear.app/acme/issue/FAC-4", "sortOrder": 4.0,
                     "updatedAt": "2026-10-07T11:00:00Z", "state": {"name": "Todo", "type": "unstarted"}})
-        conn_src = LinearConnector(SourceCfg(name="linear", type="event_stream", connector="linear",
-                                             poll_seconds=60, config={}), store)
+        conn_src = LinearPoll(store)
         envs = await conn_src.poll()
         kinds = sorted(e.event_type for e in envs)
         ck("the poll sees each change once", kinds == sorted(

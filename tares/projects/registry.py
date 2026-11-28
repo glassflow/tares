@@ -20,8 +20,10 @@ def unregister(key: str) -> None:
 
 # Templates Tares no longer ships, read as the template that stands in for them, so a project made
 # from one still opens, changes, pauses and resumes (the AI SRE demo went with the AI SRE edition,
-# TR-1809; the challenger workflow went with triggers and agents, TR-1810).
-RETIRED = {"ai_sre_demo": "custom", "challenger_workflow": "custom"}
+# TR-1809; the challenger workflow went with triggers and agents, TR-1810; shared code context and
+# Rius RCA went with the source catalog, TR-1811).
+RETIRED = {"ai_sre_demo": "custom", "challenger_workflow": "custom",
+           "shared_code_context": "custom", "rius_rca": "custom"}
 
 
 def get_template(key: str) -> Template:

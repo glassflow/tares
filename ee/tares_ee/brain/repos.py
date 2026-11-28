@@ -117,7 +117,7 @@ def register_routes(app, host) -> None:
     lock = threading.Lock()
     indexer = indexing.Indexer(store, lambda: lore_client())   # looked up per call: a test swaps lore_client
     indexer.attach(app)
-    syncer = syncing.Syncer(indexer, getattr(host, "runtime", None))   # keeps ready repos current (TR-1201)
+    syncer = syncing.Syncer(indexer)   # keeps ready repos current (TR-1201)
     syncer.attach(app)
     decisions = decisions_mod.Decisions(store, lambda: lore_client())   # shared projects' specs, plans and notes (TR-1211)
     decisions.attach(app)   # a repo connected or removed wakes it, so the docs follow at once (TR-1220)

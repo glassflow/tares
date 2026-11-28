@@ -214,9 +214,6 @@ async def pages():
                                   headers={"Content-Type": "application/x-ndjson"})
                 assert r.status_code < 300, r.text
 
-            r = await cx.post("/api/sources", json={"name": SRC, "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            assert r.status_code < 300, r.text
             px = json.loads(await m.create_project("project-x", "Ship the docs site"))["id"]
             await mf.write_milestone("M1: first pages", project="project-x")
             for t in ("Home page", "Footer"):
@@ -278,7 +275,6 @@ async def pages():
                 "a builder brief": f"/api/projects/{px}/tickets/T2/builder-brief",
                 "a conversation": f"/api/projects/{px}/sessions/b1",
                 "an archived conversation": f"/api/projects/{px}/sessions/old1",
-                "a source's fields": f"/api/sources/{SRC}/fields",
             }
             scans = []
 
@@ -324,15 +320,9 @@ async def pages():
                    before["its sessions"]) and "old1" in json.dumps(before["its sessions"])
                and "Footer" in json.dumps(before["a ticket brief"])
                and "Footer" in json.dumps(before["a builder brief"]), before["its sessions"])
-            ck("the field profile sampled the lines", before["a source's fields"]["sampled"] >= 10,
-               before["a source's fields"])
             for k in urls:
                 ck(f"{k} answers the same without the rows", after[k] == before[k],
                    (before[k], after[k]))
-            r = await cx.post("/api/labels/preview",
-                              json={"source": SRC, "label": {"name": "repo", "field": "repo"}})
-            ck("the label preview samples the lines too",
-               r.status_code == 200 and r.json()["sampled"] >= 10, r.text)
 
 
 # ── the stores below ─────────────────────────────────────────────────────────────────────────
@@ -429,8 +419,7 @@ def reading():
            (where, len(rows), bool(read)) == (("table", 2, False) if factory else ("events", 3, True))
            and ("do not parse" in out or not factory), (where, len(rows), out))
 
-        # another source than the session's own
-        s.upsert_catalog_source("other_cc", "agent_session", "claude_code", "10s", {"push": True})
+        # another source than the session's own (a name no session line is stored under, TR-1811)
         seed("mine")
         rows, where, block, tool_where, out, read = damaged(s, "mine", source="other_cc")
         ck(f"{edition}: another source than the session's " + ("has no lines" if factory
@@ -568,7 +557,6 @@ def fills():
     usage = {"input_tokens": 5, "output_tokens": 7}
     for edition in ("factory", "platform"):
         s = open_store(edition)
-        s.upsert_catalog_source(SRC, "agent_session", "claude_code", "10s", {"push": True})
         with s.sessions_db.begin() as c:
             c.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name.in_(
                 [session_ingest.USAGE_FILLED, session_ingest.CHALLENGES_FILLED])))

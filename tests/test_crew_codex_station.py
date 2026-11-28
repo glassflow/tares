@@ -1818,10 +1818,9 @@ ck("the prompt and the guard name each call by its id, never by a place in the l
 
 # ---------------------------------------------------------------------------------------------
 print("o. the session is recorded by the watch's rounds and at every stop (TR-1595 wired in by TR-1593)")
-from types import SimpleNamespace  # noqa: E402
 
-from tares.connectors import codex as cell_codex  # noqa: E402
-from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
+from tares import session_codex as cell_codex  # noqa: E402
+from tares.session_map import ClaudeCodeLines  # noqa: E402
 from tares.store import Store  # noqa: E402
 from tares.crew import codex_record, watch  # noqa: E402
 
@@ -1829,7 +1828,7 @@ from tares.crew import codex_record, watch  # noqa: E402
 def rows_on_the_cell(tares, source="claude_code"):   # the session source /ingest/codex stores into
     """What the real cell makes of every post the fake cell took: the session store's command rows, by command."""
     s = Store(str(SCRATCH / f"cell-{len(os.listdir(SCRATCH))}.duckdb"))
-    conn = ClaudeCodeConnector(SimpleNamespace(name=source, type="agent_session", config={}), s)
+    conn = ClaudeCodeLines(s, source=source, source_type="agent_session")
     for i in range(0, len(tares.world["ingested"]), 50):
         s.append(conn.map_payload(cell_codex.session_lines(tares.world["ingested"][i:i + 50])))
     sessions = sorted({f.get("sessionId") for f in tares.world["ingested"] if f.get("sessionId")})

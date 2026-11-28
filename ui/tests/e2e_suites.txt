@@ -6,8 +6,6 @@ brain-connect
 brain-decisions
 brain-folders
 brain-repos
-catalog-export
-catalog-import
 choose-edition
 component-gallery
 connect
@@ -46,12 +44,6 @@ project-idle
 projects-list
 redirects
 report
-resources
 settings-people
 source-claude-code
-source-detail
-source-discover
-source-form
-source-new
-sources
 team-home

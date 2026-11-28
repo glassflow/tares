@@ -99,7 +99,6 @@ vault = project("lee", PRIVATE["name"], goal=PRIVATE["goal"])
 call("PATCH", f"/api/projects/{vault}", {"scope": "private"}, keys["lee"])
 
 # the crews: each person's lines go in with their own key; Lee's last line is two days old
-call("POST", "/api/sources", {"name": "claude_code", "connector": "claude_code", "poll": "10s", "config": {"push": True}})
 
 
 def stamp(minutes):

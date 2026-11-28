@@ -132,12 +132,11 @@ def pushed_files(payload) -> set[str] | None:
 
 class Syncer:
     """One per app, next to the Indexer (it shares the indexer's store, lore client and per-repo
-    lock). `runtime` is unused since the GitHub hub brings the push events (TR-1807); kept for callers."""
+    lock). The push events come from core's GitHub hub (TR-1807)."""
 
-    def __init__(self, indexer, runtime=None):
+    def __init__(self, indexer):
         self.indexer = indexer
         self.store = indexer.store
-        self.runtime = runtime
         self._want: dict[str, int] = {}      # repo -> pushes and polls that asked for a sync
         self._done: dict[str, int] = {}      # repo -> the count a finished or failed sync had seen
         self._head: dict[str, str] = {}      # repo -> the newest head a push or poll named

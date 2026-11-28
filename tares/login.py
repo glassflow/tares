@@ -585,7 +585,7 @@ def _login(cloud: str, open_browser: bool, wait: int, json_out: bool) -> int:
         print(f"  The key is saved in {where}, readable only by you, because {reason}.")
     else:
         print(f"  The key is saved in {where}.")
-    print(f"  tares factory and tares status use it now. {mcp_setting(data['cell_url'])}")
+    print(f"  tares factory uses it now. {mcp_setting(data['cell_url'])}")
     return 0
 
 

@@ -28,7 +28,7 @@ PASS = FAIL = 0
 PORT, MCP_PORT = "8852", "8853"
 ROOT = "root-edition"
 B = f"http://127.0.0.1:{PORT}"
-# whoami on an open instance today: nothing but these, plus the edition keys and mcp_object_tools
+# whoami on an open instance today: nothing but these, plus the edition keys
 TODAY_KEYS = {"id", "name", "kind", "person", "scopes"}
 
 
@@ -110,7 +110,7 @@ def unit():
     s = Fake(projects=["Default", "project-x"])
     check("a real project makes it platform", ed.settle(s) == "platform" and s.kv["edition"] == "platform")
     s = Fake(sources=[{"name": "svc"}])
-    check("a catalog source makes it platform", ed.settle(s) == "platform")
+    check("a catalog source no longer counts (TR-1811)", ed.settle(s) is None)
     s = Fake(projects=["project-x"])
     os.environ[ed.EDITION_ENV] = "sre"
     check("env wins over the has-data default", ed.settle(s) == "sre")
@@ -267,7 +267,7 @@ async def platform_regression():
             w = (await cx.get(f"{B}/api/whoami")).json()
             check("open whoami: platform, needed", w["edition"] == "platform" and w["edition_name"] == "Tares"
                   and w["edition_needed"] is True, str(w))
-            check("its keys are today's plus the four", set(w) == TODAY_KEYS | {"edition", "edition_name", "edition_needed", "mcp_object_tools"}, str(sorted(w)))
+            check("its keys are today's plus the three", set(w) == TODAY_KEYS | {"edition", "edition_name", "edition_needed"}, str(sorted(w)))
             r = await cx.get(f"{B}/api/home")
             check("no home", r.status_code == 404, r.text)
     finally:

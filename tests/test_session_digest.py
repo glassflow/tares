@@ -421,12 +421,6 @@ def writers():
     after(s, "the hourly archive job (rows into a part)",
           lambda: session_archive.archive_pass(s), changed=False)
     after(s, "a line for an archived session", lambda: s.append([one("old", ago=6, repo="back")]))
-    after(s, "a purge", lambda: s.purge_events(SRC))
-    session_digest.sweep(s, force=True)
-    d = digest(s)                       # what a query made of a pair stays: it is no session's
-    ck("a purge: the sweep drops what is gone", not d.entries and d.bytes == d.query_bytes
-       and not any(q.sessions for q in d.queries.values()),
-       (len(d.entries), d.bytes, d.query_bytes))
     after(s, "the same sessions shipped again", lambda: s.append(many_lines()))
     s.close()
 
@@ -455,73 +449,6 @@ def writers():
                 sessions.c.lines_origin == "table")).scalars())
         ck(f"{name}: the session is now one of the store's", len(born) == 2, born)
         s.close()
-
-
-def two_sources():
-    print("== one session id under two claude_code sources ==")
-
-    def seeded(edition, first, second):
-        s = open_store(edition)
-        s.upsert_catalog_source(OTHER, "agent_session", SRC, "10s", {"push": True})
-        held._N[0] = 0
-        s.append([one("X", "user", 500, source=first, repo="a"),
-                  one("X", ago=400, source=first, repo="a"),
-                  one("only", ago=350, source=first, repo="a")])
-        s.append([one("X", "user", 300, source=second, repo="b"),
-                  one("X", ago=200, source=second, repo="b"),
-                  one("other", ago=150, source=second, repo="b")])
-        s.append([one("X", ago=100, source=first, repo="a")])
-        return level(s)
-
-    def read(s) -> dict:
-        out = {}
-        for name, srcs in (("a", [SRC]), ("b", [OTHER]), ("both", [SRC, OTHER])):
-            for since in (NOW - timedelta(seconds=250), LONG):
-                k = f"{name} {since < HOUR}"
-                out[f"{k} count"] = s.aggregate(srcs, None, "count", since)
-                out[f"{k} by repo"] = s.aggregate(srcs, None, "count", since, group_by="repo")
-                out[f"{k} window"] = len(s.read_window(srcs, None, since, cap=100))
-            for label in ("repo", "key_value"):
-                out[f"{name} {label}"] = by_label(s, label, srcs)
-        for source in (SRC, OTHER):
-            out[f"{source} gaps"] = gaps(s, source, LONG)
-            out[f"{source} hours"] = sorted(s.recent_ingest_hours(source, LONG))
-        return out
-
-    for first, second in ((SRC, OTHER), (OTHER, SRC)):
-        p, s = seeded("platform", first, second), seeded("factory", first, second)
-        label = f"born under {first}"
-        ck(f"{label}: DuckDB holds some of its lines", 0 < len(_duck_rows(s)) < 7, _duck_rows(s))
-        want = read(p)
-        got = read(s)
-        wrong = [k for k in want if got[k] != want[k]]
-        ck(f"{label}: each source alone and both read as on a platform cell", not wrong,
-           [(k, got[k], want[k]) for k in wrong][:3])
-        forget(s)                                # a restart: learnt from DuckDB's rows
-        got = read(s)
-        ck(f"{label}: and so after a restart", got == want,
-           [(k, got[k], want[k]) for k in want if got[k] != want[k]][:3])
-        p.close()
-        s.close()
-
-    # the second source's first line arrives after the session was already read and kept
-    s, p = open_store("factory"), open_store("platform")
-    for x in (s, p):
-        x.upsert_catalog_source(OTHER, "agent_session", SRC, "10s", {"push": True})
-        held._N[0] = 0
-        x.append([one("X", ago=400, repo="a")])
-        level(x)
-    s.aggregate([SRC], None, "count", LONG)
-    for x in (s, p):
-        x.append([one("X", ago=100, source=OTHER, repo="b")])
-        level(x)
-    got = [s.aggregate(srcs, None, "count", LONG, group_by="repo")
-           for srcs in ([SRC], [OTHER], [SRC, OTHER])]
-    ck("a second source that arrives later is seen at the next read",
-       got == [p.aggregate(srcs, None, "count", LONG, group_by="repo")
-               for srcs in ([SRC], [OTHER], [SRC, OTHER])], got)
-    p.close()
-    s.close()
 
 
 def _duck_rows(s) -> list:
@@ -607,12 +534,9 @@ def bounded():
         ck("and the digest shrinks", digest(s).bytes < before, (before, digest(s).bytes))
         same(s, "windows older than a short horizon are exact")
     digest(s).horizon = timedelta(days=session_digest.HORIZON_DAYS)
-    s.upsert_catalog_trigger("long_window", [SRC], {"type": "threshold", "field": None,
-                                                    "agg": "count", "op": ">=", "value": 10 ** 9,
-                                                    "window": "45d", "where": []}, "key_value", "5m")
     session_digest.sweep(s, force=True)
-    ck("a longer trigger window widens what is kept", digest(s).horizon == timedelta(days=46),
-       digest(s).horizon)
+    ck("the horizon is HORIZON_DAYS (no trigger widens it since TR-1810)",
+       digest(s).horizon == timedelta(days=session_digest.HORIZON_DAYS), digest(s).horizon)
     with patched(session_digest, "MAX_BYTES", 3000):
         forget(s)
         same(s, "past the size limit the reads still answer")
@@ -796,7 +720,6 @@ def full_cache():
     print("== at the size limit (TR-1706) ==")
     ok = (True,) * 7
     s = open_store("factory")
-    s.upsert_catalog_source(OTHER, "agent_session", SRC, "10s", {"push": True})
     mine = [f"m{i:02d}" for i in range(20)]
     s.append([one(sid, ago=100 + i, repo="shop") for i, sid in enumerate(mine)])
     s.append([one(f"o{i:02d}", ago=100 + i, source=OTHER, repo="shop") for i in range(20)])
@@ -978,7 +901,6 @@ def two_processes():
         cells.append(Store(path, state_dsn=f"{dsn}?options=-csearch_path%3D{schema}"))
     a, b = cells
     a.set_setting("edition", "factory")
-    a.upsert_catalog_source(SRC, "agent_session", SRC, "10s", {"push": True})
     a.append([one("S", ago=300, repo="a")])
     first = agg(a, LONG)
     ck("the first process counts its own line", first == {"S": 1}, first)
@@ -995,8 +917,6 @@ def two_processes():
     session_ingest.take_back(b, written)
     got = agg(a, LONG)
     ck("and a batch the second one took back is gone", got == {"S": 2, "theirs": 1}, got)
-    b.purge_events(SRC)
-    ck("and its purge empties the first one's answers", agg(a, LONG) == {}, agg(a, LONG))
     a.close()
     b.close()
 
@@ -1004,7 +924,6 @@ def two_processes():
 def main():
     equality()
     writers()
-    two_sources()
     cold_and_warm()
     bounded()
     not_numbers()

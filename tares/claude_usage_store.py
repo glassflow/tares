@@ -22,7 +22,6 @@ from . import claude_usage_hourly as hourly
 from . import session_ingest
 from .pricing import cost_usd
 from .request_memo import kept
-from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import (project_sessions, session_meters, session_stations,
                                    session_usage, session_usage_hourly)
 from .session_store.tables import usecases as projects_table
@@ -104,9 +103,8 @@ class ClaudeUsageStore:
         with self.sessions_db.read() as conn:
             newest = conn.execute(select(func.max(u.c.replied_at))).scalar_one()
         since = newest - timedelta(days=1) if newest is not None else None
+        sources = sorted(session_ingest.claude_code_sources(self))
         with self.sessions_db.read() as conn:
-            sources = list(conn.execute(select(sources_table.c.name).where(
-                sources_table.c.connector == "claude_code")).scalars())
             names = conn.execute(select(projects_table.c.id, projects_table.c.name)).all()
         projects = {}
         for pid, pname in names:

@@ -37,9 +37,6 @@ def _warn_if_exposed(host: str) -> None:
 
 
 def run_daemon():
-    from .config import reject_legacy_db, reject_legacy_env
-    reject_legacy_env()
-    reject_legacy_db(os.environ.get("TARES_DB", "tares.duckdb"))
     import uvicorn
 
     from .daemon import make_app
@@ -203,7 +200,6 @@ def _up(args: argparse.Namespace):
     # point the daemon at the data home unless the user already set these explicitly.
     # (the daemon reads these env vars at import time, so set them before run_daemon imports it.)
     os.environ.setdefault("TARES_DB", str(home / "tares.duckdb"))
-    os.environ.setdefault("TARES_CATALOG", str(home / "catalog.yaml"))  # seed only; absent is fine
     os.environ["TARES_HOST"] = args.host
     os.environ["TARES_PORT"] = str(args.port)
     edition_now = _settle_edition(args, os.environ["TARES_DB"])
@@ -234,56 +230,7 @@ def _up(args: argparse.Namespace):
         import webbrowser
         open_url = f"{url}/?token={root_token}" if root_token else url
         threading.Timer(1.2, lambda: webbrowser.open(open_url)).start()
-    _print_next_step_when_up(url, root_token, str(home))
     run_daemon()
-
-
-def _print_next_step_when_up(url: str, token: str | None, data_dir: str) -> None:
-    """Once /health answers, print the same "Next:" line `tares status` ends with, so a first-run
-    user sees what to do right under the console URL. A daemon thread: it must never hold the
-    process open or fail the start."""
-    import threading
-    import time
-
-    def wait():
-        from .status import collect, next_step
-        for _ in range(60):
-            time.sleep(0.5)
-            st = collect(url, token, data_dir=data_dir)
-            if st["daemon"]["running"]:
-                print(f"tares: {next_step(st)}", flush=True)
-                return
-
-    threading.Thread(target=wait, daemon=True).start()
-
-
-def _status(args: argparse.Namespace):
-    """Readiness checklist against a running daemon. Read-only."""
-    import json
-    from .status import collect, render
-    from .login import resolve, saved
-    home = Path(args.data_dir).expanduser()
-    # a flag, then TARESD_URL, then `tares login`'s saved workspace, then the local daemon
-    base, token, source = resolve(args.taresd)
-    token = token or None
-    if not token and source != "saved login" and (home / "root_token").exists():
-        token = (home / "root_token").read_text().strip() or None
-    if source == "saved login":
-        mcp = f"{base}/mcp"
-    else:
-        mcp = f"http://{os.getenv('TARES_MCP_HOST', '127.0.0.1')}:{os.getenv('TARES_MCP_PORT', '8788')}/mcp"
-    # a workspace's data is on the workspace, not in this machine's data dir
-    st = collect(base, token, mcp_url=mcp, data_dir=None if source == "saved login" else str(home))
-    if args.json:
-        print(json.dumps({**st, "source": source}, indent=2, default=str))
-    else:
-        if source == "saved login":
-            print(f"Signed in to {(saved() or {}).get('cell') or base} (tares login)")
-            if token and token != (saved() or {}).get("key"):
-                print("  with the key in TARES_AUTH_TOKEN, not the saved login's; unset it to use "
-                      "the saved one")
-        print(render(st))
-    raise SystemExit(0 if st["daemon"]["running"] else 1)
 
 
 def _mcp(args: argparse.Namespace):
@@ -387,8 +334,6 @@ def _git_credential(argv: list[str]):
     runs before the command prints nothing, and when that fails the command exits 1 without a word."""
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            from .config import reject_legacy_env
-            reject_legacy_env()
             env = _factory_env(argv)
             from .crew.dispatch import run
     except (Exception, SystemExit):
@@ -439,11 +384,9 @@ def _factory_env(argv: list[str]) -> dict:
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "hook":
-        _hook(sys.argv[2:])     # first: a hook must not pay for the config import below
+        _hook(sys.argv[2:])     # first: a hook must not pay for the parser below
     if sys.argv[1:3] == ["factory", "git-credential"]:
         _git_credential(sys.argv[2:])   # before anything below can print
-    from .config import reject_legacy_env
-    reject_legacy_env()
     if len(sys.argv) > 1 and sys.argv[1] == "factory":
         _factory(sys.argv[2:])
     p = build_parser()
@@ -511,13 +454,6 @@ def build_parser() -> argparse.ArgumentParser:
     lo = sub.add_parser("logout", help="remove this machine's key from its workspace and forget the login")
     lo.add_argument("--json", action="store_true", help="machine-readable output")
     lo.set_defaults(func=_logout)
-
-    st = sub.add_parser("status", help="readiness checklist for a running instance, and the next step")
-    st.add_argument("--taresd", default=os.getenv("TARESD_URL", ""),
-                    help="daemon URL (default http://127.0.0.1:$TARES_PORT or 8787)")
-    st.add_argument("--data-dir", default=str(DEFAULT_HOME), help="where the root token lives when auth is on")
-    st.add_argument("--json", action="store_true", help="machine-readable output")
-    st.set_defaults(func=_status)
 
     ca = sub.add_parser("capabilities", help="what this tares can do and what the Tares it is signed in to can do")
     ca.add_argument("--json", action="store_true", help="machine-readable output: one JSON document")

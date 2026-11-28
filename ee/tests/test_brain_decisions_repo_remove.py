@@ -40,8 +40,7 @@ import httpx
 
 import fake_lore
 from tares import github_credentials
-from tares.config import SourceCfg
-from tares.connectors import github_events as gh_events
+from tares import github_events as gh_events
 from tares.envelope import Envelope
 from tares_ee.brain import decisions as project_docs_mod
 from tares_ee.brain import decisions_repo as dr
@@ -127,6 +126,17 @@ class Gh:
         return httpx.Response(200, json=[c] if p in files else [])
 
 
+
+async def app_delivery(store, envs, source="github"):
+    """What the GitHub App's webhook route does with a delivery's events (daemon `_ingest_github`): store
+    them, then tell core's GitHub hub (github_webhook.after_store). Events of any other source are only
+    stored, as on every other ingest route."""
+    from tares import github_webhook
+    await asyncio.to_thread(store.append, list(envs))
+    if envs and source == "github":
+        github_webhook.after_store(store, source, list(envs))
+
+
 async def main():
     from tares.daemon import make_app
     logs = Logs()
@@ -163,8 +173,6 @@ async def main():
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=H(ROOT))
         store = app.state.store
         rd = app.state.brain_repo_decisions
-        runtime = app.state.runtime
-        runtime.catalog.sources["github"] = SourceCfg(name="github", type="event_stream", connector="github_app", poll_seconds=0)
         store.upsert_github_credential("setup", GH_TOKEN)
 
         def push(repo, modified=()):
@@ -217,7 +225,7 @@ async def main():
 
         print("== a push for the removed repo puts nothing back ==")
         n = calls()
-        await runtime._store_envelopes("github", [push("acme/web", ["docs/adr/a000.md"])])
+        await app_delivery(store, [push("acme/web", ["docs/adr/a000.md"])])
         await rd.wait()
         ck("no GitHub and no lore call, and still nothing in lore", calls() == n and docs("acme/web") == set(), f"{calls()} {n}")
 

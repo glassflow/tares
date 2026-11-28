@@ -140,10 +140,6 @@ async def team_database():
                                                        "objects": [], "kind": "software_factory"})
         assert r.status_code in (200, 201), r.text
         shop = r.json()["id"]
-        r = await call(root, "POST", "/api/sources", {"name": "claude_code", "connector": "claude_code",
-                                                      "poll": "10s", "config": {"push": True},
-                                                      "project": shop})
-        ck("the claude_code source is made", r.status_code < 300, r.text)
         for who in ("ann", "bob"):
             lines = station_lines(f"s-{who}", f"{who}-build-m1", "Shop")
             r = await call(keys[who], "POST", "/ingest/claude_code",

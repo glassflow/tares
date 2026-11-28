@@ -68,9 +68,6 @@ async def main():
     async with app.router.lifespan_context(app):
         shop = json.loads(await m.create_project("Shop", "Sell things"))["id"]
         async with mk() as cx:
-            await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True},
-                                                "project": shop})
             # the cell's own credential has a crew-reviewer too (the person local's)
             await cx.post("/ingest/claude_code", content=json.dumps(st_line("rv1", "crew-reviewer", "reviewer")) + "\n",
                           headers={"Content-Type": "application/x-ndjson"})

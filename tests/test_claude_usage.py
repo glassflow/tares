@@ -182,9 +182,6 @@ async def main():
         async with mk() as cx:
             shop = (await cx.post("/api/projects", json={"template": "custom", "name": "Shop"})).json()["id"]
             other = (await cx.post("/api/projects", json={"template": "custom", "name": "Other"})).json()["id"]
-            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                    "poll": "10s", "config": {"push": True}})
-            ck("the claude_code source is made", r.status_code < 300, r.text)
 
         print("== tokens per reply, for the project they count for ==")
         r = await push([

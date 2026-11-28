@@ -3,7 +3,7 @@
 A daemon with auth on. Code that only has the host (app.state.host) adds a route that uses
 h.current_person, h.is_admin, h.require_admin and h.err. A person key (ingest scope, no admin)
 gets 403 from require_admin, an admin key 200, and a call with no key 401 from the guard. The class
-lists every member of the contract, Host(...) keeps its store and runtime, licence_state() is the
+lists every member of the contract, Host(...) keeps its store, licence_state() is the
 cell's licence check (TR-912) with `used` counting the people on the cell, and licence_required()
 raises the error the daemon answers with 402.
 
@@ -48,7 +48,7 @@ def ck(label, cond, detail=""):
 
 MEMBERS = [
     "err", "caller", "current_person", "is_admin", "is_system", "project_key", "by",
-    "require_admin", "can_see", "hidden_ids", "read_exclude", "hidden_sources", "project_or_404",
+    "require_admin", "can_see", "hidden_ids", "read_exclude", "project_or_404",
     "resolve_project", "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out",
     "area_owner", "hidden_project", "projects", "licence_state", "licence_required", "team_reader",
     "auth_off",
@@ -85,8 +85,8 @@ async def main():
     store = app.state.store
     h = getattr(app.state, "host", None)
     ck("app.state.host is a Host", isinstance(h, Host))
-    ck("the host carries the daemon's store and runtime",
-       h is not None and h.store is store and h.runtime is app.state.runtime)
+    ck("the host carries the daemon's store",
+       h is not None and h.store is store and not hasattr(h, "runtime"))
     add_route(h, app)
 
     async def post(path, token=None):
@@ -164,24 +164,23 @@ async def main():
         def list_people(self):
             return [{"id": "a"}, {"id": "b"}]
 
-    fake = Host(FakeStore(), "the-runtime")
-    ck("Host(...) exposes store and runtime", fake.store.list_people()[0]["id"] == "a"
-       and fake.runtime == "the-runtime")
+    fake = Host(FakeStore())
+    ck("Host(...) exposes the store", fake.store.list_people()[0]["id"] == "a")
     ck("licence_state is the daemon's helper, passed through",
-       Host(FakeStore(), None, licence_state=lambda: {"used": 2}).licence_state() == {"used": 2})
+       Host(FakeStore(), licence_state=lambda: {"used": 2}).licence_state() == {"used": 2})
     try:
         fake.licence_state()
         ck("licence_state without its helper is named", False, "no error")
     except RuntimeError as e:
         ck("licence_state without its helper is named", "licence_state" in str(e), str(e))
     try:
-        Host(FakeStore(), None, licence_required=lambda m: (_ for _ in ()).throw(LicenceRequired(m))
+        Host(FakeStore(), licence_required=lambda m: (_ for _ in ()).throw(LicenceRequired(m))
              ).licence_required("no")
         ck("licence_required through the helper raises", False, "no error")
     except LicenceRequired as e:
         ck("licence_required through the helper raises", e.message == "no")
     try:
-        Host(FakeStore(), None, licence_required=lambda m: None).licence_required("still")
+        Host(FakeStore(), licence_required=lambda m: None).licence_required("still")
         ck("licence_required never returns, even if the helper does", False, "returned")
     except LicenceRequired as e:
         ck("licence_required never returns, even if the helper does", e.message == "still")
@@ -191,19 +190,19 @@ async def main():
     except RuntimeError as e:
         ck("a missing helper is named", "is_admin" in str(e), str(e))
     try:
-        Host(FakeStore(), None, nope=lambda: 1)
+        Host(FakeStore(), nope=lambda: 1)
         ck("an unknown helper is refused", False, "no error")
     except TypeError as e:
         ck("an unknown helper is refused", "nope" in str(e), str(e))
     calls = []
-    admin_no = Host(FakeStore(), None, is_admin=lambda r: False,
+    admin_no = Host(FakeStore(), is_admin=lambda r: False,
                     err=lambda e, code=400: calls.append((str(e), code)))
     try:
         admin_no.require_admin(object())
     except Exception:
         pass
     ck("require_admin asks err for a 403", calls == [("this needs an admin", 403)], calls)
-    yes = Host(FakeStore(), None, is_admin=lambda r: True)
+    yes = Host(FakeStore(), is_admin=lambda r: True)
     ck("require_admin passes an admin", yes.require_admin(object()) is None)
 
 

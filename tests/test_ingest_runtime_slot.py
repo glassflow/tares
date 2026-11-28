@@ -2,13 +2,12 @@
 
 POST /ingest/claude_code and POST /ingest/codex are routes of their own: the runtime slot's integration
 makes session lines of the body (tares/session_map.py, tares/session_codex.py) and the route stores them
-under `claude_code`. Nothing on the way reads or writes the source catalog, so a cell never gets a
-`claude_code` catalog source from its first line any more, and the Claude Code row on Settings reads the
-newest stored line instead.
+under `claude_code`. There is no source catalog (TR-1811), and the Claude Code row on Settings reads the
+newest stored line.
 
   * a Claude Code line and a Codex fact each land in the sessions table, stamped with the person of the
     key that sent them (the cell's one person, without a licence);
-  * no catalog source appears, before or after;
+  * the source catalog's route is gone (404), before and after;
   * the Claude Code tool row on Settings says it is reporting;
   * no credential answers 401, a key without the ingest scope 403.
 
@@ -94,7 +93,7 @@ async def main():
             KH = {"Authorization": f"Bearer {key}", "content-type": "application/x-ndjson"}
 
             r = await cx.get("/api/sources", headers=H)
-            ck("no catalog source before the first line", r.status_code == 200 and r.json() == [], r.text[:200])
+            ck("no source catalog route before the first line", r.status_code == 404, r.text[:200])
 
             print("== Claude Code ==")
             lines = [{"type": "user", "sessionId": "cc-1", "uuid": "u1", "timestamp": NOW, "cwd": "/w/shop",
@@ -124,7 +123,7 @@ async def main():
 
             await asyncio.sleep(1.0)
             r = await cx.get("/api/sources", headers=H)
-            ck("still no catalog source after both intakes", r.status_code == 200 and r.json() == [], r.text[:200])
+            ck("still no source catalog route after both intakes", r.status_code == 404, r.text[:200])
 
             r = await cx.get("/api/factory/settings", headers=H)
             tools = (r.json().get("tools") if r.status_code == 200 else None) or []

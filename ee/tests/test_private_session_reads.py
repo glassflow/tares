@@ -93,10 +93,6 @@ async def seed(app, who, lead, owner) -> dict:
     private project, `owner` records the sessions."""
     store = app.state.store
     ids, tickets = {}, {}
-    async with client(app, who[owner]) as cx:
-        r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}})
-        assert r.status_code < 300, r.text
 
     async def make_project(person, name):
         async with client(app, who[person]) as cx:

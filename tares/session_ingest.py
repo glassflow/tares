@@ -107,7 +107,6 @@ from sqlalchemy import Text, bindparam, delete, exists, func, insert, literal, s
 from . import edition, metrics
 from .envelope import now_utc
 from .factory import is_coordination
-from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import (session_archive_parts, session_commands, session_files,
                                    session_ingest_marks, session_lines, session_messages,
                                    session_said, session_turns, sessions)
@@ -163,12 +162,9 @@ def coordination_in(text: str | None, payload) -> int:
 
 
 def claude_code_sources(store) -> set[str]:
-    """The names of the cell's claude_code sources (`claude_code` too, which `cc_source` falls back
-    to when the catalog has none)."""
-    with store.sessions_db.read() as conn:
-        rows = conn.execute(select(sources_table.c.name).where(
-            sources_table.c.connector == "claude_code")).all()
-    return {r[0] for r in rows} | {"claude_code"}
+    """The sources session lines are stored under: `claude_code` alone (session_map.SOURCE). There
+    is no source catalog that could name another (TR-1811)."""
+    return {"claude_code"}
 
 
 def holds_session(store, sid) -> bool:
@@ -622,22 +618,11 @@ def _add(store, folded: dict, lines: dict | None = None, also=None) -> dict:
 
 
 def render_flags(store, sources) -> dict:
-    """{source: the `render` text of `session_lines`} for the claude_code sources of a batch: the
-    flags the connector builds a line's text with (`include_thinking`, `redact`), read from the
-    source's config in the catalog, with the connector's defaults when the source has none."""
-    flags = {s: {"include_thinking": False, "redact": True} for s in sources}
-    with store.sessions_db.read() as conn:
-        rows = conn.execute(select(sources_table.c.name, sources_table.c.config).where(
-            sources_table.c.connector == "claude_code")).all()
-    for name, raw in rows:
-        if name not in flags or name == "claude_code":
-            # the runtime intake maps `claude_code` lines with the defaults, whatever an older
-            # catalog row says (TR-1804), so their flags are the defaults too
-            continue
-        cfg = raw if isinstance(raw, dict) else {}
-        flags[name] = {"include_thinking": bool(cfg.get("include_thinking", False)),
-                       "redact": bool(cfg.get("redact", True))}
-    return {s: json.dumps(f, sort_keys=True) for s, f in flags.items()}
+    """{source: the `render` text of `session_lines`} for the sources of a batch: the flags the
+    runtime intake builds a line's text with (`include_thinking`, `redact`), its defaults for
+    every source (TR-1804; no source catalog holds other flags, TR-1811)."""
+    flags = {"include_thinking": False, "redact": True}
+    return {s: json.dumps(flags, sort_keys=True) for s in sources}
 
 
 def _line_rows(store, envelopes) -> dict:

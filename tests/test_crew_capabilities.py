@@ -111,7 +111,6 @@ TOP_NOT_MACHINE = {
     "mcp": "starts the MCP server",
     "hook": "starts a plugin hook",
     "factory": "the prefix of every factory command above",
-    "status": "its --json is a readiness checklist with no schema_version and no schema here",
 }
 
 
@@ -160,7 +159,7 @@ print("== the registry and COMMANDS agree")
 found = problems(PORTED, WORDS, COMMANDS)
 ck("every registered command is a machine command or left out with a reason, and COMMANDS is exactly the machine ones", not found, found)
 ck("the registry is read: the factory words and the top-level words are not empty",
-   len(PORTED) > 20 and {"login", "logout", "status", "up"} <= set(WORDS), (len(PORTED), sorted(WORDS)))
+   len(PORTED) > 20 and {"login", "logout", "up"} <= set(WORDS) and "status" not in WORDS, (len(PORTED), sorted(WORDS)))
 ck("a machine command's name is `factory.` and its words, or the top-level word",
    all(name == "factory." + ".".join(key) for key, name in MACHINE.items())
    and all(word == name for word, name in TOP_MACHINE.items()), "")

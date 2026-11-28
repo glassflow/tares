@@ -6,7 +6,7 @@ import { licenceWordsOn, slugFromHost, useCloud, useWorkspaceOverview } from "..
 import LicencePanel from "../../components/LicencePanel";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
-import { AgentLimitsPanel, CLOUD_BACK, McpToolsPanel } from "../../pages/Security";
+import { CLOUD_BACK } from "../../pages/Security";
 import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../settings/AccessPanels";
 import WorkspaceSettings, { TeamPanel } from "../settings/WorkspacePanels";
 import { ProvidersPanel } from "../settings/ProvidersPanel";
@@ -179,7 +179,7 @@ function KeysPane() {
   );
 }
 
-export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant, onSwitch, onMorning, onMorningSend, morningPeople = null }: ViewProps) {
+export function FactorySettingsView({ page, tab, problem, onCrew, onGrant, onSwitch, onMorning, onMorningSend, morningPeople = null }: ViewProps) {
   const { crew, models, edition, tools } = page;
   const cloud = useCloud();
   const dim = !page.can_change;
@@ -273,7 +273,6 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
         <>
           <Heading title="Budget" />
           <Card dim={dim}><div className="px-4 py-3.5" data-testid="budget-text">{models.budget_text}</div></Card>
-          <AgentLimitsPanel agent={agent} />
         </>
       )}
 
@@ -282,7 +281,6 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
       {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} noTeam />}
       {tab === "usage" && <UsagePanels />}
       {tab === "licence" && <LicencePanel />}
-      {tab === "agent_tools" && <div className={HEADED}><McpToolsPanel /></div>}
       {tab === "areas" && <EePage slot="page.settings.areas" />}
 
       {tab === "edition" && (

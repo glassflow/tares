@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0025_integration_keys_pr_events"                 # the newest revision: tests that count revisions move with it
-REVISIONS = 25
+HEAD = "0026_drop_catalog_sources"                       # the newest revision: tests that count revisions move with it
+REVISIONS = 26
 FAILS = []
 
 
@@ -243,7 +243,7 @@ SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "sessi
 ACCOUNT_TABLES = ["people", "api_keys", "project_members"]      # TR-1608, with settings: taken over
 # TR-1610: taken over like the accounts, and not in DuckDB here (the Store no longer makes them there)
 PROJECT_TABLES = ["usecases", "usecase_objects", "usecase_log", "docs", "skills", "shared_skills",
-                  "catalog_sources", "github_credentials", "model_usage"]
+                  "github_credentials", "model_usage"]     # catalog_sources went in TR-1811 (0026)
 TICKET_TABLES = ["tickets", "ticket_history", "ticket_numbers"]                  # TR-1612, the same
 REVIEW_TABLES = ["milestones", "milestone_check_results", "milestone_acceptances", "ticket_checks",
                  "challenges", "reviews", "review_findings", "rule_proposals"]    # TR-1615, the same
@@ -335,7 +335,8 @@ def session_tables():
     ck("and removes the tables the store made, but not settings and the accounts (a downgrade never "
        "drops a taken-over table)",
        sorted(inspect(sdb.engine).get_table_names())
-       == sorted(["session_store_version", "settings"] + ACCOUNT_TABLES),
+       # catalog_sources: 0017 took it over, 0026 dropped it, and 0026's downgrade makes it again
+       == sorted(["session_store_version", "settings", "catalog_sources"] + ACCOUNT_TABLES),
        inspect(sdb.engine).get_table_names())
     sdb.upgrade()
     ck("an upgrade after a downgrade builds them again", shape(sdb.engine) == declared(sdb.engine)

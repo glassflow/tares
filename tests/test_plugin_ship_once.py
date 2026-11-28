@@ -16,7 +16,6 @@ import tempfile
 import threading
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import clean_env, scrub_os_environ
@@ -136,12 +135,11 @@ def hooks_side_by_side():
 
 def tares_lists_each_call_once():
     print("Tares drops request copies and lists a call stored twice once")
-    from tares.connectors.claude_code import ClaudeCodeConnector
+    from tares.session_map import ClaudeCodeLines
     from tares.store import Store
     d = tempfile.mkdtemp(prefix="ship-once-")
     store = Store(os.path.join(d, "t.duckdb"))
-    c = ClaudeCodeConnector(SimpleNamespace(name="claude_code", type="claude_code", config={}),
-                            store=store)
+    c = ClaudeCodeLines(store, source="claude_code", source_type="claude_code")
     v = call("s", 1, "[TF:VERDICT] ok")
     f = call("s", 2, "[TF:FYI] note", ts="2026-11-12T13:04:03.148Z")
     envs = c.map_payload([v, f, blob("s", v, f)])

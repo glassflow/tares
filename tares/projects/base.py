@@ -82,63 +82,9 @@ class Template:
     def plan(self, params: dict) -> list[PlannedObject]:
         raise NotImplementedError
 
-    def summary(self, instance: dict, store) -> dict:
-        """What the project page shows beyond the object list: the recent runs of its agents and
-        when its triggers last fired. Works for any template because it only reads the instance's
-        objects. Templates override to add `panels` (label/value tables the page renders on Setup,
-        each {title, rows: [{label, value, url?, mono?}]}), `cards` (counters, each {label, value})
-        and per-run decorations (`result_url`, `result_label`, `badges`); call super() first and
-        extend what it returns."""
-        objects = instance.get("objects") or []
-        runs, total, ok = [], 0, 0
-        for o in objects:
-            if o["kind"] != "agent":
-                continue
-            n, n_ok = store.count_agent_runs(o["name"])
-            total += n
-            ok += n_ok
-            for r in store.list_agent_runs(o["name"], limit=20):
-                runs.append({"id": r.get("id"), "started_at": _iso(r.get("started_at")),
-                             "key": r.get("key"), "agent": o["name"], "status": r.get("status"),
-                             "rounds": r.get("rounds"), "max_rounds": r.get("max_rounds"),
-                             "finding": r.get("finding"), "error": r.get("error")})
-        runs.sort(key=lambda r: r["started_at"] or "", reverse=True)
-        runs = runs[:20]
-        triggers = []
-        for o in objects:
-            if o["kind"] != "trigger":
-                continue
-            triggers.append({"name": o["name"], "last_fired": _iso(store.last_fired_any(o["name"]))})
-        fired = [t["last_fired"] for t in triggers if t["last_fired"]]
-        return {"runs": runs, "triggers": triggers, "runs_total": total, "runs_ok": ok,
-                "trigger_last_fired": max(fired) if fired else None}
-
-    def after_create(self, instance: dict, store, runtime) -> None:
-        """Optional hook the engine calls once after a successful create, with the runtime (None
-        while the daemon boots from a catalog file). Best effort: an error here is logged on the
-        instance and never undoes the create."""
-        return None
-
-    async def detect(self, store, runtime) -> dict:
-        """Optional: look at the environment (running containers, reachable services) and propose
-        parameter values. Returns {"params": {name: value}, "found": {name: "where it came from"},
-        "missing": {name: "why not"}, "notes": [str]}; the wizard prefills what it can and says the
-        rest. Default: nothing detected."""
-        return {"params": {}, "found": {}, "missing": {}, "notes": []}
-
-    def run_action(self, instance: dict, action: str, args: dict, store, runtime) -> dict:
-        """Perform one of ACTIONS for a running instance; return what the page should show.
-        Raise ProjectError for a bad action or arguments."""
-        raise ProjectError(f"{self.key}: no action {action!r}")
-
     def describe(self) -> dict:
         return {"key": self.key, "title": self.title, "description": self.description,
                 "params": self.PARAMS, "tags": list(self.tags), "setup": list(self.SETUP),
                 "actions": list(self.ACTIONS), "guide": dict(self.guide) if self.guide else None,
                 "sentence": self.sentence, "goal": self.GOAL or None}
 
-
-def _iso(v):
-    if v is None:
-        return None
-    return v.isoformat() if hasattr(v, "isoformat") else str(v)

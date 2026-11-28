@@ -229,9 +229,6 @@ async def main():
 
     async with app.router.lifespan_context(app):
         shop = json.loads(await m.create_project("Shop", "Sell things"))["id"]
-        async with mk() as cx:
-            await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
-                                                "poll": "10s", "config": {"push": True}, "project": shop})
         await m.write_ticket("Catalog", project="Shop")
         await m.write_ticket("Cart", project="Shop")
         wd = json.loads(await m.write_doc("working", "Working: Catalog",

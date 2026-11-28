@@ -27,6 +27,17 @@ def _resync(store, sessions) -> None:
             hourly.rebuild(store.sessions_db, conn, sessions)
 
 
+def wait_usage_ready(store, seconds: float = 20) -> None:
+    """Wait until the start-up fill has built the hourly usage totals (TR-1632). A row seeded while the
+    fill runs can be missed by it and also skip its resync (the totals are not ready yet), so a test that
+    seeds usage inside a running app waits for the fill first."""
+    import time
+    from tares import claude_usage_hourly as hourly
+    end = time.monotonic() + seconds
+    while not hourly.ready(store) and time.monotonic() < end:
+        time.sleep(0.05)
+
+
 def _usage_sessions(store, table, where) -> list:
     if table != "session_usage":
         return []

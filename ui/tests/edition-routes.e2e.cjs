@@ -1,11 +1,9 @@
 /*
  * Browser e2e for TR-768: the route table of the factory edition and Settings, Advanced.
  *
- * Factory: /settings/advanced lands on Settings with its Advanced group open, which links Connections
- * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /report the
+ * Factory: /settings/advanced lands on Settings; /reviews opens the Reviews page (TR-735), /report the
  * Report page (TR-1667), /docs lands
- * on /projects, a ticket address opens the ticket page (the old ?view=ticket:<ref> goes there too); /sources still opens today's
- * page; the menu is Home, Integrations, Projects, Tickets, Reviews, Report, Crew, People, Docs and memory, Settings;
+ * on /projects, a ticket address opens the ticket page (the old ?view=ticket:<ref> goes there too); the menu is Home, Integrations, Projects, Tickets, Reviews, Report, Crew, People, Docs and memory, Settings;
  * / on a new cell (no project, setup not done) opens Set up your factory;
  * ?sample=busy without the browser flag renders the same as /.
  * AI SRE: /timeline is the Timeline page (TR-752); /incidents is the Incidents page (TR-751); /services and /runbooks are their own pages.
@@ -133,31 +131,13 @@ function loadSample(env) {
       await go(page, e, "/settings/advanced");
       ck("factory: /settings/advanced lands on Settings, Advanced", where(page) === "/settings?tab=advanced", where(page));
       ck("factory: it is the Settings page", await page.getByRole("heading", { name: "Settings", exact: true }).isVisible());
-      const panel = page.getByTestId("settings-nav");
-      await panel.locator('a[href="/sources"]').waitFor();
-      ck("factory: Advanced is the group open", (await page.getByTestId("group-open-advanced").getAttribute("aria-expanded")) === "true");
-      ck("factory: Advanced links Connections to /sources", (await panel.locator('a[href="/sources"]').innerText()).includes("Connections"));
-      ck("factory: and Explore your data to /explore", (await panel.locator('a[href="/explore"]').innerText()).includes("Explore your data"));
-      const hrefs = await panel.locator("a").evaluateAll((a) => a.map((x) => x.getAttribute("href")));
-      ck("factory: and All resources, Connect and Reads", ["/resources", "/connect", "/reads"].every((h) => hrefs.includes(h)), hrefs.join(","));
+      await page.getByTestId("settings-nav").waitFor();
       await checkWords(page, ck, "factory Advanced tab");
       await shot(page, "advanced-factory-1440.png");
-
-      await panel.locator('a[href="/sources"]').click();
-      await page.waitForLoadState("networkidle");
-      ck("factory: Connections opens the Connections page", where(page) === "/sources"
-         && await page.getByRole("heading", { name: "Connections", exact: true }).isVisible(), where(page));
 
       await go(page, e, "/settings");
       await page.getByTestId("pane-crew").waitFor();
       ck("factory: /settings is the Settings page with its own sidebar", where(page) === "/settings" && (await page.getByTestId("settings-nav").count()) === 1);
-      await go(page, e, "/sources");
-      ck("factory: /sources opens the Connections page", where(page) === "/sources"
-         && await page.getByRole("heading", { name: "Connections", exact: true }).isVisible(), where(page));
-      await go(page, e, "/explore");
-      ck("factory: /explore still opens today's Explore page", where(page) === "/explore"
-         && await page.getByRole("heading", { name: "Explore", exact: true }).isVisible(), where(page));
-
       await go(page, e, "/reviews");
       ck("factory: /reviews opens the Reviews page", where(page) === "/reviews"
          && await page.getByRole("heading", { name: "Reviews", exact: true }).isVisible()
@@ -198,9 +178,9 @@ function loadSample(env) {
       await ctx.close();
 
       const narrow = await open(390);
-      await go(narrow.page, e, "/settings/advanced");
-      await narrow.page.getByTestId("pane-agent_tools").waitFor();
-      ck("factory 390: an Advanced item is the one shown", (await narrow.page.getByTestId("settings-select").inputValue()) === "agent_tools");
+      await go(narrow.page, e, "/settings?tab=providers");
+      await narrow.page.getByTestId("pane-providers").waitFor();
+      ck("factory 390: the item asked for is the one shown", (await narrow.page.getByTestId("settings-select").inputValue()) === "providers");
       ck("factory 390: the page does not scroll sideways", await narrow.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
       await checkWords(narrow.page, ck, "factory 390 Advanced tab");
       await shot(narrow.page, "advanced-factory-390.png");
@@ -232,8 +212,6 @@ function loadSample(env) {
       await go(page, e, "/projects/x/tickets/T1");
       ck("platform: a ticket address stays and says the page does not exist", where(page) === "/projects/x/tickets/T1"
          && (await page.locator("main, .main").first().innerText()).includes("does not exist"), where(page));
-      await go(page, e, "/sources");
-      ck("platform: /sources is the Connections page", await page.getByRole("heading", { name: "Connections", exact: true }).isVisible());
       await shot(page, "settings-platform-1440.png");
       await ctx.close();
     }

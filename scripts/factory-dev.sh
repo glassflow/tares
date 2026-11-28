@@ -20,7 +20,7 @@ case "${1:-help}" in
     # the console first: without ui/dist the package builds with no console and `tares up` serves the API only
     (cd ui && npm ci && npm run build)
     [ -d .venv ] || uv venv
-    uv pip install -e ".[otlp-grpc]"
+    uv pip install -e .
     echo "installed: $ROOT/.venv (tares, tares-mcp), console built in ui/dist"
     echo "next: source .venv/bin/activate, then scripts/factory-dev.sh up"
     ;;
