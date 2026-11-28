@@ -10,8 +10,9 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
   slack, projects, docs, tickets, milestones, standup, home, console), `deps.py` (the `Deps` every
   router and route module is given: the store, the projects and the caller helpers), `guard.py`
   (the auth guard), `cli.py` (`tares up`, `tares mcp`),
-  `store.py` (every read and write, on the session store), `session_store/` (SQLite or Postgres,
-  with its Alembic revisions), `providers.py` and `models.py` (the model provider layer the
+  `store.py` (every read and write, on the session store), `session_store/` (SQLite or Postgres:
+  `tables.py` declares every table, the Alembic revisions make them, starting from `0001_baseline`;
+  a table change edits both and the list in `tests/test_baseline.py`), `providers.py` and `models.py` (the model provider layer the
   standup, milestone and report summaries call), `mcp*.py` (the MCP proxy),
   `factory_projects.py` (a project's row and its lifecycle).
 - `ui/` the console, a Vite + React app. The daemon serves `ui/dist` and the wheel bundles it.
