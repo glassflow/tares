@@ -61,6 +61,9 @@ const router = createBrowserRouter([
       { path: "settings/advanced", element: <AdvancedSettings /> },
       { path: "security", element: to("/settings") },
       { path: "welcome/edition", element: to("/") },
+      // Slack messages already sent link /agents/<name> and /dispatches/<id>: they land on a page that exists
+      { path: "agents/*", element: to("/projects") },
+      { path: "dispatches/*", element: to("/") },
       { path: "usecases/*", element: <UsecasesRedirect /> },
       { path: "usecases", element: <UsecasesRedirect /> },
       { path: "*", element: <NotFound /> },

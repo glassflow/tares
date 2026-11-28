@@ -8,8 +8,8 @@ and the in-process caches in CACHES are cleared before each of them, so a call i
 a page after a quiet minute, which is what a person opening it sees. The median of the 5 is the
 route's time.
 
-Which routes. ROUTES holds every GET the factory console makes (the pages of ui/src/editions/routes.tsx
-for the factory edition, the shell around them, and what those pages open). NOT_TIMED holds the GETs
+Which routes. ROUTES holds every GET the factory console makes (the pages of ui/src/editions/pages.ts,
+the shell around them, and what those pages open). NOT_TIMED holds the GETs
 that only an older page or another edition makes, or that another server answers, each with the reason;
 they are printed.
 Nothing checks these two lists against ui/src: a PR that adds a GET to the console adds it here.

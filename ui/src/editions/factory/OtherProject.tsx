@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
 import { usePolling } from "../../components/bits";
@@ -11,10 +11,9 @@ import { ageWords, formatStampUTC } from "../../lib/time";
 import type { ProjectObjectKind, ProjectSummary } from "../../types";
 
 // What a factory cell shows for a project that is not a factory project (TR-1396): one made through the
-// API without a kind, or before the cell became a factory cell. The factory pages answer only for factory
-// projects, and the old project page (pages/ProjectShell) stays with the platform edition. This page says
-// what the project is and what it holds, and keeps the two things a person may still need here: pause it,
-// or delete it. Its full setup is the platform edition's; Settings, Edition says how to switch.
+// API without a kind, or before the cell became a factory cell, and a draft still being planned. The
+// factory pages answer only for factory projects. This page says what the project is and what it holds,
+// and keeps the two things a person may still need here: pause it, or delete it.
 
 const POLL_MS = 15000;
 
@@ -49,10 +48,6 @@ export default function OtherProject({ id }: { id: string }) {
     return () => { live = false; };
   }, [error, s, id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (s?.id === id && s.status === "draft") {
-    // a draft has no page yet: it opens where its planning stopped
-    return <Navigate to={`/projects/${encodeURIComponent(id)}/setup`} replace />;
-  }
   if (!s || s.id !== id) {
     if (missing) {
       return (
@@ -136,11 +131,6 @@ function OtherProjectPage({ s, id, reload, stale }: {
           <EmptyState data-testid="other-empty">It holds no connections, rules, agents or MCP servers.</EmptyState>
         )}
       </ListSection>
-
-      <p className="m-0 text-sm text-muted-foreground" data-testid="other-setup">
-        Its full setup belongs to the platform edition. An admin can switch the cell in{" "}
-        <Link to="/settings?tab=edition" data-testid="other-edition-link">Settings, Edition</Link>.
-      </p>
 
       {/* the Default project holds whatever was made outside a project; it is never paused or deleted */}
       {!s.default && (
