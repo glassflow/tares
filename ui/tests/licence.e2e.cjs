@@ -270,7 +270,7 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
              `${await page.getByTestId("licence-banner").count()} banners, ${errors.join(" ")}, ${await overflow(page)}px over`);
           if (p === "/") { await checkWords(page, ck, t(`banner @${w}`)); await shot(page, "licence-banner-expired", w); }
           else {
-            ck(t(`@${w}: its link goes to the licence tab`), (await page.getByTestId("licence-banner-link").getAttribute("href")) === "/settings/advanced?tab=licence");
+            ck(t(`@${w}: its link goes to the licence tab`), (await page.getByTestId("licence-banner-link").getAttribute("href")) === "/settings?tab=licence");
             await page.getByTestId("licence-banner-link").click();
             await page.getByTestId("licence-panel").waitFor({ timeout: 15000 });
             await page.getByTestId("licence-expires").waitFor({ timeout: 15000 });

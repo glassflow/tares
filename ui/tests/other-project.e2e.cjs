@@ -187,7 +187,7 @@ async function waitFor(url, tries = 100) {
     for (const width of [1440, 390]) {
       const { ctx, page } = await newPage(width);
       const T = (id) => page.getByTestId(id);
-      await routeSummary(page, { objects: PARTS, status: "error", last_error: "agent triage-agent: the model provider refused the key",
+      await routeSummary(page, { objects: PARTS, status: "error",
                                  lead: { id: "p1", name: "Ada Example" }, goal: "Watch the production logs and open an incident when the error rate jumps." });
       await page.goto(`${BASE}/projects/${w}`, { waitUntil: "load" });
       await T("other-part").first().waitFor();
@@ -200,8 +200,9 @@ async function waitFor(url, tries = 100) {
         ck("the count beside the title", (await txt(T("other-count"))) === "5");
         ck("a part deleted by hand says so, on its own row only", (await T("other-part-missing").count()) === 1
            && (await txt(T("other-part").nth(3))).includes("deleted outside the project"));
-        ck("a failing project says why, in the error tone", (await raw(T("other-status"))) === "Failing" && (await T("other-status").getAttribute("data-tone")) === "bad"
-           && (await txt(T("other-error"))).includes("the model provider refused the key") && (await T("other-error").getAttribute("role")) === "alert");
+        // TR-1817: the API sends no last_error any more, so there is no error line, only the status
+        ck("a failing project says so, in the error tone, with no error line", (await raw(T("other-status"))) === "Failing" && (await T("other-status").getAttribute("data-tone")) === "bad"
+           && (await T("other-error").count()) === 0);
         ck("who leads it", (await txt(T("other-what"))).includes("Led by Ada Example."));
         ck("the goal, as written", (await txt(T("other-goal"))).includes("Watch the production logs"));
         ck("its names and goal are marked as the person's own text", (await T("other-part-name").first().getAttribute("data-user-text")) !== null
