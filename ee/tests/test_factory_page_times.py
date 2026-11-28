@@ -99,7 +99,7 @@ OVER = {
 ROUTES = [
     # the shell, on every page (editions/edition.tsx, licence.tsx, cloud.ts, components/AuthGate.tsx,
     # editions/Shell.tsx)
-    ("whoami", "/api/whoami", lambda d: d["person"]["name"] == "Sam" and d["edition"] == "factory"),
+    ("whoami", "/api/whoami", lambda d: d["person"]["name"] == "Sam" and "edition" not in d),
     ("licence", "/api/licence", lambda d: d["valid"] and d["ee_allowed"]),
     ("health", "/health", lambda d: d["status"] == "ok"),
     ("capabilities", "/api/capabilities", lambda d: d["version"] and d["slack_configured"]),
