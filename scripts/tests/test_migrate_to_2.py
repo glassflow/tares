@@ -163,6 +163,15 @@ def static_checks():
     imports = [ln for ln in head.splitlines() if ln.startswith(("import ", "from "))]
     ck("the script imports nothing from tares at the top", not [i for i in imports if "tares" in i], imports)
     ck("the script carries its dependencies (PEP 723)", "# /// script" in src and "duckdb" in src.split("# ///")[1])
+    md = sa.MetaData()
+    old = sa.Table("t_old", md, sa.Column("id", sa.Text, primary_key=True), sa.Column("gone", sa.Text))
+    new = sa.Table("t_new", md, sa.Column("id", sa.Text, primary_key=True),
+                   sa.Column("opt", sa.Text), sa.Column("dflt", sa.Integer, nullable=False, server_default="0"),
+                   sa.Column("must", sa.Text, nullable=False))
+    note, blocked = mod.column_notes(old, new)
+    ck("the plan names a dropped column, a new one with its default, and refuses a NOT NULL one with no source",
+       "columns dropped: gone" in note and "opt (NULL)" in note and "dflt (its default)" in note
+       and blocked == ["must"], (note, blocked))
 
 
 def load_script():
