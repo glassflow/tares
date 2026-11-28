@@ -477,6 +477,129 @@ def broken():
     ck("a changed session line fails the run", rc == 1 and "FAIL  session_lines:" in text, text[-1500:])
 
 
+def duck_edit(d: str, stmts: list[tuple]) -> None:
+    import duckdb
+    c = duckdb.connect(os.path.join(d, "tares.duckdb"))
+    for stmt in stmts:
+        c.execute(*stmt)
+    c.execute("CHECKPOINT")
+    c.close()
+
+
+def review_fixes():
+    print("== NULs, coordination calls, dropped projects, archived sessions, a file as output ==")
+    s = META["sessions"]
+    # a session completed from DuckDB whose Bash command holds a NUL, into Postgres
+    if PG:
+        d = variant()
+        # in a command, a tool_use id, a prompt and a reply (2.0's own fact rules drop NULs from the
+        # text they keep too, so this guards the script's own handling as well as theirs)
+        duck_edit(d, [("UPDATE events SET payload = CAST(replace(CAST(payload AS VARCHAR), ?, ?) AS JSON) "
+                       "WHERE key_value = ?", [a, b, s["partial"]])
+                      for a, b in (("pytest -q", "pytest\\u0000 -q"), ("toolu_e_", "toolu\\u0000_e_"),
+                                   ("please run", "please\\u0000 run"), ("I will run", "I\\u0000 will run"))])
+        out = pg_dsn(new_schema("m2nul"))
+        rc, text = run("--apply", d, "--to", out, "--pr-events-since", SINCE, expect=0)
+        ck("a session completed from DuckDB with a NUL in a command moves to Postgres", rc == 0, text[-1500:])
+        if rc == 0:
+            e = engine_of(out)
+            cmds = [r[0] for r in q(e, "SELECT command FROM session_commands WHERE session = :s", s=s["partial"])]
+            ck("its commands are kept without the NUL", cmds and all(c == "pytest -q tests/test_cart.py" for c in cmds),
+               cmds)
+            e.dispose()
+    # the sessions table never caught up: coordination_calls counts every line, not DuckDB's alone
+    d = variant(["DELETE FROM session_ingest_marks WHERE name = 'sessions_caught_up'"])
+    # DuckDB holds one more tool_use line of the main session, whose text looks like coordination and
+    # whose tool is not: counted from DuckDB alone, the session would be left with 0
+    at = datetime(2026, 11, 20, 11, 0, tzinfo=timezone.utc)
+    line = {"type": "assistant", "uuid": "duck-bash-0001", "sessionId": s["main"],
+            "message": {"content": [{"type": "tool_use", "id": "toolu_duck_1", "name": "Bash",
+                                     "input": {"command": "echo"}}]}}
+    duck_edit(d, [("INSERT INTO events (source, source_type, key_value, event_type, text, payload, labels, "
+                   "event_time, ingest_time) VALUES ('claude_code', 'event_stream', ?, 'tool_use', "
+                   "'→ Skill(nothing) → Bash(echo)', ?, '{}', ?, ?)", [s["main"], json.dumps(line), at, at])])
+    c = sqlite3.connect(os.path.join(d, "tares.sqlite"))
+    before = dict(c.execute("SELECT session, coordination_calls FROM sessions").fetchall())
+    c.close()
+    out = os.path.join(SCRATCH, "out-coord")
+    rc, text = run("--apply", d, "--to", out, "--pr-events-since", SINCE, expect=0)
+    ck("a cell whose sessions never caught up is moved and verified", rc == 0, text[-1500:])
+    if rc == 0:
+        e = engine_of(out)
+        after = dict(q(e, "SELECT session, coordination_calls FROM sessions"))
+        ck("coordination_calls counts the lines only the table holds", before[s["main"]] > 0
+           and after.get(s["main"]) == before[s["main"]], (before.get(s["main"]), after.get(s["main"])))
+        e.dispose()
+    # --drop-non-factory leaves out every row of the dropped project
+    nf = META["projects"]["non_factory"][0]
+    d = variant([
+        f"INSERT INTO tickets (id, project, owner, title, status) VALUES ('tk_nf1', '{nf}', 'tares', 'x', 'todo')",
+        f"INSERT INTO ticket_history (ticket, project, field, value) VALUES ('tk_nf1', '{nf}', 'stage', 'doing')",
+        f"INSERT INTO milestones (id, project, owner, name) VALUES ('ms_nf1', '{nf}', 'tares', 'M1')",
+        f"INSERT INTO reviews (id, project, ticket, round, verdict) VALUES ('rv_nf1', '{nf}', 'tk_nf1', 1, 'pass')",
+        f"INSERT INTO decisions (id, project, question) VALUES ('dc_nf1', '{nf}', 'q')",
+        f"INSERT INTO project_sessions (project, session) VALUES ('{nf}', '{s['two']}')",
+        f"INSERT INTO merge_queue (id, project_uid, repo) VALUES ('mq_nf1', '{nf}', 'r')",
+        f"UPDATE session_usage SET project = '{nf}' WHERE session = '{s['two']}'"])
+    rc, text = run("--check", d, "--drop-non-factory", "--pr-events-since", SINCE)
+    ck("the plan counts what --drop-non-factory leaves out",
+       rc == 0 and "--drop-non-factory leaves out the rows of uc_challeng4" in text and "tickets 1" in text
+       and "merge_queue 1" in text and "session_usage" in text.split("empties the project of")[-1], text[-1200:])
+    out = os.path.join(SCRATCH, "out-drop-all")
+    rc, text = run("--apply", d, "--to", out, "--drop-non-factory", "--pr-events-since", SINCE, expect=0)
+    ck("--drop-non-factory with the project's tickets, reviews and the rest is moved and verified", rc == 0, text[-1500:])
+    if rc == 0:
+        e = engine_of(out)
+        left = {t: q(e, f"SELECT count(*) FROM {t} WHERE {c} = :p", p=nf)[0][0]
+                for t, c in (("tickets", "project"), ("ticket_history", "project"), ("milestones", "project"),
+                             ("reviews", "project"), ("decisions", "project"), ("project_sessions", "project"),
+                             ("merge_queue", "project_uid"), ("session_usage", "project"))}
+        ck("no row of the dropped project is left", not any(left.values()), left)
+        ck("its sessions' replies stay, with no project",
+           q(e, "SELECT count(*) FROM session_usage WHERE session = :s AND project IS NULL", s=s["two"])[0][0] > 0)
+        e.dispose()
+    # an archived session gets an older line DuckDB alone holds
+    d = variant([f"UPDATE sessions SET lines_complete = 0 WHERE session = '{s['archived']}'"])
+    old = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
+    payload = {"type": "user", "uuid": "older-0001", "sessionId": s["archived"], "timestamp": old.isoformat(),
+               "message": {"role": "user", "content": "a line from before"}}
+    duck_edit(d, [("INSERT INTO events (source, source_type, key_value, event_type, text, payload, labels, "
+                   "event_time, ingest_time) VALUES ('claude_code', 'event_stream', ?, 'user', 'a line from before', "
+                   "?, '{}', ?, ?)", [s["archived"], json.dumps(payload), old, old])])
+    rc, text = run("--check", d, "--pr-events-since", SINCE)
+    ck("the plan names the archived session whose added line is older than its newest",
+       rc == 0 and f"session {s['archived']} has archived parts" in text and "older than its newest line" in text,
+       text[-1200:])
+    out = os.path.join(SCRATCH, "out-older")
+    rc, text = run("--apply", d, "--to", out, "--pr-events-since", SINCE, expect=0)
+    ck("it is moved and verified", rc == 0, text[-1500:])
+    if rc == 0:
+        e = engine_of(out)
+        top = q(e, "SELECT max(last_seq) FROM session_archive_parts WHERE session = :s", s=s["archived"])[0][0]
+        row = q(e, "SELECT seq FROM session_lines WHERE session = :s AND line_key = 'older-0001'", s=s["archived"])
+        meta = q(e, "SELECT line_count, lines_complete FROM sessions WHERE session = :s", s=s["archived"])
+        ck("the line goes after the archived part, and the session is complete",
+           row == [(top + 1,)] and meta and meta[0][0] == top + 1 and bool(meta[0][1]), (row, top, meta))
+        e.dispose()
+        env_was = dict(os.environ)
+        try:
+            from tares.store import Store
+            st = Store(out)
+            lines, where = st.key_events_from("claude_code", s["archived"], limit=1000)
+            st.close()
+        finally:
+            os.environ.clear()
+            os.environ.update(env_was)
+        times = [ln.get("at") or ln.get("event_time") for ln in lines]
+        ck("2.0 reads it first, in time order", where == "both" and lines and times == sorted(times)
+           and "a line from before" in json.dumps(lines[0], default=str), (where, len(lines)))
+    # an output that is a file
+    f = os.path.join(SCRATCH, "a-file")
+    open(f, "w").write("x")
+    rc, text = run("--apply", variant(), "--to", f)
+    ck("an output that is a file is refused", rc == 2 and "Refused" in text and "is a file" in text, text[-600:])
+
+
 def main() -> int:
     try:
         static_checks()
@@ -484,6 +607,7 @@ def main() -> int:
         postgres_suite()
         refusals()
         skills_and_drop()
+        review_fixes()
         broken()
     finally:
         drop_schemas()
