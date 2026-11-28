@@ -170,16 +170,16 @@ async def main():
         async with mk() as cx:
             d = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200})).json()
             plain = (await cx.get(f"/api/crew/{ST}")).json()
-        ck("before the session's lines are all in the table, they come from DuckDB: lines_from says events",
-           d.get("lines_from") == "events" and plain.get("lines_from") == "events", d.get("lines_from"))
+        ck("a session born in the table but not marked complete answers from the table (TR-1613): lines_from says table",
+           d.get("lines_from") == "table" and plain.get("lines_from") == "table", d.get("lines_from"))
         async with mk() as cx:
             r = await cx.get(f"/api/crew/{ST}/tool/t-log")
-            ck("the tool answer says events too", r.json().get("lines_from") == "events", r.text[:200])
+            ck("the tool answer says table too", r.json().get("lines_from") == "table", r.text[:200])
         from tares import session_ingest
         session_ingest.reconcile_sessions(app.state.store)       # the lines are now complete in the table
         async with mk() as cx:
             t = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200})).json()
-            ck("lines_from says table, and the conversation and the recent lines are what DuckDB gave",
+            ck("once complete, lines_from says table, and the conversation and the recent lines are the same",
                t.get("lines_from") == "table"
                and utc(t["recent"]) == utc(d["recent"]) and utc(t["conversation"]) == utc(d["conversation"])
                and t["conversation_from"] == d["conversation_from"],

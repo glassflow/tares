@@ -25,6 +25,8 @@ from tares import session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store.tables import session_ingest_marks, sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first  # noqa: E402
 
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
@@ -71,7 +73,11 @@ def new_dir():
 
 
 def open_store(d):
-    return Store(os.path.join(d, "t.duckdb"))
+    """A cell that writes its lines to DuckDB first, then counts them, as a platform cell did before
+    Tares 2.0 (tests/_old_cell.py): what this suite was written against."""
+    s = Store(os.path.join(d, "t.duckdb"))
+    s.append = lambda envs: append_duckdb_first(s, envs)
+    return s
 
 
 def link(s):
@@ -234,7 +240,8 @@ def failed_reconcile_keeps_the_scan():
         session_ingest._reconcile_chunk = lambda *a: (_ for _ in ()).throw(RuntimeError("down"))
         with contextlib.redirect_stdout(buf):
             s.start_session_reconcile().join(30)
-        out = buf.getvalue().strip().splitlines()
+        # a Postgres cell with no TARES_ARCHIVE_URL also says, once, that its lines still go to DuckDB
+        out = [x for x in buf.getvalue().strip().splitlines() if "no archive configured" not in x]
         ck("start_session_reconcile prints one line about the failure",
            len(out) == 3 and "catch-up failed (RuntimeError: down)" in out[0], out)
         # the facts fill and the turns fill run after it and do not depend on it
