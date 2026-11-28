@@ -112,7 +112,7 @@ export function ProvidersPanel() {
     <Panel data-testid="providers">
       <div className="grid gap-4">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <p className={TEXT} data-testid="providers-what">The default writes the standup summary, the milestone summaries and the weekly report.</p>
+          <p className={TEXT} data-testid="providers-what">The default writes the standup summary, the milestone summaries, the weekly report and the setup plan.</p>
           {action}
         </div>
         <Collapse>{loadErr && data && <Banner tone="error">{loadErr}</Banner>}</Collapse>
@@ -159,7 +159,9 @@ export function ProvidersPanel() {
                 description={confirmRemove.kind === "anthropic"
                   ? "The saved key and gateway are removed. If the daemon's environment has a key, that one is used again."
                   : confirmRemove.default
-                    ? `The summaries move to another provider you have added, or wait for one.`
+                    ? rows.some((r) => r.id !== confirmRemove.id && r.configured)
+                      ? `The summaries move to another provider you have added.`
+                      : `The summaries stop until you add another provider.`
                     : `${confirmRemove.name} is removed. The summaries keep using the default.`}
                 footer={<>
                   <Button variant="secondary" disabled={busy !== undefined} onClick={() => setConfirmRemove(undefined)}>Cancel</Button>

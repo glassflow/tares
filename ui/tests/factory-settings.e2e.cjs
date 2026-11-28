@@ -376,7 +376,7 @@ const until = async (fn, tries = 40) => {
       ck("a cell with no provider says so, and what waits on one",
         /^No model provider yet\. Add one: until then the standup, the milestones and the weekly report come without their summary\.$/.test(await text(page, "providers-empty")), await text(page, "providers-empty"));
       ck("Providers says what the model is for in 2.0, with no agents or Ask",
-        (await text(page, "providers-what")) === "The default writes the standup summary, the milestone summaries and the weekly report."
+        (await text(page, "providers-what")) === "The default writes the standup summary, the milestone summaries, the weekly report and the setup plan."
         && !/\bagents?\b|\bAsk\b/.test(await text(page, "pane-providers")), await text(page, "pane-providers"));
       await checkWords(page, ck, "Providers item");
       await panel.getByRole("button", { name: "Add a provider" }).click();
@@ -661,19 +661,20 @@ const until = async (fn, tries = 40) => {
     {
       await go(page, "usage");
       ck("Usage renders, with model spend", (await page.getByTestId("pane-usage").getByRole("heading", { name: "Model spend" }).count()) === 1);
-      ck("a cell that spent nothing says the meter starts with the first summary",
-        /Nothing spent yet; the meter starts counting with the first summary\./.test(await text(page, "pane-usage")), await text(page, "pane-usage"));
+      ck("a cell that spent nothing says the meter starts with the first summary or setup plan",
+        /Nothing spent yet; the meter starts counting with the first summary or setup plan\./.test(await text(page, "pane-usage")), await text(page, "pane-usage"));
       const bucket = (cost, calls) => ({ calls, input_tokens: 1000, output_tokens: 200, cost_usd: cost, uncosted_calls: 0 });
       const fake = { window_days: 30, total: bucket(3.5, 12), days: [{ day: "2026-11-28", ...bucket(0.5, 2) }],
                      by_surface: { ask: bucket(1.25, 1200), agent: bucket(2.25, 1) }, by_provider: {} };
       await page.route("**/api/usage/model*", (r) => r.fulfill({ json: fake }));
       await go(page, "usage");
       const spend = await text(page, "pane-usage");
-      ck("summaries and agent runs before 2.0 are named, with their calls", /summaries \$1\.25 over 1,200 model calls/.test(spend)
-        && /agent runs before 2\.0 \$2\.25 over 1 model call\b/.test(spend) && !/\bAsk\b/.test(spend), spend);
+      ck("summaries and agents before 2.0 are named, with their calls", /summaries and setup plans \$1\.25 over 1,200 model calls/.test(spend)
+        && /agents before 2\.0 \$2\.25 over 1 model call\b/.test(spend) && !/\bAsk\b/.test(spend), spend);
       await page.route("**/api/usage/model*", (r) => r.fulfill({ json: { ...fake, by_surface: { ask: bucket(1.25, 1200) } } }));
       await go(page, "usage");
-      ck("with no old agent spend, only the summaries", !/agent runs/.test(await text(page, "pane-usage")), await text(page, "pane-usage"));
+      ck("with no old agent spend, only the summaries", !/agents before/.test(await text(page, "pane-usage")), await text(page, "pane-usage"));
+      await checkWords(page, ck, "Usage item");
       await page.unroute("**/api/usage/model*");
     }
 

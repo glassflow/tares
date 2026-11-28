@@ -54,7 +54,7 @@ export function ModelSpendPanel({ usage, error, reload }: {
 
       {m && (m.total.calls === 0 ? (
         <p className="help" style={{ marginBottom: 0 }}>
-          Nothing spent yet; the meter starts counting with the first summary.
+          Nothing spent yet; the meter starts counting with the first summary or setup plan.
         </p>
       ) : (
         <>
@@ -73,9 +73,9 @@ export function ModelSpendPanel({ usage, error, reload }: {
             </div>
           </div>
           <p className="help" style={{ marginBottom: 0 }}>
-            {summaries && <>summaries {fmtCost(summaries.cost_usd)} over {calls(summaries.calls)}</>}
+            {summaries && <>summaries and setup plans {fmtCost(summaries.cost_usd)} over {calls(summaries.calls)}</>}
             {summaries && before && " · "}
-            {before && <>agent runs before 2.0 {fmtCost(before.cost_usd)} over {calls(before.calls)}</>}
+            {before && <>agents before 2.0 {fmtCost(before.cost_usd)} over {calls(before.calls)}</>}
             {" · "}{fmtTokens(m.total.input_tokens)} tokens in, {fmtTokens(m.total.output_tokens)} out
             {uncosted > 0 && <> · {uncosted} call{uncosted === 1 ? "" : "s"} on an unpriced model, not in the total</>}
           </p>
