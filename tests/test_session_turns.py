@@ -40,7 +40,7 @@ PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
 SRC = "claude_code"
-HEAD = "0024_merge_ledger"
+HEAD = "0025_integration_keys_pr_events"
 
 
 def ck(name, ok, detail=""):

@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import timedelta
 
 from sqlalchemy import (Integer, Text, and_, bindparam, case, cast, delete, false, func, insert,
                         literal, null, or_, select, type_coerce, update)
@@ -25,6 +26,8 @@ from .session_store.tables import (project_sessions, session_commands, session_m
                                    session_states, session_stations, session_turns, session_usage,
                                    session_usage_hourly)
 from .session_store.tables import sessions as sessions_table
+from .session_store.tables import pr_events as pr_events_table
+from .session_store.tables import integration_keys as integration_keys_table
 from .session_store.tables import usecases as projects_table
 from .session_store.tables import people as people_table
 from .session_store.tables import ticket_history as history_table
@@ -1083,32 +1086,71 @@ class FactoryStore:
                  "state": r[4], "fixed_in": r[5], "found_at": r[6]} for r in rows]
 
     def factory_branch_prs(self, repos: set[str]) -> dict[tuple[str, str], tuple[str, int]]:
-        """{(repo, ticket ref upper case): (repo, number)} for the pull requests GitHub sources
-        saw on a `factory/<ref>` branch in one of `repos`, newest first wins (TR-410)."""
+        """{(repo, ticket ref upper case): (repo, number)} for the pull requests the GitHub App's
+        webhook saw on a `factory/<ref>` branch in one of `repos`, newest first wins (TR-410; from
+        `pr_events` since TR-1807)."""
         from .factory_github import branch_ref
         if not repos:
             return {}
-        marks = ", ".join("?" for _ in repos)
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT labels FROM events WHERE event_type = 'pull_request' AND "
-                f"json_extract_string(labels, '$.repo') IN ({marks}) AND "
-                "json_extract_string(labels, '$.branch') LIKE 'factory/%' "
-                "ORDER BY event_time DESC LIMIT 1000", list(repos)).fetchall()
+        t = pr_events_table
+        q = (select(t.c.repo, t.c.branch, t.c.number)
+             .where(t.c.repo.in_(sorted(repos)), t.c.branch.like("factory/%"))
+             .order_by(t.c.at.desc()).limit(1000))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q).all()
         out: dict[tuple[str, str], tuple[str, int]] = {}
-        for (lj,) in rows:
-            try:
-                lab = json.loads(lj) if isinstance(lj, str) else (lj or {})
-            except ValueError:
-                continue
-            ref = branch_ref(lab.get("branch") or "")
-            if not ref:
-                continue
-            try:
-                out.setdefault((lab["repo"], ref.upper()), (lab["repo"], int(lab.get("number"))))
-            except (TypeError, ValueError):
-                continue
+        for repo, branch, number in rows:
+            ref = branch_ref(branch or "")
+            if ref:
+                out.setdefault((repo, ref.upper()), (repo, int(number)))
         return out
+
+    def record_pr_events(self, rows: list[dict], keep_days: int = 30) -> int:
+        """Keep the pull_request events of a delivery (github_webhook.pr_rows); a delivery already
+        kept adds nothing. Rows older than `keep_days` go in the same write. Returns rows added."""
+        if not rows:
+            return 0
+        t = pr_events_table
+        cutoff = now_utc() - timedelta(days=keep_days)
+        with self.sessions_db.begin() as conn:
+            res = conn.execute(self.sessions_db.upsert(t).on_conflict_do_nothing(
+                index_elements=["delivery_id"]), rows)
+            conn.execute(delete(t).where(t.c.at < cutoff))
+        return max(int(res.rowcount or 0), 0)
+
+    def put_integration_key(self, key: str, integration: str, credential: str | None,
+                            source: str | None) -> None:
+        """The webhook key `key` belongs to `integration`'s `credential`; events go under `source`."""
+        t = integration_keys_table
+        with self.sessions_db.begin() as conn:
+            # one key per credential: a recreated App's old key stops working
+            conn.execute(delete(t).where(or_(t.c.key == key, and_(t.c.integration == integration,
+                                                                  t.c.credential == credential))))
+            conn.execute(insert(t).values(key=key, integration=integration, credential=credential,
+                                          source=source, created_at=now_utc()))
+
+    def delete_integration_keys(self, integration: str, credential: str) -> None:
+        """Every webhook key of `integration`'s `credential` stops working."""
+        t = integration_keys_table
+        with self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.integration == integration, t.c.credential == credential))
+
+    def integration_key(self, key: str) -> dict | None:
+        """The row of webhook key `key`, or None."""
+        t = integration_keys_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.key, t.c.integration, t.c.credential, t.c.source)
+                             .where(t.c.key == key)).first()
+        return None if r is None else {"key": r[0], "integration": r[1], "credential": r[2],
+                                       "source": r[3]}
+
+    def integration_key_for(self, integration: str, credential: str) -> dict | None:
+        """The webhook key of `integration`'s `credential`, or None."""
+        t = integration_keys_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.key, t.c.source).where(
+                t.c.integration == integration, t.c.credential == credential)).first()
+        return None if r is None else {"key": r[0], "source": r[1]}
 
     def factory_ref_elsewhere(self, uid: str, repo: str, ref: str) -> bool:
         """Another project has a ticket called `ref` in the work whose PRs live in `repo`: a

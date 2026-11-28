@@ -826,12 +826,20 @@ def make_app() -> FastAPI:
     _SELF_JOIN = re.compile(r"^/api/projects/[^/]+/join$")
     _BRAIN_DECISION_WRITE = re.compile(r"^/api/brain/decisions(/[^/]+)?$")
 
+    def _webhook_key(key: str) -> bool:
+        """True when `key` is a GitHub App's webhook key. A store that cannot answer says no: the
+        delivery then needs a Tares credential, and other ingest is not held up."""
+        try:
+            return store.integration_key(key) is not None
+        except Exception:   # noqa: BLE001
+            return False
+
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
         admin, except the few in _READ_WRITES: a read with a body, and subscribe, which exposes
         nothing a reader couldn't pull and forward; it only persists that reader's own delivery."""
         if (method == "POST" and path.startswith("/ingest/")
-                and runtime.signature_for(path[len("/ingest/"):])):
+                and (_webhook_key(path[len("/ingest/"):]) or runtime.signature_for(path[len("/ingest/"):]))):
             # a source that checks signatures (a GitHub App, a signed webhook) is authenticated by
             # the signature the route verifies on the raw body; GitHub cannot send a Tares key
             return None
@@ -1640,6 +1648,37 @@ def make_app() -> FastAPI:
         """What a crew's recorder read of its Codex stations (TR-1595)."""
         return await _ingest_runtime("codex", request)
 
+    async def _ingest_github(row: dict, request: Request):
+        """A GitHub App webhook delivery on its key (TR-1807): the ci_github integration's. Checked
+        with the App credential's webhook secret on the raw body, mapped, its pull requests kept in
+        pr_events and every event told to the GitHub subscribers (the brain sync). The platform's
+        ingest tail still stores the events until the catalog goes (TR-1811)."""
+        from .github_webhook import GithubAppDeliveries
+        from .webhook_verify import verify
+        source = row.get("source") or "github"
+        cfg = runtime.catalog.sources.get(source)
+        if cfg is None:
+            _err(KeyError(f"the GitHub source {source!r} of this key was deleted"), 404)
+        if cfg.paused:
+            _err(ValueError(f"source {source!r} is paused"), 400)
+        cred = store.get_github_credential(row.get("credential") or "") or {}
+        secret = str((cred.get("config") or {}).get("webhook_secret") or "")
+        reason = verify("github", secret, await request.body(), dict(request.headers), None)
+        if reason:
+            runtime.count_rejected(source, reason)
+            return JSONResponse({"detail": f"signature check failed (github): {reason}"},
+                                status_code=401)
+        body = await _parse_ingest_body(request)
+        try:
+            envs = GithubAppDeliveries(store, source, row.get("credential") or "").map_payload(
+                body, headers=dict(request.headers))
+        except ValueError as e:
+            _err(e, 400)
+        # the runtime's store step keeps the pull requests in pr_events and tells the GitHub hub,
+        # for every GitHub source (github_webhook.after_store); TR-1811 calls it from here instead
+        n = await runtime._store_envelopes(source, envs)
+        return JSONResponse({"ingested": n}, status_code=202, headers=_verify_headers(request))
+
     @app.post("/ingest/{token}", status_code=202)
     async def ingest(token: str, request: Request):
         """Push events into a source, as a JSON object, a JSON array or NDJSON.
@@ -1652,6 +1691,12 @@ def make_app() -> FastAPI:
         needs a credential with the `ingest` scope.
         """
         _refuse_if_full()
+        try:
+            keyed = await asyncio.to_thread(store.integration_key, token)
+        except Exception:   # noqa: BLE001 — a store that cannot answer: the catalog path decides
+            keyed = None
+        if keyed is not None and keyed.get("integration") == "ci_github":
+            return await _ingest_github(keyed, request)
         sig = runtime.signature_for(token)
         if sig:
             # verified on the exact bytes, before parsing (re-serialized JSON would not match)
@@ -2571,6 +2616,14 @@ def make_app() -> FastAPI:
         return {**_gh_redact(c), **_gh_users(c["name"]),
                 **(_gh_deliveries(c) if c.get("kind") in APP_KINDS else {})}
 
+    def _keep_gh_key(src: str, name: str) -> None:
+        """The App's webhook key in integration_keys (TR-1805): what /ingest/<key> reads, with no
+        source catalog. Its events still go under the catalog source's name until the catalog goes."""
+        cfg = runtime.catalog.sources.get(src)
+        key = cfg.ingest_key if cfg else None
+        if key:
+            store.put_integration_key(key, "ci_github", name, src)
+
     def _ensure_gh_app_source(name: str, ingest_key: str | None = None) -> str:
         """The GitHub App source a credential feeds, created when missing: `github` when that name
         is free, else `github_<credential>`. One per credential; it is a part of the cell like any
@@ -2581,6 +2634,7 @@ def make_app() -> FastAPI:
                 # an App recreated under the same name: its hook URL carries the new key
                 store.set_source_ingest_key(existing, ingest_key)
                 runtime.reload_catalog()
+            _keep_gh_key(existing, name)
             return existing
         src = "github" if "github" not in runtime.catalog.sources else \
             "github_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
@@ -2589,6 +2643,7 @@ def make_app() -> FastAPI:
                                     ingest_key=ingest_key)
         store.put_in_project("source", src, _fallback_project(store.default_project_id()), creator=True)
         runtime.reload_catalog()
+        _keep_gh_key(src, name)
         return src
 
     def _check_gh_name(name: str) -> str:
@@ -2714,6 +2769,7 @@ def make_app() -> FastAPI:
         if store.get_github_credential(name) is None:
             _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
         store.delete_github_credential(name)
+        store.delete_integration_keys("ci_github", name)   # its webhook key stops working (TR-1807)
         forget_repos(name)
         return {"ok": True, **_gh_users(name)}
 

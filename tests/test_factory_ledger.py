@@ -174,11 +174,13 @@ async def main():
         ck("a PR that is not one is refused", "pull request's URL" in bad, bad)
         as_station()
         # T2's PR appears on GitHub on its factory branch; Tares links it on its own
-        store.append([Envelope(source="github_shop", source_type="event_stream", key_value="acme/shop#8",
-                               event_type="pull_request", text="PR #8 opened",
-                               event_time=datetime.now(timezone.utc), payload={},
-                               labels={"repo": "acme/shop", "number": "8", "branch": "factory/T2",
-                                       "action": "opened"})])
+        # a GitHub source's stored pull request goes through the GitHub tail into pr_events (TR-1807)
+        from tares.github_webhook import after_store
+        after_store(store, "github_shop", [Envelope(source="github_shop", source_type="event_stream",
+                                                     key_value="acme/shop#8", event_type="pull_request",
+                                                     text="PR #8 opened", event_time=datetime.now(timezone.utc),
+                                                     payload={}, labels={"repo": "acme/shop", "number": "8",
+                                                                         "branch": "factory/T2", "action": "opened"})])
         # the list shows what the sync kept (TR-1474); the daemon's sync links and reads
         await factory_api._shared(store, shop)
         lt = {t["label"]: t for t in json.loads(await m.list_tickets(project="Shop"))["tickets"]}

@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0024_merge_ledger"                 # the newest revision: tests that count revisions move with it
-REVISIONS = 24
+HEAD = "0025_integration_keys_pr_events"                 # the newest revision: tests that count revisions move with it
+REVISIONS = 25
 FAILS = []
 
 
@@ -260,7 +260,8 @@ ALL_TABLES = SESSION_TABLES + ["settings"] + ACCOUNT_TABLES + ["session_store_co
                                "session_messages", "session_commands", "session_turns", "session_said",
                                "session_files", "session_lines", "session_archive_parts", "session_moves",
                                "session_usage_hourly", "session_rollup_state",     # TR-1632
-                               "report_weeks", "report_texts", "merge_records"]
+                               "report_weeks", "report_texts", "merge_records",
+                               "integration_keys", "pr_events"]                     # TR-1807
 
 
 def shape(engine, names=ALL_TABLES):

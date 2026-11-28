@@ -232,7 +232,11 @@ async def main():
             return Envelope(source="github", source_type="event_stream", key_value=b["key"], event_type=source_event,
                             text=b["text"], event_time=b["event_time"], labels=b["labels"])
 
+        from tares.github_webhook import HUB
+
         async def ingest(*envs, source="github"):
+            # the store step tells core's GitHub hub for a GitHub source (TR-1807); the brain hears
+            # nothing else
             await runtime._store_envelopes(source, list(envs))
 
         def syncs(sid=None):
@@ -245,12 +249,13 @@ async def main():
         ck("the push events carry the labels the filter reads", push("acme/web", SHA[1]).labels.get("on_default_branch") == "true"
            and push("acme/web", SHA[1], default=False).labels.get("on_default_branch") == "false"
            and push("acme/web", SHA[1]).labels.get("repo") == "acme/web", str(push("acme/web", SHA[1]).labels))
-        ck("the cell has one syncer and its task, listening to core's events", syncer is not None and syncer.task is not None
-           and not syncer.task.done() and syncer.on_envelopes in runtime.envelope_listeners)
+        ck("the cell has one syncer and its task, listening to core's GitHub hub", syncer is not None and syncer.task is not None
+           and not syncer.task.done() and syncer.on_envelopes in HUB.subscribers
+           and syncer.on_envelopes not in runtime.envelope_listeners)
         syncer2 = repos_mod.syncing.Syncer(syncer.indexer, runtime)
         syncer2.attach(app)
         ck("attaching a second syncer to the app is refused: one task, one listener", app.state.brain_syncer is syncer
-           and runtime.envelope_listeners.count(syncer.on_envelopes) == 1 and syncer2.on_envelopes not in runtime.envelope_listeners)
+           and HUB.subscribers.count(syncer.on_envelopes) == 1 and syncer2.on_envelopes not in HUB.subscribers)
 
         print("== a push to the default branch syncs a ready repo ==")
         sid_web = make_repo("acme/web")
@@ -690,6 +695,14 @@ async def main():
         await ingest()
         ck("an empty batch calls no listener", seen == [("github", 1)])
         runtime.envelope_listeners.remove(boom)
+        heard = []
+        HUB.subscribe(boom)
+        hear = lambda source, envs: heard.append((source, len(envs)))   # noqa: E731
+        HUB.subscribe(hear)
+        HUB.tell("github", [push("acme/off", SHA[4], default=False)])
+        ck("a GitHub hub subscriber that raises does not stop the next one", heard == [("github", 1)], str(heard))
+        HUB.unsubscribe(boom)
+        HUB.unsubscribe(hear)
         clean("no token anywhere at the end")
 
         print("== it stops with the app ==")
