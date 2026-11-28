@@ -30,7 +30,7 @@ import httpx
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
-from session_helpers import seed_usage
+from session_helpers import seed_usage, wait_usage_ready
 from tares import claude_usage, factory_home, words
 from tares.screens import factory_crew as fc
 
@@ -442,6 +442,7 @@ async def private_shares():
         # 1000 spent this week: 800 on the private project, 200 on what everybody sees
         spent = {"secret": 800, "a": 60, "b": 34, "c": 26, "d": 22, "e": 18, "f": 14, "g": 12,
                  "h": 8, "i": 0.6}
+        wait_usage_ready(store)   # a seed written while the start-up fill runs is missed by it
         for n, cost in spent.items():
             store.create_project(f"uc_{n}", "custom", f"project-{n}", {}, goal="A project with a cost")
             store.set_project_kind(f"uc_{n}", "software_factory")
