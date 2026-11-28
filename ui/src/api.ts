@@ -1,6 +1,6 @@
 import type {
   ApiKey, Person, Whoami, GithubAppTest, GithubCredential, ModelUsage, Project,
-  ProjectSummary, Area, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, Source, Usage, Trigger,
+  ProjectSummary, Area, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, Usage,
   ModelProviders,
 } from "./types";
 import { ENTERPRISE_URL, licenceSentence, licenceWordsOn } from "./licenceWords";
@@ -285,19 +285,6 @@ export const api = {
   updatePerson: (id: string, body: { name?: string; email?: string | null; emails?: string[]; github?: string | null; is_admin?: boolean; picture?: string | null }) =>
     request<Person>(`/api/people/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
 
-  source: (name: string) => request<Source>(`/api/sources/${name}`),
-  updateSource: (name: string, body: object) =>
-    request(`/api/sources/${name}`, { method: "PUT", body: JSON.stringify(body) }),
-  labelPreview: (source: string, label: Record<string, unknown>) =>
-    request<{ sampled: number; distinct_before: number; distinct_after: number;
-              results: { from: string; to: string; events: number }[] }>(
-      "/api/labels/preview", { method: "POST", body: JSON.stringify({ source, label }) }),
-
-  triggers: () => request<Trigger[]>("/api/triggers"),
-  createTrigger: (body: TriggerBody) =>
-    request("/api/triggers", { method: "POST", body: JSON.stringify(body) }),
-  updateTrigger: (name: string, body: TriggerBody) =>
-    request(`/api/triggers/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   // The cell's Anthropic spend meter: totals + per-day, split agent runs vs Ask.
   modelUsage: (days = 30) => request<ModelUsage>(`/api/usage/model?days=${days}`),
 
@@ -397,25 +384,10 @@ export const api = {
     request<Project>(`/api/projects/${encodeURIComponent(id)}/pause`, { method: "POST", body: JSON.stringify({ sources }) }),
   resumeProject: (id: string) =>
     request<Project>(`/api/projects/${encodeURIComponent(id)}/resume`, { method: "POST" }),
-  // ── Ask sessions: server-side chat history (state is the console's own JSON blob) ──
-  askSessions: () =>
-    request<{ sessions: { id: string; title: string; created_at: string; updated_at: string }[] }>(
-      "/api/ask/sessions"),
-  askSession: (id: string) =>
-    request<{ id: string; title: string; state: string }>(`/api/ask/sessions/${id}`),
-  saveAskSession: (id: string, title: string, state: string) =>
-    request<{ ok: boolean }>(`/api/ask/sessions/${id}`,
-      { method: "PUT", body: JSON.stringify({ title, state }) }),
-  deleteAskSession: (id: string) =>
-    request<{ ok: boolean }>(`/api/ask/sessions/${id}`, { method: "DELETE" }),
-
   // What this instance is using on disk. `max_bytes`/`pct_used` are null unless the operator set
   // TARES_MAX_DB_SIZE — see the Usage type before rendering any of it.
   usage: () => request<Usage>("/api/usage"),
 
 };
 
-// What a trigger is saved from. `project` omitted = the default project.
-export type TriggerBody = Pick<Trigger, "name" | "sources" | "filters" | "condition" | "emit" | "cooldown">
-  & { project?: string; key_field?: string | null; description?: string };
 

@@ -1,6 +1,6 @@
 /*
  * Browser e2e for TR-728: the console's shell. Header (mark, Tares, the factory's name, workspace
- * switcher, search, account button), the left menu with only the entries that have a page and Settings
+ * switcher, the ask field when the cell has a brain, account button), the left menu with only the entries that have a page and Settings
  * last, the account menu and the narrow layout (a Menu button and a drawer).
  *
  * It is checked closed and with the account menu open at 1440 and 390 wide, and at 390 with the drawer
@@ -75,13 +75,12 @@ async function waitFor(url, tries = 150) {
       const res = await r.fetch();
       await r.fulfill({ response: res, json: fn(await res.json()) });
     });
-    // opts.key: the console holds a key; opts.who: whoami names a person's key; opts.askKey: Ask has a model key
+    // opts.key: the console holds a key; opts.who: whoami names a person's key
     const open = async (e, width, opts = {}) => {
       const ctx = await browser.newContext({ viewport: { width, height: 900 } });
       if (opts.key) await ctx.addInitScript(() => localStorage.setItem("tares_token", "scratch-key-not-real"));
       const page = await ctx.newPage();
       if (opts.who) await patch(page, e, "/api/whoami", (j) => ({ ...j, id: "key-1", name: opts.who }));
-      if (opts.askKey) await patch(page, e, "/api/capabilities", (j) => ({ ...j, agent_key_configured: true }));
       return { page, ctx };
     };
     const visit = async (page, e, to) => {
@@ -97,13 +96,13 @@ async function waitFor(url, tries = 150) {
         return { bad: [...l.children].filter((c) => c.getBoundingClientRect().right > edge + 0.5).map((c) => c.textContent.trim().slice(0, 24) || c.tagName),
                  sideways: document.documentElement.scrollWidth > window.innerWidth };
       });
-      ck(`${label}: nothing in the header runs into the search or account button`, r.bad.length === 0, r.bad.join(", "));
+      ck(`${label}: nothing in the header runs into the ask field or account button`, r.bad.length === 0, r.bad.join(", "));
       ck(`${label}: the page does not scroll sideways`, !r.sideways);
     };
 
 
     // The shell's own words: the page between the header and menu belongs to its own ticket, so main is
-    // left out. The Ask dialog and the account menu are part of the shell and stay in.
+    // left out. The account menu is part of the shell and stays in.
     const shellWords = async (page, label) => {
       const text = await page.evaluate(() => {
         const style = document.createElement("style");
@@ -144,8 +143,8 @@ async function waitFor(url, tries = 150) {
       ck(`${e}: the old sidebar is not there`, (await page.locator(".sidebar").count()) === 0);
       const box = await page.locator('nav[aria-label="Main"]').boundingBox();
       ck(`${e}: the menu is 232 wide`, Math.abs(box.width - 232) < 1, String(box.width));
-      const sbox = await page.getByTestId("edition-search").boundingBox();
-      ck(`${e}: the search field is 280 by 36`, Math.abs(sbox.width - 280) < 1 && Math.abs(sbox.height - 36) < 1, `${sbox.width}x${sbox.height}`);
+      ck(`${e}: a cell with no brain has no ask field`, (await page.getByTestId("edition-search").count()) === 0
+         && (await page.getByTestId("edition-search-button").count()) === 0);
       const active = await page.locator('nav[aria-label="Main"] a[aria-current="page"]').allInnerTexts();
       ck(`${e}: on /projects the active row is ${e === "factory" ? "Projects" : "none"}`,
          active.join(",") === (e === "factory" ? "Projects" : ""), active.join(","));
@@ -166,6 +165,8 @@ async function waitFor(url, tries = 150) {
     const FACTORY_ROWS = ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Report", "Crew", "People", "Docs and memory"];
     const GROUPS = "Work|Team|Knowledge";
     const BRAIN_ROWS = ["Repos", "Decisions", "Ask"];
+    const ASK = "Ask the Second Brain";
+    const eq = (label, got, want) => ck(label, JSON.stringify(got) === JSON.stringify(want), `got ${JSON.stringify(got)}`);
     const brainReply = (page, status, json) => page.route(`${base("factory")}/api/brain`, (r) => r.fulfill({ status, json }));
     const groupNames = (page) => page.locator('nav[aria-label="Main"] [data-testid^="menu-group-"]').allInnerTexts();
     {
@@ -203,6 +204,14 @@ async function waitFor(url, tries = 150) {
       if (w === 390) await page.getByTestId("menu-button").click();
       const nav = page.locator('nav[aria-label="Main"]');
       await nav.waitFor();
+      if (w === 1440) {
+        const sbox = await page.getByTestId("edition-search").boundingBox();
+        ck(`${tag}: the ask field is 280 by 36`, Math.abs(sbox.width - 280) < 1 && Math.abs(sbox.height - 36) < 1, `${sbox.width}x${sbox.height}`);
+        eq(`${tag}: the ask field says ${ASK}`, [await page.getByTestId("edition-search").getAttribute("placeholder"), await page.getByTestId("edition-search").getAttribute("aria-label")], [ASK, ASK]);
+      } else {
+        ck(`${tag}: the ask field is an icon button`, (await page.getByTestId("edition-search").count()) === 0
+           && (await page.getByTestId("edition-search-button").getAttribute("aria-label")) === ASK);
+      }
       ck(`${tag}: the groups are still Work, Team and Knowledge`, (await groupNames(page)).join("|") === GROUPS, (await groupNames(page)).join("|"));
       const items = (await labels(page)).map((t) => t.trim());
       ck(`${tag}: rows are the factory rows, then Repos, Decisions, Ask under Knowledge, then Settings`,
@@ -292,8 +301,8 @@ async function waitFor(url, tries = 150) {
 
         if (w === 390) {
           ck(`${tag}: the menu is hidden`, (await page.locator('nav[aria-label="Main"]').count()) === 0);
-          ck(`${tag}: the search field is an icon button`, (await page.getByTestId("edition-search").count()) === 0
-             && await page.getByTestId("edition-search-button").isVisible());
+          ck(`${tag}: no brain, so no ask field and no ask button`, (await page.getByTestId("edition-search").count()) === 0
+             && (await page.getByTestId("edition-search-button").count()) === 0);
           await page.getByTestId("menu-button").click();
           const nav = page.locator('nav[aria-label="Main"]');
           await nav.waitFor();
@@ -344,26 +353,35 @@ async function waitFor(url, tries = 150) {
       await ctx.close();
     }
 
-    // 5. search and Enter prefill the Ask dialog; the question is not sent
+    // 5. with a brain, the ask field sends its question to the Second Brain's Ask page (/brain/ask?q=), and
+    // the narrow ask button opens that page. No repo is ready here, so the page keeps q and asks nothing.
     for (const e of EDITIONS) {
-      const { page, ctx } = await open(e, 1440, { askKey: true });
+      let { page, ctx } = await open(e, 1440);
+      await brainReply(page, 200, { configured: true, repos: [] });
       await visit(page, e, expect[e].page);
       const posts = [];
-      page.on("request", (r) => { if (r.method() === "POST" && r.url().includes("/api/agent/chat")) posts.push(r.url()); });
+      page.on("request", (r) => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/brain/ask") posts.push(r.url()); });
       const search = page.getByTestId("edition-search");
+      await search.press("Enter");
+      await page.waitForTimeout(200);
+      ck(`${e}: Enter on an empty ask field goes nowhere`, new URL(page.url()).pathname === expect[e].page, page.url());
       await search.fill("what changed today");
       await search.press("Enter");
-      const dialog = page.getByRole("dialog", { name: "Ask your data" });
-      ck(`${e}: search and Enter open the Ask dialog`, await dialog.isVisible());
-      ck(`${e}: and clear the field`, (await search.inputValue()) === "");
-      await dialog.locator("textarea").waitFor();
-      ck(`${e}: the question waits in the dialog's field`, (await dialog.locator("textarea").inputValue()) === "what changed today");
-      await page.waitForTimeout(300);
-      ck(`${e}: and is not sent`, posts.length === 0, posts.join(", "));
-      await page.keyboard.press("Escape");
-      ck(`${e}: Escape closes it`, await gone(dialog));
-      await search.press("Enter");
-      ck(`${e}: Enter on an empty field opens nothing`, (await dialog.count()) === 0);
+      await page.waitForURL(/\/brain\/ask/);
+      const u = new URL(page.url());
+      ck(`${e}: Enter in the ask field lands on /brain/ask with the question`,
+         u.pathname === "/brain/ask" && u.searchParams.get("q") === "what changed today", page.url());
+      ck(`${e}: and clears the field`, (await search.inputValue()) === "");
+      await page.waitForLoadState("networkidle");
+      ck(`${e}: with no repo ready, nothing is asked`, posts.length === 0, posts.join(", "));
+      await ctx.close();
+
+      ({ page, ctx } = await open(e, 390));
+      await brainReply(page, 200, { configured: true, repos: [] });
+      await visit(page, e, expect[e].page);
+      await page.getByTestId("edition-search-button").click();
+      await page.waitForURL(/\/brain\/ask/);
+      ck(`${e} 390: the ask button opens /brain/ask`, new URL(page.url()).pathname === "/brain/ask" && !new URL(page.url()).searchParams.has("q"), page.url());
       await ctx.close();
     }
 

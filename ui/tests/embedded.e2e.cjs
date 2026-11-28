@@ -1,8 +1,8 @@
 /*
  * Browser e2e for TR-1553: the console's embedded mode. The Tares desktop opens the console with
  * ?embed=desktop&theme=light|dark; the console then leaves out its own header (brand, cell name,
- * workspace switcher, search box, account menu with its theme row and sign out), keeps its menu with
- * search at the top of it, and paints the desktop's theme without keeping it as the browser's choice.
+ * workspace switcher, ask field, account menu with its theme row and sign out), keeps its menu with
+ * the ask button at the top of it when the cell has a brain, and paints the desktop's theme without keeping it as the browser's choice.
  * The mode lasts for the tab (sessionStorage), across moves inside the console and a reload.
  * A browser visit with no params is unchanged, and ?embed= with another value leaves the mode.
  *
@@ -65,7 +65,8 @@ async function waitFor(url, tries = 150) {
 
     // A fresh tab whose browser already holds a key (so Sign out would show) and a saved theme choice,
     // set once before the first load only: a later write by the page must stay visible to the checks.
-    const open = async (width, saved) => {
+    // `brain`: GET /api/brain says the cell has a brain (the scratch cell has none), so the ask field shows
+    const open = async (width, saved, brain = true) => {
       const ctx = await browser.newContext({ viewport: { width, height: 900 } });
       await ctx.addInitScript((s) => {
         if (sessionStorage.getItem("e2e-seeded")) return;
@@ -73,7 +74,9 @@ async function waitFor(url, tries = 150) {
         localStorage.setItem("tares_token", "scratch-key-not-real");
         localStorage.setItem("tares-theme", s);
       }, saved);
-      return { ctx, page: await ctx.newPage() };
+      const page = await ctx.newPage();
+      if (brain) await page.route("**/api/brain", (r) => r.fulfill({ status: 200, json: { configured: true, repos: [] } }));
+      return { ctx, page };
     };
     const go = async (page, e, to) => {
       await page.goto(`${base(e)}${to}`, { waitUntil: "load" });
@@ -122,10 +125,13 @@ async function waitFor(url, tries = 150) {
          (await page.getByTestId("embed-actions").evaluate((n) => n.getBoundingClientRect().height)) === 0);
       await shot(page, "embedded-light-1440.png");
 
+      ck("embedded: the ask button on top of the menu says Ask the Second Brain",
+         (await page.getByTestId("menu-search").innerText()).trim() === "Ask the Second Brain");
       await page.getByTestId("menu-search").click();
-      ck("embedded: search on top of the menu opens Ask",
-         await page.getByRole("dialog", { name: "Ask your data" }).isVisible());
-      await page.keyboard.press("Escape");
+      await page.waitForURL(/\/brain\/ask/);
+      ck("embedded: the ask button on top of the menu opens the Second Brain's Ask page",
+         new URL(page.url()).pathname === "/brain/ask", page.url());
+      ck("embedded: on Ask, still no header", (await count(page, "edition-header")) === 0);
 
       // a move inside the console drops the query; the mode stays
       await page.getByTestId("menu-tickets").click();
@@ -144,6 +150,16 @@ async function waitFor(url, tries = 150) {
       await page.getByTestId("edition-header").waitFor();
       ck("leaving: ?embed=none brings the header back", (await count(page, "edition-header")) === 1);
       ck("leaving: and the browser's saved theme", (await attr(page, "data-theme")) === "dark" && (await attr(page, "data-embed")) === null);
+      await ctx.close();
+    }
+
+    // 2b. embedded, on a cell with no brain: no ask button in the menu, none in the phone bar
+    for (const w of [1440, 390]) {
+      const { page, ctx } = await open(w, "light", false);
+      await go(page, "factory", "/crew?embed=desktop&theme=light");
+      await page.getByTestId(w === 390 ? "embed-bar" : "edition-menu").waitFor();
+      ck(`embedded ${w}, no brain: no ask button`,
+         (await count(page, "menu-search")) === 0 && (await count(page, "edition-search-button")) === 0 && (await count(page, "edition-search")) === 0);
       await ctx.close();
     }
 
@@ -171,7 +187,7 @@ async function waitFor(url, tries = 150) {
       await go(page, "factory", "/crew?embed=desktop&theme=light");
       await page.getByTestId("embed-bar").waitFor();
       ck("embedded 390: a slim bar, not the header", (await count(page, "edition-header")) === 0);
-      ck("embedded 390: the bar has Menu and search",
+      ck("embedded 390: the bar has Menu and the ask button",
          await page.getByTestId("menu-button").isVisible() && await page.getByTestId("edition-search-button").isVisible());
       ck("embedded 390: no brand, cell name or account button",
          (await count(page, "brand-mark")) === 0 && (await count(page, "edition-name")) === 0 && (await count(page, "account-button")) === 0);

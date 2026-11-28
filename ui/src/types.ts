@@ -1,29 +1,3 @@
-export interface SourceHealth {
-  status: string;
-  last_poll_at: string | null;
-  last_ok_at: string | null;
-  last_error: string | null;
-  consecutive_errors: number;
-  polls: number;
-  events_since_start: number;
-  events_total: number;
-  last_ingest: string | null;
-}
-
-export interface Source {
-  name: string;
-  type: string;
-  connector: string;
-  poll: string;
-  config: Record<string, unknown>;
-  paused: boolean;
-  health: SourceHealth | null;
-  ingest_key?: string;   // stable path segment for push endpoints: /ingest/<ingest_key>
-  owned_by?: string | null;   // the project that created it, if any
-  customized?: boolean;       // edited by hand since; the project keeps that version
-  projects?: string[];        // every project the source is a member of (ids)
-}
-
 export interface ApiKey {
   id: string;
   name: string;
@@ -67,34 +41,6 @@ export interface TriggerFilter {
   field: string;
   op: "eq" | "neq" | "contains" | "gt" | "lt" | "gte" | "lte" | "in";
   value: string | number | string[];   // a list for `in`
-}
-
-export interface TriggerCondition {
-  aggregate: string;
-  predicate: string;
-  window: string;
-  field?: string | null;
-  group_by?: string[];
-  // a schedule instead of a condition (TR-320): fire every interval, summarized by these labels
-  every?: string;
-  summary_by?: string[];
-}
-
-// A trigger reads its own sources (members of its project), narrowed by filters, grouped by the
-// entity label (key_field; empty = the first source's primary label).
-export interface Trigger {
-  name: string;
-  project?: string;   // the project it belongs to; omitted on create = the default project
-  sources: string[];
-  filters?: TriggerFilter[];
-  key_field?: string | null;
-  description?: string | null;   // what wakes it in plain words, follows "When"; empty = said from the rule
-  condition: TriggerCondition;
-  emit: Record<string, unknown>;
-  cooldown: string;
-  paused?: boolean;   // paused triggers are not evaluated and never fire
-  owned_by?: string | null;
-  customized?: boolean;
 }
 
 // When a run concludes a finding with `verdict`, `agent` (in the same project) is started on the
