@@ -110,7 +110,9 @@ For each cell:
      --state-dsn "$TARES_STATE_DSN" --archive-url "$TARES_ARCHIVE_URL"
    ```
 
-   (`--with boto3` and the `TARES_ARCHIVE_*` variables are for an s3:// archive.) Read the plan:
+   (`--with boto3` and the `TARES_ARCHIVE_*` variables are for an s3:// archive.) Give the pod about
+   4 GB of memory for a factory-sized cell: DuckDB takes up to 2 GB of it while its events are read
+   (`MIGRATE_DUCKDB_MEMORY=1GB` lowers that, and it spills to the temp folder). Read the plan:
    the row counts, the projects that are not factory projects (kept as plain projects unless you
    pass `--drop-non-factory`), the GitHub App keys it carries over.
 
