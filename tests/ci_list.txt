@@ -195,6 +195,7 @@ test_merge_queue_ci_rerun
 test_merge_queue_status_carry
 test_merge_ready
 test_metrics
+test_migrate_to_2_script
 test_milestone_checks
 test_model_provider
 test_model_providers

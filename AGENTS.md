@@ -35,6 +35,9 @@ ee tests: `python tests/ci_run.py --suite ee` (the list is `ee/tests/ci_list.txt
 A licensed scratch daemon: `python ee/tests/licensed.py serve --port 8799 --data-dir $(mktemp -d) [--auth] [--licence expired]`.
 `python tests/factory/otel_bg_probe.py file` (or `env`) is a by-hand check, not in CI, that a `claude --bg` station sends its OTLP logs, traces and metrics
 to a local receiver; it needs the `claude` CLI.
+`scripts/migrate_to_2.py` (the one-time 1.61.0 to 2.0 move, not in the wheel) runs through uv in an environment of
+its own, and so does its test, `scripts/tests/test_migrate_to_2.py`; `tests/test_migrate_to_2_script.py` runs it from the
+CI list with `uv run --with-editable .` (CI's test job installs uv; without uv the wrapper says so and passes).
 A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `test_ci_list` fails for a
 `tests/test_*.py` in neither file.
 
