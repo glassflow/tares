@@ -70,7 +70,7 @@ async def main():
 
     def project(name, folder, repo):
         uid = f"uc_{name}"
-        store.create_project(uid, "custom", name, {}, goal=f"Work in {folder}")
+        store.create_project(uid, name, goal=f"Work in {folder}")
         store.set_project_kind(uid, "software_factory")
         store.set_handover(uid, [{"path": folder, "name": repo}], None, None, now_utc())
         return uid

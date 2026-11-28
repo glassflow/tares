@@ -293,9 +293,9 @@ async def one_person():
         report(store, "cell-box", "1.60.0")
 
         print("== projects ==")
-        store.create_project("uc_one", "custom", "One", {}, goal="g")
+        store.create_project("uc_one", "One", goal="g")
         store.set_project_kind("uc_one", "software_factory")
-        store.create_project("uc_other", "custom", "Not a factory project", {}, goal="g")
+        store.create_project("uc_other", "Not a factory project", goal="g")
         await state("a project", cx, onboarding(**up), LINE_BOTH, projects=1)
 
 
@@ -328,7 +328,7 @@ async def team():
                 station(store, "a-r", "crew-reviewer", "reviewer", ac, t, said="waiting")
                 station(store, "a-b", "ana-build-m1", "builder", ac, t, project="uc_open")
                 station(store, "a-s", "secret-build-m1", "builder", ac, t, project="uc_secret")
-                store.create_project("uc_secret", "custom", "Secret", {}, goal="g")
+                store.create_project("uc_secret", "Secret", goal="g")
                 store.set_project_kind("uc_secret", "software_factory")
                 store.set_project_scope("uc_secret", "private")
                 am = ("ana-box", "1.60.1", AT)

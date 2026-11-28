@@ -92,7 +92,7 @@ async def main():
 
     async with app.router.lifespan_context(app):
         shop = "uc_shop"
-        app.state.store.create_project(shop, "custom", "Shop", {}, goal="Sell things")
+        app.state.store.create_project(shop, "Shop", goal="Sell things")
         app.state.store.set_project_kind(shop, "software_factory")
 
         print("== at work: nothing waits ==")

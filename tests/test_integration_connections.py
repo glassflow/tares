@@ -485,7 +485,7 @@ async def main():
 
     async with app.router.lifespan_context(app):
         ann = store.create_person("Ann", email="ann@example.com")
-        store.create_project("p1", "custom", "alpha", {}, lead_person_id=ann["id"])
+        store.create_project("p1", "alpha", lead_person_id=ann["id"])
         async with mk() as root:
             ann_k = (await root.post("/api/keys", json={"name": "ann", "scopes": ["read", "ingest"],
                                                          "person_id": ann["id"]})).json()["secret"]

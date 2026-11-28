@@ -93,7 +93,7 @@ async def cell():
 
 # ── seeding ───────────────────────────────────────────────────────────────────
 def project(s, uid, name, lead=None, kind="software_factory", private=False, status="active"):
-    s.create_project(uid, "custom", name, {}, status=status, goal="g", lead_person_id=lead)
+    s.create_project(uid, name, status=status, goal="g", lead_person_id=lead)
     if kind:
         s.set_project_kind(uid, kind)
     if private:

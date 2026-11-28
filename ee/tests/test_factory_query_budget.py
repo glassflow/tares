@@ -188,7 +188,7 @@ def seed(store):
     by_project = {}
     for i in range(25):
         uid = f"uc_budget{i:02d}"
-        store.create_project(uid, "custom", f"Budget project {i:02d}", {}, goal=f"Goal of project {i:02d}")
+        store.create_project(uid, f"Budget project {i:02d}", goal=f"Goal of project {i:02d}")
         store.set_project_kind(uid, "software_factory")
         repo = f"example-org/budget-{i:02d}"
         m1 = store.create_milestone(uid, "M1: first pages", "The pages are live.",
@@ -219,7 +219,7 @@ def seed(store):
         stamp = ago(minutes=i * 3)
         from sqlalchemy import update
         from tares.session_store.tables import tickets as tickets_t
-        from tares.session_store.tables import usecases as projects_t
+        from tares.session_store.tables import projects as projects_t
         with store.sessions_db.begin() as c:
             c.execute(update(tickets_t).where(tickets_t.c.project == uid).values(updated_at=stamp))
             c.execute(update(projects_t).where(projects_t.c.id == uid).values(
@@ -257,7 +257,7 @@ async def done_projects(store, sam, call, base):
     who = [sam_id, local_id, None]
     for i in range(DONE_PROJECTS):
         uid = f"uc_budgetdone{i:02d}"
-        store.create_project(uid, "custom", f"Finished project {i:02d}", {}, goal=f"Done goal {i:02d}",
+        store.create_project(uid, f"Finished project {i:02d}", goal=f"Done goal {i:02d}",
                              status="done")
         store.set_project_kind(uid, "software_factory")
         for j in range(5):
@@ -331,7 +331,7 @@ async def crew_growth(store, sam, call):
         """A handed-over project with a ticket merged, in review and blocked, a milestone and an
         open question for sam; every other one finished an hour ago."""
         uid = f"uc_budgetcrew{i:02d}"
-        store.create_project(uid, "custom", f"Crew project {i:02d}", {}, goal=f"Goal {i:02d}")
+        store.create_project(uid, f"Crew project {i:02d}", goal=f"Goal {i:02d}")
         store.set_project_kind(uid, "software_factory")
         mid = store.create_milestone(uid, "M1: the page", "It loads.", [])
         for stage in ("merged", "review", "blocked"):

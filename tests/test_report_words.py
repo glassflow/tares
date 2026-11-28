@@ -1,13 +1,11 @@
 """The short texts written from figures, and the summary of an accepted milestone (TR-1645).
 
-Four parts: the number check, `figures_text` and its template, the summary through the API (queued
-on acceptance, written on first read, once, "Write again", who may read), and the table's revision.
+Three parts: the number check, `figures_text` and its template, and the summary through the API
+(queued on acceptance, written on first read, once, "Write again", who may read).
 No model is ever called: a fake provider stands in, and the model settings are removed from the
 environment before anything is imported.
 
     python tests/test_report_words.py
-
-The revision part runs against Postgres too when TARES_TEST_PG is set.
 """
 import asyncio
 import os
@@ -35,8 +33,6 @@ os.environ["TARES_EDITION"] = "factory"
 os.environ["TARES_PR_SYNC_SECONDS"] = "off"
 
 import httpx  # noqa: E402
-from alembic import command  # noqa: E402
-from sqlalchemy import inspect, text  # noqa: E402
 
 from tares import factory as factory_mod  # noqa: E402
 from tares import milestone_summary, report_words  # noqa: E402
@@ -44,11 +40,8 @@ from tares.daemon import make_app  # noqa: E402
 from tares.envelope import now_utc  # noqa: E402
 from tares.models import ModelReply  # noqa: E402
 from tares.report_words import numbers_ok, unbacked  # noqa: E402
-from tares.session_store import SessionStore  # noqa: E402
-from tares.session_store.tables import metadata  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0027_drop_move_bookkeeping"   # the newest revision: an upgrade ends there
 P = F = 0
 
 
@@ -276,7 +269,7 @@ async def through_the_api(app, store, fake):
 
     def project(name):
         uid = "uc_" + uuid.uuid4().hex[:10]
-        store.create_project(uid, "custom", name, {}, goal=f"build {name}")
+        store.create_project(uid, name, goal=f"build {name}")
         store.set_project_kind(uid, "software_factory")
         return uid
 
@@ -605,65 +598,6 @@ async def through_the_api(app, store, fake):
         ck("go with it, and only its own", kept(m1) is None and kept(old) is not None)
 
 
-# ── the revision ─────────────────────────────────────────────────────────────
-def revision():
-    print("== revision 0009_report_texts ==")
-    d = tempfile.mkdtemp()
-    schema = dsn = None
-    if PG:
-        import psycopg
-        schema = "rt_" + uuid.uuid4().hex[:12]
-        dsn = f"{PG}?options=-csearch_path%3D{schema}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {schema}")
-
-    def step_down(sdb, to):
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, to)
-
-    def version(sdb):
-        with sdb.begin() as c:
-            return [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
-
-    def tables(sdb):
-        return inspect(sdb.engine).get_table_names()
-
-    try:
-        sdb = SessionStore(d, dsn)
-        sdb.upgrade()
-        insp = inspect(sdb.engine)
-        ck("the table exists", "report_texts" in insp.get_table_names())
-        ck("its columns", sorted(c["name"] for c in insp.get_columns("report_texts"))
-           == sorted(["kind", "key", "text", "source", "figures", "written_at"]))
-        ck("its key is (kind, key)", insp.get_pk_constraint("report_texts")["constrained_columns"]
-           == ["kind", "key"])
-        ck("the store is at the head", version(sdb) == [HEAD], version(sdb))
-        step_down(sdb, "0008_report_weeks")
-        ck("a downgrade removes the table and keeps the others",
-           "report_texts" not in tables(sdb) and "report_weeks" in tables(sdb)
-           and version(sdb) == ["0008_report_weeks"], (tables(sdb), version(sdb)))
-        sdb.upgrade()
-        ck("an upgrade after it builds the table again",
-           "report_texts" in tables(sdb) and version(sdb) == [HEAD], version(sdb))
-        step_down(sdb, "0008_report_weeks")
-        with sdb.begin() as c:
-            metadata.tables["report_texts"].create(c)
-            c.execute(text("INSERT INTO report_texts (kind, key, text) VALUES ('week', 'w', 'kept')"))
-        sdb.upgrade()
-        with sdb.begin() as c:
-            row = c.execute(text("SELECT text FROM report_texts WHERE key = 'w'")).scalar()
-        ck("an upgrade over a table that already exists stamps the revision and keeps the rows",
-           version(sdb) == [HEAD] and row == "kept", (version(sdb), row))
-        sdb.close()
-    finally:
-        if PG:
-            import psycopg
-            with psycopg.connect(PG, autocommit=True) as c:
-                c.execute(f"DROP SCHEMA {schema} CASCADE")
-
-
 async def main():
     number_check()
     app = make_app()
@@ -672,7 +606,6 @@ async def main():
     async with app.router.lifespan_context(app):
         await writing_the_text(store, fake)
         await through_the_api(app, store, fake)
-    revision()
 
 
 asyncio.run(main())

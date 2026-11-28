@@ -5,7 +5,7 @@ spans a week boundary, a ticket merged and then reopened, one merged with no doi
 ticket, blocking questions that overlap, a withdrawn, an open and a non-blocking one, the merge
 queue's automatic pass, cost nothing claims. Then a changed stage row and late events through
 `refresh_recent`, rebuilds that change nothing, one week alone, a deleted project (also under a
-pass that read before the delete), the background pass, the migration both ways and the rebuild
+pass that read before the delete), the background pass and the rebuild
 route. The process runs in a zone far ahead of UTC, so a week taken from a local time shows.
 
 Run: python tests/test_report_weeks.py
@@ -37,12 +37,10 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 
-from alembic import command
-from sqlalchemy import inspect, insert, text, update
+from sqlalchemy import insert, update
 
 from tares import factory as factory_mod
 from tares import merge_queue, report
-from tares.session_store import SessionStore
 from tares.session_store.tables import report_weeks, ticket_history
 from tares.store import Store
 from session_helpers import seed_link, seed_station, seed_usage
@@ -84,8 +82,8 @@ def automatic(s, project, ticket, when):
 
 
 def seed(s) -> dict:
-    s.create_project("pa", "blank", "A", {})
-    s.create_project("pb", "blank", "B", {})
+    s.create_project("pa", "A")
+    s.create_project("pb", "B")
     ids = {n: s.create_ticket("pa", "tares", n) for n in ("a1", "a2", "a3")}   # T1, T2, T3
     ids["b1"] = s.create_ticket("pb", "linear", "b1", external_id="x9", identifier="ENG-9")
     ids["b2"] = s.create_ticket("pb", "tares", "b2")
@@ -384,7 +382,7 @@ def deleting(s):
 def placing():
     print("== architecture findings and their repo ==")
     s = Store(os.path.join(tempfile.mkdtemp(), "placing"))
-    s.create_project("pc", "blank", "C", {})
+    s.create_project("pc", "C")
     first, bare = (s.create_ticket("pc", "tares", n) for n in ("with a pull request", "without"))
 
     def move(repo):
@@ -425,7 +423,7 @@ def matching():
 
     def reviewed_pair(project, minutes):
         """A ticket in each of two repos, each reviewed with one architecture finding."""
-        s.create_project(project, "blank", project, {})
+        s.create_project(project, project)
         tickets = []
         for severity, repo, minute in zip(("P2", "P3"), ("acme/api", "acme/web"), minutes):
             tickets.append(s.create_ticket(project, "tares", repo))
@@ -489,7 +487,7 @@ def ticket_costs():
     print("== ticket costs: which replies a ticket takes ==")
     s = Store(os.path.join(tempfile.mkdtemp(), "costs"))
     for pid in ("pa", "pb"):
-        s.create_project(pid, "blank", pid, {})
+        s.create_project(pid, pid)
     for session, station, role_, parent, home in (
             ("b1", "build-a", "builder", None, "pa"), ("b2", "build-a", "builder", None, "pb"),
             ("h1", "help-1", "helper", "build-a", "pa"), ("h2", "help-2", "helper", "nobody", "pa"),
@@ -589,8 +587,8 @@ def ticket_costs():
 def ticket_costs_access():
     print("== ticket costs: a reviewer's reply and a project with limited access ==")
     s = Store(os.path.join(tempfile.mkdtemp(), "access"))
-    s.create_project("po", "blank", "Open", {})
-    s.create_project("pl", "blank", "Limited", {})
+    s.create_project("po", "Open")
+    s.create_project("pl", "Limited")
     s.set_project_scope("pl", "private")
     seed_station(s, "rv", "crew-reviewer", "reviewer")
     seed_station(s, "bo", "build-o", "builder", project="po")
@@ -643,7 +641,7 @@ def ticket_costs_access():
 def background():
     print("== the background pass ==")
     s = Store(os.path.join(tempfile.mkdtemp(), "bg"))   # a data dir has one session store
-    s.create_project("p", "blank", "P", {})
+    s.create_project("p", "P")
     stages(s, "p", s.create_ticket("p", "tares", "t"), ("doing", at(6, 1)), ("merged", at(6, 2)))
     ck("no marker on a new cell", s.get_setting(report.BUILT_SETTING) is None)
     full, calls = report.rebuild_all, []
@@ -683,62 +681,6 @@ def background():
     ck("a first build says so", "report weeks built (1 rows)" in said.getvalue(), said.getvalue())
 
 
-HEAD = "0027_drop_move_bookkeeping"  # the newest session store revision: an upgrade ends there
-
-
-def migration():
-    print("== revision 0008_report_weeks ==")
-    d = tempfile.mkdtemp()
-    schema = dsn = None
-    if PG:
-        import psycopg
-        schema = "rw_" + uuid.uuid4().hex[:12]
-        dsn = f"{PG}?options=-csearch_path%3D{schema}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {schema}")
-
-    def tables(sdb):
-        return set(inspect(sdb.engine).get_table_names())
-
-    def version(sdb):
-        with sdb.begin() as c:
-            return c.execute(text("SELECT version_num FROM session_store_version")).scalar()
-
-    def down(sdb):
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, "0007_session_archive")
-
-    try:
-        sdb = SessionStore(d, dsn)
-        sdb.upgrade()
-        insp = inspect(sdb.engine)
-        ck("the table has the declared columns", [c["name"] for c in insp.get_columns("report_weeks")]
-           == [c.name for c in report_weeks.columns])
-        ck("its key is (project, week)", insp.get_pk_constraint("report_weeks")[
-            "constrained_columns"] == ["project", "week"])
-        down(sdb)
-        ck("a downgrade drops it alone", "report_weeks" not in tables(sdb)
-           and "session_archive_parts" in tables(sdb) and version(sdb) == "0007_session_archive")
-        sdb.upgrade()
-        ck("an upgrade builds it again", "report_weeks" in tables(sdb)
-           and version(sdb) == HEAD, version(sdb))
-        down(sdb)
-        with sdb.begin() as c:
-            report_weeks.create(c)
-            c.execute(insert(report_weeks).values(project="kept", week=W1, merged=1))
-        sdb.upgrade()
-        with sdb.begin() as c:
-            kept = c.execute(text("SELECT merged FROM report_weeks WHERE project = 'kept'")).scalar()
-        ck("a table already there is taken over with its rows",
-           kept == 1 and version(sdb) == HEAD, (kept, version(sdb)))
-        sdb.close()
-    finally:
-        if PG:
-            import psycopg
-            with psycopg.connect(PG, autocommit=True) as c:
-                c.execute(f"DROP SCHEMA {schema} CASCADE")
 
 
 async def route():
@@ -790,7 +732,6 @@ def main():
     placing()
     matching()
     background()
-    migration()
     ticket_costs()
     ticket_costs_access()
     asyncio.run(route())

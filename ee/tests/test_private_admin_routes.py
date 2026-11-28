@@ -73,7 +73,7 @@ async def main():
             pid[who] = r.json()["person"]["id"]
 
         vault = "prj-zephyrwatch"
-        store.create_project(vault, "custom", "Zephyrwatch", {}, goal="Keep zephyr-api healthy",
+        store.create_project(vault, "Zephyrwatch", goal="Keep zephyr-api healthy",
                              lead_person_id=pid["lee"])
         store.set_project_scope(vault, "private")
         store.add_project_member(vault, pid["mia"])

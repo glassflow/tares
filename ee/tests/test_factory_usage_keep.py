@@ -77,7 +77,7 @@ async def main():
 
     async with app.router.lifespan_context(app):
         for uid, name, cost in (("uc_keep_a", "Alpha", 3.0), ("uc_keep_b", "Beta", 1.0)):
-            store.create_project(uid, "custom", name, {}, goal=f"Goal of {name}")
+            store.create_project(uid, name, goal=f"Goal of {name}")
             store.set_project_kind(uid, "software_factory")
             store.record_reply_usage(f"sess-{uid}", f"m-{uid}", now_utc() - timedelta(hours=2),
                                      "claude-opus-5-5", uid, None,

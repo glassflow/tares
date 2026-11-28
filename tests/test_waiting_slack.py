@@ -138,7 +138,7 @@ async def main():
     store.insert_api_key("k_kim", "Kim's key", "nvf_kim", hashlib.sha256(secret.encode()).hexdigest(),
                          ["read", "ingest"], person_id=kim["id"])
     uid = "uc_shop"
-    store.create_project(uid, "custom", "shop", {}, goal="Sell things")
+    store.create_project(uid, "shop", goal="Sell things")
     store.set_project_kind(uid, "software_factory")
 
     def ask(question, to=None, blocks=""):
@@ -518,7 +518,7 @@ async def main():
 
     print("== a private project Kim is not on: nothing of it reaches her (TR-1468) ==")
     vault = "uc_vault"
-    store.create_project(vault, "custom", "Vault", {}, goal="Keep the codes")
+    store.create_project(vault, "Vault", goal="Keep the codes")
     store.set_project_kind(vault, "software_factory")
     store.set_project_scope(vault, "private")
     codes = store.add_desk_item(vault, "Rotate the vault codes?", "", ["Yes", "No"], "Yes", "", "", [], True,

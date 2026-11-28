@@ -475,7 +475,7 @@ async def main():
             from tares.store import now_utc
             for i in range(50):
                 uid = f"uc_load{i:02d}"
-                store.create_project(uid, "custom", f"load-{i:02d}", {}, goal="A project for the timing")
+                store.create_project(uid, f"load-{i:02d}", goal="A project for the timing")
                 store.set_project_kind(uid, "software_factory")
                 for j in range(4):
                     store.create_ticket(uid, "test", f"Task {j}", status="in_progress" if j == 1 else "todo")
@@ -510,7 +510,7 @@ async def private_shares():
         spent = {"secret": 800, "a": 60, "b": 34, "c": 26, "d": 22, "e": 18, "f": 14, "g": 12, "h": 8}
         wait_usage_ready(store)   # a seed written while the start-up fill runs is missed by it
         for n, cost in spent.items():
-            store.create_project(f"uc_{n}", "custom", f"project-{n}", {}, goal="A project with a cost")
+            store.create_project(f"uc_{n}", f"project-{n}", goal="A project with a cost")
             store.set_project_kind(f"uc_{n}", "software_factory")
             seed_usage(store, f"s-{n}", f"m-{n}", project=f"uc_{n}", replied_at=an_hour_ago, cost_usd=cost)
         seed_usage(store, "s-own", "m-own", replied_at=an_hour_ago, cost_usd=6)   # "Other sessions"

@@ -77,8 +77,8 @@ ck("check_connection says built in, even with no store", ok is True and msg == "
 
 tmp = tempfile.mkdtemp(prefix="tares-review-gate-")
 s = Store(os.path.join(tmp, "t"))
-s.create_project("p1", "blank", "One", {})
-s.create_project("p2", "blank", "Two", {})
+s.create_project("p1", "One")
+s.create_project("p2", "Two")
 gate = TaresReview(s)
 
 

@@ -138,7 +138,7 @@ async def main():
         def project(name, level="L4-ship", handed=True, kind="software_factory", status=None):
             counter["n"] += 1
             uid = f"uc_mq{counter['n']}"
-            store.create_project(uid, "custom", name, {}, goal="A project for the test",
+            store.create_project(uid, name, goal="A project for the test",
                                  status=status or "active")
             store.set_project_kind(uid, kind)
             if handed:
@@ -857,7 +857,7 @@ async def main():
         # ── the route only reads ────────────────────────────────────────────────────────────────
         print("== the route only reads ==")
         TABLES = ("merge_queue", "desk_items", "decisions", "tickets", "ticket_history", "reviews",
-                  "usecases", "milestones")
+                  "projects", "milestones")
 
         def snapshot():
             with store.sessions_db.read() as conn:

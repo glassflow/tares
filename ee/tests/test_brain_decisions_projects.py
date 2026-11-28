@@ -151,7 +151,7 @@ async def main():
             store.add_brain_repo(repo, "id-" + repo.replace("/", "-"), None, now_utc())
 
         def project(pid, name=None, repo="acme/web", scope="team"):
-            store.create_project(pid, "factory", name or "Name of " + pid, {})
+            store.create_project(pid, name or "Name of " + pid)
             if repo:
                 store.set_handover(pid, [{"path": "/work/" + repo.split("/")[-1], "name": repo}], None, "t", now_utc())
             if scope != "team":

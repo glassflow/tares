@@ -27,8 +27,8 @@ from tares.session_store.types import UTCDateTime  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0027_drop_move_bookkeeping"                       # the newest revision: tests that count revisions move with it
-REVISIONS = 27
+HEAD = "0001_baseline"            # the newest revision: tests that count revisions move with it
+REVISIONS = 1
 FAILS = []
 
 
@@ -237,13 +237,12 @@ def upgrade_failure():
 
 
 SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "session_stations", "session_usage"]
-ACCOUNT_TABLES = ["people", "api_keys", "project_members"]      # TR-1608, with settings: taken over
-# TR-1610: taken over like the accounts
-PROJECT_TABLES = ["usecases", "usecase_objects", "usecase_log", "docs", "skills", "shared_skills",
-                  "github_credentials", "model_usage"]     # catalog_sources went in TR-1811 (0026)
-TICKET_TABLES = ["tickets", "ticket_history", "ticket_numbers"]                  # TR-1612, the same
+ACCOUNT_TABLES = ["people", "api_keys", "project_members"]      # TR-1608
+PROJECT_TABLES = ["projects", "project_docs", "project_skills", "project_log", "docs", "shared_skills",
+                  "github_credentials", "model_usage"]     # TR-1610, 2.0 names (TR-1816)
+TICKET_TABLES = ["tickets", "ticket_history", "ticket_numbers"]                  # TR-1612
 REVIEW_TABLES = ["milestones", "milestone_check_results", "milestone_acceptances", "ticket_checks",
-                 "challenges", "reviews", "review_findings", "rule_proposals"]    # TR-1615, the same
+                 "challenges", "reviews", "review_findings", "rule_proposals"]    # TR-1615
 CREW_TABLES = ["assumptions", "desk_items", "decisions", "handovers", "grants", "pending_memory", "crews",
                "spec_questions", "signoffs", "handover_overrides", "answers", "waiting_told"]  # TR-1616
 INTEGRATION_TABLES = ["guardrail_rules", "guardrail_pairs", "integration_choices", "integration_connections",
@@ -253,7 +252,6 @@ BRAIN_TABLES = ["repo_maps", "repo_map_history", "brain_repos", "brain_repo_fold
                 "brain_calls"]    # TR-1618
 ACCOUNT_TABLES = (ACCOUNT_TABLES + PROJECT_TABLES + TICKET_TABLES + REVIEW_TABLES + CREW_TABLES
                   + INTEGRATION_TABLES + BRAIN_TABLES)
-# session_store_copies, session_ingest_marks and session_moves went with the old event store (0027)
 ALL_TABLES = SESSION_TABLES + ["settings"] + ACCOUNT_TABLES + ["sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
                                "session_files", "session_lines", "session_archive_parts",
@@ -296,26 +294,6 @@ def step_down(sessions_db, revision):
         command.downgrade(cfg, revision)
 
 
-def runtime_backfill():
-    """0011 (TR-1600): a session already recorded from a Codex station is marked codex, by its command rows."""
-    print("== 0011 marks the sessions recorded from Codex stations ==")
-    sdb = SessionStore(tempfile.mkdtemp())
-    sdb.upgrade()
-    step_down(sdb, "0010_session_command_outcome")
-    with sdb.begin() as c:
-        for sid, st in (("cx", "crew-builder"), ("cc", "crew-reviewer"), ("quiet", "crew-releaser")):
-            c.execute(text("INSERT INTO session_stations (session, station, role) VALUES (:s, :st, 'builder')"),
-                      {"s": sid, "st": st})
-        c.execute(text("INSERT INTO session_commands (tool_use_id, source, session, command) VALUES "
-                       "('codex:cx:exec-1', 'claude_code', 'cx', 'make'), ('toolu_01', 'claude_code', 'cc', 'make')"))
-    sdb.upgrade()
-    with sdb.begin() as c:
-        got = dict(c.execute(text("SELECT session, runtime FROM session_stations")).all())
-    ck("a session with a Codex command row is codex; a Claude Code one, and one with no command, stay empty",
-       got == {"cx": "codex", "cc": None, "quiet": None}, got)
-    sdb.close()
-
-
 def session_tables():
     print("== the session tables on SQLite ==")
     d = tempfile.mkdtemp()
@@ -327,13 +305,10 @@ def session_tables():
        shape(sdb.engine) == declared(sdb.engine), (shape(sdb.engine), declared(sdb.engine)))
     ck("project_sessions has an index on session",
        index_columns(sdb.engine, "project_sessions", "project_sessions_session") == ["session"])
-    step_down(sdb, "0001_base")
-    ck("a downgrade puts the version back to the base", versions(sdb) == ["0001_base"], versions(sdb))
-    ck("and removes the tables the store made, but not settings and the accounts (a downgrade never "
-       "drops a taken-over table)",
-       sorted(inspect(sdb.engine).get_table_names())
-       # catalog_sources: 0017 took it over, 0026 dropped it, and 0026's downgrade makes it again
-       == sorted(["session_store_version", "settings", "catalog_sources"] + ACCOUNT_TABLES),
+    step_down(sdb, "base")
+    ck("a downgrade to the base leaves no revision", versions(sdb) == [], versions(sdb))
+    ck("and removes every table but the revision table",
+       inspect(sdb.engine).get_table_names() == ["session_store_version"],
        inspect(sdb.engine).get_table_names())
     sdb.upgrade()
     ck("an upgrade after a downgrade builds them again", shape(sdb.engine) == declared(sdb.engine)
@@ -344,31 +319,6 @@ def session_tables():
 def _count(sdb, table):
     with sdb.begin() as c:
         return c.execute(text(f"SELECT count(*) FROM {table}")).scalar()
-
-
-# columns added to session_stations after the old DDL made it: a table it made has them empty (TR-1600)
-SINCE_OLD_DDL = {"session_stations": ("runtime", "model")}
-
-# The five session tables as the old DDL made them on Postgres, before the session store (TR-1480):
-# what revision 0002 takes over in place.
-OLD_SESSION_DDL = {
-    "project_sessions": ["CREATE TABLE project_sessions (project TEXT, session TEXT, repo TEXT, "
-                         "linked_at TIMESTAMPTZ, PRIMARY KEY (project, session))"],
-    "session_states": ["CREATE TABLE session_states (session TEXT PRIMARY KEY, state TEXT, reason TEXT, "
-                       "state_at TIMESTAMPTZ)"],
-    "session_stations": ["CREATE TABLE session_stations (session TEXT PRIMARY KEY, station TEXT, role TEXT, "
-                         "parent TEXT, project TEXT, seen_at TIMESTAMPTZ)",
-                         "ALTER TABLE session_stations ADD COLUMN crew_id TEXT"],
-    "session_usage": ["CREATE TABLE session_usage (session TEXT, message TEXT, replied_at TIMESTAMPTZ, "
-                      "model TEXT, project TEXT, subagent TEXT, input_tokens BIGINT, output_tokens BIGINT, "
-                      "cache_write_tokens BIGINT, cache_read_tokens BIGINT, cost_usd DOUBLE PRECISION, "
-                      "PRIMARY KEY (session, message))",
-                      "ALTER TABLE session_usage ADD COLUMN cache_write_1h_tokens BIGINT"],
-    "session_meters": ["CREATE TABLE session_meters (session TEXT PRIMARY KEY, status TEXT, "
-                       "status_at TIMESTAMPTZ, context TEXT, context_at TIMESTAMPTZ, "
-                       "context_asked_at TIMESTAMPTZ)",
-                       "ALTER TABLE session_meters ADD COLUMN status_person TEXT"],
-}
 
 
 def greatest_null():
@@ -388,119 +338,6 @@ def greatest_null():
                 got = c.execute(select(pg.greatest(literal(a, Integer), literal(b, Integer)))).scalar()
             ck(f"greatest({a}, {b}) is {want} on Postgres", got == want, got)
         pg.close()
-
-
-def takeover():
-    print("== Postgres: tables the old DDL made are taken over ==")
-    if not PG:
-        print("  skip  TARES_TEST_PG is not set")
-        return
-    import psycopg
-    made = []
-
-    def schema_for(names):
-        sch = "ss_" + uuid.uuid4().hex[:12]
-        made.append(sch)
-        dsn = f"{PG}?options=-csearch_path%3D{sch}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {sch}")
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"SET search_path = {sch}")
-            for name in names:
-                for stmt in OLD_SESSION_DDL[name]:
-                    c.execute(stmt)
-        return sch, dsn
-
-    def snapshot(sch, new=False):
-        """Every row of the five tables, and every column's type, as Postgres holds them: the columns the old
-        DDL made, or with `new` only the ones added since (SINCE_OLD_DDL, TR-1600)."""
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"SET search_path = {sch}")
-            out = {}
-            for t in SESSION_TABLES:
-                if c.execute("SELECT to_regclass(%s)", [t]).fetchone()[0] is None:
-                    continue
-                cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
-                                 "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
-                                 [sch, t]).fetchall()
-                cols = [x for x in cols if (x[0] in SINCE_OLD_DDL.get(t, ())) == new]
-                if not cols:
-                    out[t] = ([], [])
-                    continue
-                names = ", ".join(x[0] for x in cols)
-                rows = c.execute(f"SELECT {names} FROM {t} ORDER BY session").fetchall() if new else \
-                    c.execute(f"SELECT {names} FROM {t} ORDER BY 1, 2").fetchall()
-                out[t] = (cols, [tuple(map(str, r)) for r in rows])
-            return out
-
-    try:
-        sch, dsn = schema_for(SESSION_TABLES)
-        old = snapshot(sch)
-        ck("the old DDL made all five tables", sorted(old) == SESSION_TABLES, sorted(old))
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"SET search_path = {sch}")
-            c.execute("INSERT INTO session_stations (session, station, role, seen_at) VALUES "
-                      "('s1', 'crew-b', 'builder', '2026-11-19 04:00:00+00'), ('s2', 'crew-r', NULL, NULL)")
-            c.execute("INSERT INTO session_states (session, state, state_at) VALUES ('s1', 'idle', now())")
-            c.execute("INSERT INTO project_sessions (project, session, linked_at) VALUES ('p1', 's1', now())")
-            c.execute("INSERT INTO session_usage (session, message, replied_at, input_tokens, cost_usd) VALUES "
-                      "('s1', 'm1', now(), 5, 0.25), ('s1', 'm2', NULL, NULL, NULL)")
-            c.execute("INSERT INTO session_meters (session, status, status_at) VALUES "
-                      "('s1', '{\"a\": 1}', now()), ('s2', NULL, NULL)")
-        before = snapshot(sch)
-        ck("seeded rows are there", all(before[t][1] for t in SESSION_TABLES), {t: len(v[1]) for t, v in before.items()})
-        sdb = SessionStore(tempfile.mkdtemp(), dsn)
-        ck("no revision table yet: the database is one the old code made", "session_store_version"
-           not in inspect(sdb.engine).get_table_names())
-        sdb.upgrade()
-        ck(f"the upgrade stamps {HEAD}", versions(sdb) == [HEAD], versions(sdb))
-        after = snapshot(sch)
-        ck("no row and no column of the five tables changed", after == before,
-           [t for t in SESSION_TABLES if after[t] != before[t]])
-        added = snapshot(sch, new=True)["session_stations"]
-        ck("the columns added since are there, and empty in every row (TR-1600)",
-           sorted(x[0] for x in added[0]) == sorted(SINCE_OLD_DDL["session_stations"])
-           and all(v == "None" for r in added[1] for v in r) and len(added[1]) == 2, added)
-        ck("each table's columns, types and primary key are what tables.py declares",
-           shape(sdb.engine) == declared(sdb.engine), (shape(sdb.engine), declared(sdb.engine)))
-        ck("project_sessions has its index on session",
-           index_columns(sdb.engine, "project_sessions", "project_sessions_session") == ["session"])
-        with capture_logs("alembic.runtime.migration") as recs:
-            sdb.upgrade()
-        ck("a second upgrade runs nothing", upgrade_lines(recs) == [])
-        # the types are the ones a database the session store built itself has
-        sch2 = "ss_" + uuid.uuid4().hex[:12]
-        made.append(sch2)
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {sch2}")
-        fresh = SessionStore(tempfile.mkdtemp(), f"{PG}?options=-csearch_path%3D{sch2}")
-        fresh.upgrade()
-        ck("a database the revision built has the same shape as the taken-over one",
-           shape(fresh.engine) == shape(sdb.engine), (shape(fresh.engine), shape(sdb.engine)))
-        ck("and the same index", index_columns(fresh.engine, "project_sessions", "project_sessions_session") == ["session"])
-        # a downgrade leaves the live tables and their rows
-        step_down(sdb, "0001_base")
-        ck("a downgrade keeps the five tables and their rows", snapshot(sch) == before)
-        ck("and the index", index_columns(sdb.engine, "project_sessions", "project_sessions_session") is None)
-        sdb.upgrade()
-        ck("an upgrade after it takes them over again", versions(sdb) == [HEAD] and snapshot(sch) == before)
-        sdb.close()
-        fresh.close()
-
-        # only some of the tables exist: the others are made, the ones there are left alone
-        sch3, dsn3 = schema_for(["session_stations", "session_usage"])
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"SET search_path = {sch3}")
-            c.execute("INSERT INTO session_stations (session, station) VALUES ('s9', 'x')")
-        part = SessionStore(tempfile.mkdtemp(), dsn3)
-        part.upgrade()
-        ck("with two of the five there, all five end up declared", shape(part.engine) == declared(part.engine))
-        ck("and the row in the one that was there is kept", _count(part, "session_stations") == 1)
-        part.close()
-    finally:
-        with psycopg.connect(PG, autocommit=True) as c:
-            for sch in made:
-                c.execute(f"DROP SCHEMA IF EXISTS {sch} CASCADE")
 
 
 def postgres():
@@ -622,9 +459,7 @@ if __name__ == "__main__":
     dsn_rewrite()
     upgrade_failure()
     session_tables()
-    runtime_backfill()
     greatest_null()
-    takeover()
     postgres()
     print("FAIL " + ", ".join(FAILS) if FAILS else "OK")
     sys.exit(1 if FAILS else 0)

@@ -281,9 +281,9 @@ class Seeder:
     # ── projects ──────────────────────────────────────────────────────────────
     def project(self, p: dict) -> list[str]:
         s, uid, begin = self.store, p["uid"], self.starts[0]
-        s.create_project(uid, "custom", p["name"], {}, goal=p["goal"], lead_person_id=ME)
+        s.create_project(uid, p["name"], goal=p["goal"], lead_person_id=ME)
         s.set_project_kind(uid, "software_factory")
-        self.stamp("usecases", uid, created_at=begin, updated_at=self.now)
+        self.stamp("projects", uid, created_at=begin, updated_at=self.now)
         # named as the tickets name it, or the project page lists a second, empty repository
         s.set_handover(uid, [{"path": f"/home/demo/{p['slug']}",
                               "name": f"example-org/{p['slug']}"}],

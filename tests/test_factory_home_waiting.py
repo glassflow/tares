@@ -76,7 +76,7 @@ async def main():
 
     def project(name, factory=True, goal="A project for the test"):
         uid = f"uc_{name.replace('-', '')}"
-        store.create_project(uid, "custom", name, {}, goal=goal)
+        store.create_project(uid, name, goal=goal)
         if factory:
             store.set_project_kind(uid, "software_factory")
         return uid

@@ -122,7 +122,7 @@ def payloads_that_are_not_objects(app, store, t0):
     """TR-1705: one such line must not fail the writes, the reads or the pages that list them."""
     print("== a challenger line that is not a JSON object ==")
     uid = "uc_odd"
-    store.create_project(uid, "custom", "Odd", {}, goal="A project for the test", status="active")
+    store.create_project(uid, "Odd", goal="A project for the test", status="active")
     store.set_project_kind(uid, "software_factory")
     # the review queue is the crew reviewer's: main() made an outside tool the factory's gate
     store.set_project_choice(uid, "review", "tares", {}, "t")
@@ -267,7 +267,7 @@ def main():
     store = app.state.store
     t0 = datetime(2026, 11, 19, 9, 0, tzinfo=timezone.utc)
     for uid, name in (("uc_a", "Alpha"), ("uc_b", "Beta"), ("uc_c", "Gamma")):
-        store.create_project(uid, "software_factory", name, {"objects": []})
+        store.create_project(uid, name)
     seed_link(store, "uc_a", "s-a", "r", t0)
     seed_link(store, "uc_b", "s-b", "r", t0)
     rows, n = [], 0

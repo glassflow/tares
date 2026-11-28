@@ -69,8 +69,8 @@ async def main():
     async with app.router.lifespan_context(app):
         ann = store.create_person("Ann", email="ann@example.com")
         ben = store.create_person("Ben", email="ben@example.com")
-        store.create_project("p1", "custom", "alpha", {}, lead_person_id=ann["id"])
-        store.create_project("p2", "custom", "beta", {}, lead_person_id=ben["id"])
+        store.create_project("p1", "alpha", lead_person_id=ann["id"])
+        store.create_project("p2", "beta", lead_person_id=ben["id"])
 
         print("== the integration ==")
         registry.load()

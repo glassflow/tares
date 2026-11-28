@@ -328,7 +328,7 @@ async def main():
             await push(gus_key, station("gus", "orchestrator", "m-gus"))
 
             def project(uid, name, lead=None, members=(), scope="team", status="active"):
-                store.create_project(uid, "custom", name, {}, status=status, lead_person_id=lead)
+                store.create_project(uid, name, status=status, lead_person_id=lead)
                 store.set_project_kind(uid, "software_factory")
                 store.set_project_scope(uid, scope)
                 for m in members:

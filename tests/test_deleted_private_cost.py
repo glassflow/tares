@@ -155,7 +155,7 @@ async def main():
     db = os.path.join(HOME, "cell")
     async with cell(db) as (store, cx):
         for uid, name in ((SECRET, "project-secret"), (OPEN, "project-open"), (OTHER, "project-other")):
-            store.create_project(uid, "custom", name, {}, goal="A project with a cost")
+            store.create_project(uid, name, goal="A project with a cost")
             store.set_project_kind(uid, "software_factory")
         store.set_project_scope(SECRET, "private")
         mia = store.create_person("Mia", "mia@example.com")["id"]
@@ -278,7 +278,7 @@ async def main():
            report_now.get("", {}).get("cost_usd") == 41 and OTHER not in report_now, report_now)
 
         print("== a project made again under the id (a setup that failed and is run again) ==")
-        store.create_project(SECRET, "custom", "project-secret", {}, goal="A project with a cost")
+        store.create_project(SECRET, "project-secret", goal="A project with a cost")
         store.set_project_scope(SECRET, "private")
         got, _ = await figures(cx, {})
         mine = [x for x in got["usage, 7 days"] if x[2] == SECRET]

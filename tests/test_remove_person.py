@@ -41,7 +41,7 @@ def main():
     store = Store(os.path.join(tmp, "t"))
     try:
         uid = "uc_rm"
-        store.create_project(uid, "custom", "rm", {})
+        store.create_project(uid, "rm")
         gus = store.create_person("Gus", email="gus@example.com")["id"]
         cases = {
             "no stage": {"status": "todo", "stage": None},

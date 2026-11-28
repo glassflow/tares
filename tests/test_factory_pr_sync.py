@@ -57,7 +57,7 @@ async def main():
 
     def project(name, handed=True):
         uid = f"uc_{name.replace('-', '')}"
-        store.create_project(uid, "custom", name, {}, goal="A project for the test")
+        store.create_project(uid, name, goal="A project for the test")
         store.set_project_kind(uid, "software_factory")
         if handed:
             store.set_handover(uid, [{"path": "/w/a", "name": REPO}], None, None, now_utc())

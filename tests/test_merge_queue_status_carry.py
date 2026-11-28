@@ -139,7 +139,7 @@ async def main():
         """A pull request approved by the `factory/review` status alone (no review round), at L4
         with the Tares reviewer and GitHub CI. Returns (project, ticket, repo, head)."""
         uid, repo, a = f"uc_{name}", f"acme/{name}", next(heads)
-        store.create_project(uid, "custom", name, {}, goal="A project for the test")
+        store.create_project(uid, name, goal="A project for the test")
         store.set_project_kind(uid, "software_factory")
         store.set_handover(uid, [{"path": "/w/a", "name": name}], "L4-ship", None, now_utc(),
                            person_id=person["id"])

@@ -3,6 +3,7 @@ test_answers
 test_api_keys
 test_areas_single
 test_auth
+test_baseline
 test_boot_guard
 test_cell_contract
 test_changelog_collect

@@ -88,7 +88,7 @@ finally:
 sys.path.insert(0, os.getcwd())
 from sqlalchemy import update  # noqa: E402
 
-from tares.session_store.tables import docs as docs_table, usecases  # noqa: E402
+from tares.session_store.tables import docs as docs_table, projects  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 store = Store(home)
@@ -106,7 +106,7 @@ big = [(max(2, (BIG - i) // 4 + 2), authors[i % 4], f"Memory line {i + 1}: a fac
 store.update_doc(ids["project-x-memory"], body=memory_body("project-x", X_MEMORY), by="crew-builder-1")
 store.update_doc(ids["project-y-memory"], body=memory_body("project-y", big), by="crew-reviewer")
 with store.sessions_db.begin() as c:
-    c.execute(update(usecases).where(usecases.c.id == ids["project-y"]).values(status="done"))
+    c.execute(update(projects).where(projects.c.id == ids["project-y"]).values(status="done"))
 # the whole documents were last changed a while ago, by different people
 for key, days, who in (("project-x-spec", 20, "crew-orchestrator"), ("project-x-plan", 14, "console"),
                        ("project-x-agents", 8, "crew-reviewer"), ("project-x-memory", 1, "crew-builder-1"),

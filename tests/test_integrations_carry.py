@@ -123,7 +123,7 @@ async def main():
                                      headers={"Authorization": f"Bearer {TOKEN}"}) as root:
             for uid, name in (("p_tares", "tares only"), ("p_linear", "linear"),
                               ("p_github", "github"), ("p_both", "both")):
-                s.create_project(uid, "custom", name, {})
+                s.create_project(uid, name)
             s.set_project_linear("p_linear", {"project_id": "lin-1", "api_key": PLANTED[0]})
             s.set_project_github("p_github", {"repo": "acme/app", "issue_label": "tares",
                                               "token": PLANTED[1]})

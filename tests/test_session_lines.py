@@ -24,21 +24,18 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from alembic import command  # noqa: E402
-from sqlalchemy import func, inspect, select, text  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
 
 from tares import metrics, session_archive, session_ingest, session_read  # noqa: E402
 from tares.session_map import ClaudeCodeLines  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
-from tares.session_store import SessionStore  # noqa: E402
 from tares.session_archive import FileBackend  # noqa: E402
-from tares.session_store.tables import metadata, session_archive_parts, session_lines, sessions  # noqa: E402
+from tares.session_store.tables import session_archive_parts, session_lines, sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
-HEAD = "0027_drop_move_bookkeeping"
 SRC = "claude_code"
 _N = [0]
 
@@ -96,75 +93,6 @@ def row(s, session):
 def total(s):
     with s.sessions_db.begin() as c:
         return c.execute(select(func.count()).select_from(session_lines)).scalar()
-
-
-def revision():
-    print("== revision 0006_session_lines ==")
-    d = tempfile.mkdtemp()
-    schema = dsn = None
-    if PG:
-        import psycopg
-        schema = "sl_" + uuid.uuid4().hex[:12]
-        dsn = f"{PG}?options=-csearch_path%3D{schema}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {schema}")
-
-    def step_down(sdb, to):
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, to)
-
-    def version(sdb):
-        with sdb.begin() as c:
-            return [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
-
-    try:
-        sdb = SessionStore(d, dsn)
-        sdb.upgrade()
-        insp = inspect(sdb.engine)
-        ck("the table exists", "session_lines" in insp.get_table_names())
-        ck("its columns", sorted(c["name"] for c in insp.get_columns("session_lines")) == sorted(
-            ["session", "seq", "line_key", "at", "type", "labels", "render", "payload"]))
-        ck("no text column: the text is rebuilt from the payload",
-           "text" not in [c["name"] for c in insp.get_columns("session_lines")])
-        ck("its key is (session, seq)", insp.get_pk_constraint("session_lines")[
-            "constrained_columns"] == ["session", "seq"])
-        ck("an index on (session, at)", [tuple(i["column_names"]) for i in insp.get_indexes(
-            "session_lines")] == [("session", "at")])
-        ck("the store is at the head", version(sdb) == [HEAD], version(sdb))
-        with sdb.begin() as c:
-            c.execute(text("INSERT INTO sessions (session, lines_complete) VALUES ('x', true)"))
-        step_down(sdb, "0005_session_turns")
-        names = inspect(sdb.engine).get_table_names()
-        ck("a downgrade removes the table and keeps the sessions", "session_lines" not in names
-           and "sessions" in names and "session_turns" in names, names)
-        sdb.upgrade()
-        with sdb.begin() as c:
-            flag = c.execute(text("SELECT lines_complete FROM sessions WHERE session = 'x'")).scalar()
-        ck("an upgrade after it builds the table again and clears lines_complete, so a row that "
-           "was true before the table was lost is not trusted", "session_lines" in inspect(
-               sdb.engine).get_table_names() and not flag, flag)
-        sdb.upgrade()
-        ck("an upgrade at the head again changes nothing", version(sdb) == [HEAD])
-        # the stamped case: the table was made by hand while the version is behind
-        step_down(sdb, "0005_session_turns")
-        with sdb.begin() as c:
-            metadata.tables["session_lines"].create(c)
-            c.execute(text("INSERT INTO session_lines (session, seq, payload) VALUES ('kept', 1, 'p')"))
-        sdb.upgrade()
-        with sdb.begin() as c:
-            kept = c.execute(text("SELECT payload FROM session_lines WHERE session = 'kept'")).scalar()
-        ck("an upgrade over a table that already exists stamps the revision and keeps the rows",
-           version(sdb) == [HEAD] and kept == "p", (version(sdb), kept))
-        ck("and the index is there", [tuple(i["column_names"]) for i in inspect(
-            sdb.engine).get_indexes("session_lines")] == [("session", "at")])
-        sdb.close()
-    finally:
-        if PG:
-            import psycopg
-            with psycopg.connect(PG, autocommit=True) as c:
-                c.execute(f"DROP SCHEMA {schema} CASCADE")
 
 
 def lines_in_both():
@@ -747,47 +675,8 @@ def origin():
     s.close()
 
 
-def upgrade_keeps_flags():
-    print("== existing rows keep their lines_complete through the upgrade (TR-1606) ==")
-    d = tempfile.mkdtemp()
-    schema = dsn = None
-    if PG:
-        import psycopg
-        schema = "so_" + uuid.uuid4().hex[:12]
-        dsn = f"{PG}?options=-csearch_path%3D{schema}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {schema}")
-    try:
-        sdb = SessionStore(d, dsn)
-        sdb.upgrade()
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, "0007_session_archive")
-        ck("a downgrade drops the column and only that", "lines_origin" not in [
-            x["name"] for x in inspect(sdb.engine).get_columns("sessions")]
-           and "session_archive_parts" in inspect(sdb.engine).get_table_names())
-        with sdb.begin() as c:
-            c.execute(text("INSERT INTO sessions (session, line_count, lines_complete) VALUES ('t', 4, true)"))
-            c.execute(text("INSERT INTO sessions (session, line_count, lines_complete) VALUES ('f', 4, false)"))
-        sdb.upgrade()
-        with sdb.begin() as c:
-            got = {r[0]: (bool(r[1]), r[2]) for r in c.execute(text(
-                "SELECT session, lines_complete, lines_origin FROM sessions")).all()}
-        ck("the old rows keep their flag and have a null origin", got == {"t": (True, None), "f": (False, None)}, got)
-        col = [x for x in inspect(sdb.engine).get_columns("sessions") if x["name"] == "lines_origin"][0]
-        ck("the column is nullable text with no default", col["nullable"] and col["default"] is None
-           and "TEXT" in str(col["type"]).upper(), col)
-        sdb.close()
-    finally:
-        if PG:
-            import psycopg
-            with psycopg.connect(PG, autocommit=True) as c:
-                c.execute(f"DROP SCHEMA {schema} CASCADE")
-
-
 def main():
-    for fn in (revision, lines_in_both, complete_flag, origin, upgrade_keeps_flags, concurrent_appends, purge_and_gauges, cycle,
+    for fn in (lines_in_both, complete_flag, origin, concurrent_appends, purge_and_gauges, cycle,
                reads, archived, broken_archive):
         fn()
     print()

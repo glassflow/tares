@@ -81,7 +81,7 @@ async def main():
            and answers.surface(req("prod")) == "console")
         ck("no request is the console", answers.surface(None) == "console")
 
-        store.create_project("uc_shop", "custom", "Shop", {}, goal="Sell things")
+        store.create_project("uc_shop", "Shop", goal="Sell things")
         store.set_project_kind("uc_shop", "software_factory")
         r = await listed()
         ck("nothing answered yet", r.status_code == 200 and r.json() == {"answers": []}, r.text)
@@ -145,7 +145,7 @@ async def main():
                                                 if a["id"] == "calls_to_confirm:uc_shop"]) == 2)
 
         print("== a project put off ==")
-        store.create_project("uc_billing", "custom", "Billing", {}, goal="Bill")
+        store.create_project("uc_billing", "Billing", goal="Bill")
         await post("/api/projects/uc_billing/later", {"later": True})
         await post("/api/projects/uc_billing/later", {"later": True})
         later = [a for a in (await listed()).json()["answers"] if a["id"] == "ready_to_start:uc_billing"]

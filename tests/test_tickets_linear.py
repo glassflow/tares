@@ -298,7 +298,7 @@ def world(team="team_full"):
     reset(team)
     _n[0] += 1
     s = Store(os.path.join(tempfile.mkdtemp(dir=tmp), f"t{_n[0]}"))      # its own tares.sqlite
-    s.create_project("p1", "blank", "Invoices", {})
+    s.create_project("p1", "Invoices")
     s.set_project_linear("p1", {"id": PROJECT["id"], "name": PROJECT["name"]})
     linear._save_connection(s, {"kind": "api_key", "token": GOOD_KEY,
                                 "account": {"name": "Ada", "org": "Acme"}})
@@ -712,7 +712,7 @@ ck("a row whose ticket is not a Linear one is dropped on the next sync, no raise
 
 print("== the rows of one project and one integration ==")
 s, b = world()
-s.create_project("p2", "blank", "Other", {})
+s.create_project("p2", "Other")
 s.pending_writeback_fail(tk(s, "FAC-1")["id"], "linear", "done", "x", now_utc())
 other = s.create_ticket("p2", "linear", "Elsewhere", external_id="z9", identifier="OTH-1")
 s.pending_writeback_fail(other, "linear", "done", "y", now_utc())
@@ -1266,11 +1266,11 @@ STATE["gone"] = {"teams"}
 msg = fails(b.create("p1", [], [{"title": "Teams gone"}]), linear.LinearError)
 ck("a Linear project that is gone is a LinearError", msg and "is gone" in msg and len(ops("issueCreate")) == 2, msg)
 STATE["gone"] = set()
-s.create_project("p2", "blank", "Other", {})
+s.create_project("p2", "Other")
 for kind, args in (("a ticket", ([], [{"title": "T"}])), ("a milestone", ([{"name": "M"}], []))):
     msg = fails(b.create("p2", *args), linear.LinearError)
     ck(f"{kind} for a project not linked to Linear: a plain LinearError", msg and "not linked" in msg, msg)
-s.create_project("p3", "blank", "Half linked", {})
+s.create_project("p3", "Half linked")
 s.set_project_linear("p3", {"name": "no id"})
 ck("a link with no Linear project id counts as not linked", "not linked" in (fails(
     b.create("p3", [], [{"title": "T"}]), linear.LinearError) or ""))
@@ -1428,7 +1428,7 @@ ck("None, an empty dict and a bare id are not tickets", all(fails(b.update(x, {"
                                                           for x in (None, {}, t1["id"])))
 ck("a ticket that is not there is a KeyError", fails(b.update({"id": "tk_nope", "project": "p1"}, {"title": "x"}), KeyError))
 ck("an unknown field is refused even for a bare integration", fails(TicketsLinear().update(t1, {"x": 1}), ValueError))
-s.create_project("p2", "blank", "Other", {})
+s.create_project("p2", "Other")
 other = s.create_ticket("p2", "linear", "Elsewhere", external_id="z9", identifier="OTH-1")
 ck("a milestone for a ticket of a project not linked to Linear is a LinearError", "not linked" in (fails(
     b.update(s.get_ticket("p2", other), {"milestone": "Alpha"}), linear.LinearError) or ""))

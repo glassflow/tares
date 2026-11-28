@@ -320,7 +320,7 @@ async def main():
             licensed[0] = True
             for uid, nm in (("pr1", "orders-api"), ("pr2", "billing-service"), ("pr3", "storefront"),
                             ("pr4", "warehouse-sync"), ("pr5", "mobile-app")):
-                store.create_project(uid, "custom", nm, {})
+                store.create_project(uid, nm)
                 store.set_project_kind(uid, "software_factory")
             store.set_choice("tickets", "linear", {"api_key": SECRETS["linear"]}, "Dana Whitfield")
             store.set_choice("tickets", "github", {"repo": "northwind/orders-api"}, "Dana Whitfield", default=False)
@@ -645,7 +645,7 @@ async def main():
             store.set_choice("tickets", "linear", {}, "Dana Whitfield")
             for i in range(40):
                 uid = f"many{i}"
-                store.create_project(uid, "custom", long_name + str(i) if i % 2 else f"storefront-{i}", {})
+                store.create_project(uid, long_name + str(i) if i % 2 else f"storefront-{i}")
                 store.set_project_kind(uid, "software_factory")
                 store.set_project_choice(uid, "tickets", "linear", {}, "Dana Whitfield")
             r = await get()

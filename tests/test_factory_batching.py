@@ -111,7 +111,7 @@ def build(store, name: str, n: int) -> str:
     """A factory project with `n` tickets: milestones, dependencies, working docs (one not
     included in the project), stages and PRs, and review rounds with findings fixed later."""
     uid = f"uc_{name}"
-    store.create_project(uid, "custom", name, {"objects": []})
+    store.create_project(uid, name)
     store.set_project_kind(uid, "software_factory")
     ms = [store.create_milestone(uid, f"M{i}. Milestone {i}", goal=f"goal {i}") for i in (1, 2, 3)]
     outside = store.create_doc(None, "working", "A doc the project does not include", "body")
@@ -182,14 +182,14 @@ async def main():
     small, big = build(store, "small", 10), build(store, "big", 30)
     # a milestone whose only other ticket is done: its ticket in review blocks it
     solo = "uc_solo"
-    store.create_project(solo, "custom", "solo", {"objects": []})
+    store.create_project(solo, "solo")
     store.set_project_kind(solo, "software_factory")
     m = store.create_milestone(solo, "M1. Last one", goal="g")
     store.create_ticket(solo, "tares", "Done already", status="done", milestone=m)
     store.update_ticket(store.create_ticket(solo, "tares", "Last open", milestone=m), stage="review")
     store.update_ticket(store.create_ticket(solo, "tares", "No milestone"), stage="review")
     # a project that is not a software factory: no progress, same card as before
-    store.create_project("uc_plain", "custom", "plain", {"objects": []})
+    store.create_project("uc_plain", "plain")
     from tares.store import now_utc
     t0 = now_utc()
     for uid, name in ((small, "small"), (big, "big"), (solo, "solo")):
@@ -261,7 +261,7 @@ async def main():
         golden(normalize(out), "projects.json")
         # a factory project costs the list no more queries than any other project
         _, q0 = await get("/api/projects")
-        store.create_project("uc_plain2", "custom", "plain2", {"objects": []})
+        store.create_project("uc_plain2", "plain2")
         _, q1 = await get("/api/projects")
         build(store, "more", 12)
         _, q2 = await get("/api/projects")

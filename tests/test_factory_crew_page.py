@@ -444,7 +444,7 @@ async def private_shares():
                  "h": 8, "i": 0.6}
         wait_usage_ready(store)   # a seed written while the start-up fill runs is missed by it
         for n, cost in spent.items():
-            store.create_project(f"uc_{n}", "custom", f"project-{n}", {}, goal="A project with a cost")
+            store.create_project(f"uc_{n}", f"project-{n}", goal="A project with a cost")
             store.set_project_kind(f"uc_{n}", "software_factory")
             seed_usage(store, f"s-{n}", f"m-{n}", project=f"uc_{n}", replied_at=an_hour_ago, cost_usd=cost)
         seed_usage(store, "s-own", "m-own", replied_at=an_hour_ago, cost_usd=5.4)   # "Other sessions"
@@ -561,7 +561,7 @@ async def questions_in_a_team():
         store = app.state.store
         mia = store.create_person("Mia", "mia@example.com")["id"]
         bo = store.create_person("Bo", "bo@example.com")["id"]
-        store.create_project("uc_x", "software_factory", "project-x", {}, goal="Build X")
+        store.create_project("uc_x", "project-x", goal="Build X")
         store.set_project_kind("uc_x", "software_factory")
         store.set_project_lead("uc_x", mia)
 

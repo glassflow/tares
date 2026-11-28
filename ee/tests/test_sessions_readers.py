@@ -128,7 +128,7 @@ def seed(store):
     for i in range(3):
         uid = f"uc_readers{i:02d}"
         uids.append(uid)
-        store.create_project(uid, "custom", f"Readers project {i:02d}", {}, goal=f"Goal of project {i:02d}")
+        store.create_project(uid, f"Readers project {i:02d}", goal=f"Goal of project {i:02d}")
         store.set_project_kind(uid, "software_factory")
         repo = f"example-org/readers-{i:02d}"
         m1 = store.create_milestone(uid, "M1: first pages", "The pages are live.",

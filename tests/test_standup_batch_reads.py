@@ -99,7 +99,7 @@ class Spy:
 
 
 def project(store, uid, name, *, handed=True, finished=None):
-    store.create_project(uid, "custom", name, {}, goal=f"Goal of {name}")
+    store.create_project(uid, name, goal=f"Goal of {name}")
     store.set_project_kind(uid, "software_factory")
     if handed:
         store.set_handover(uid, [{"path": f"/tmp/{uid}", "name": f"example-org/{uid}"}], None, None,

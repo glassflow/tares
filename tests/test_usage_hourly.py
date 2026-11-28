@@ -260,34 +260,6 @@ def the_readers_do_not_scan_the_rows():
     s.close()
 
 
-def the_migration_is_additive():
-    from alembic import command
-    from sqlalchemy import inspect
-    s = build()
-    hourly.fill(s)
-    sdb = s.sessions_db
-    with sdb.begin() as conn:
-        raw = conn.execute(select(func.count()).select_from(session_usage)).scalar_one()
-        cfg = sdb._config()
-        cfg.attributes["connection"] = conn
-        command.downgrade(cfg, "0015_session_moves")
-    names = inspect(sdb.engine).get_table_names()
-    ck("a downgrade drops the two new tables", "session_usage_hourly" not in names
-       and "session_rollup_state" not in names, names)
-    idx = {i["name"] for i in inspect(sdb.engine).get_indexes("session_usage")}
-    ck("and the replied_at index", "session_usage_replied_at" not in idx, idx)
-    with sdb.begin() as conn:
-        left = conn.execute(select(func.count()).select_from(session_usage)).scalar_one()
-    ck("the usage rows are untouched", left == raw == 241, (left, raw))
-    sdb.upgrade()
-    s._usage_hourly_ready = False
-    ck("an upgrade builds them empty, not ready", counts(s) == (0, 0) and not hourly.ready(s))
-    sdb.upgrade()
-    hourly.fill(s)
-    ck("and a fill builds them again", hourly.ready(s) and counts(s)[1] == 241, counts(s))
-    s.close()
-
-
 def has_bucket(s, session):
     with s.sessions_db.begin() as conn:
         return conn.execute(select(func.count()).select_from(session_usage_hourly).where(
@@ -570,7 +542,7 @@ def main():
                a_session_that_commits_while_a_chunk_is_open, a_write_between_the_last_chunk_and_the_end,
                the_cursor_is_read_in_the_databases_order, the_locks_are_taken_once_and_in_order,
                a_large_write_holds_few_locks, nothing_to_fill,
-               the_readers_do_not_scan_the_rows, the_migration_is_additive):
+               the_readers_do_not_scan_the_rows):
         print(f"== {fn.__name__.replace('_', ' ')} ==")
         fn()
     if FAILS:

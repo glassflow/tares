@@ -202,7 +202,7 @@ def fresh(name="Edge", label=LABEL):
     store = Store(os.path.join(tempfile.mkdtemp(prefix="tares-gh-edge-"), "t"))
     store.upsert_github_credential("cred-a", "tok-a")
     uid = "uc_edge"
-    store.create_project(uid, "custom", name, {"objects": []})
+    store.create_project(uid, name)
     store.set_project_github(uid, {"repo": "acme/app", "issue_label": label,
                                    "url": "https://github.com/acme/app"})
     return store, uid
@@ -430,7 +430,7 @@ async def main():
     store = Store(os.path.join(tempfile.mkdtemp(prefix="tares-gh-tickets-"), "t"))
     store.upsert_github_credential("cred-a", "tok-a")
     uid = "uc_gh"
-    store.create_project(uid, "custom", "Invoices", {"objects": []})
+    store.create_project(uid, "Invoices")
     ck("a project starts with no GitHub link, tickets with Tares", store.get_project_github(uid) is None
        and store.project_ticket_home(uid) is None)
     link = {"repo": "acme/app", "issue_label": LABEL, "url": "https://github.com/acme/app"}
@@ -471,7 +471,7 @@ async def main():
 
     print("== (r) the linked projects ==")
     cur = store.get_project_github(uid)
-    store.create_project("uc_plain", "custom", "Plain", {"objects": []})
+    store.create_project("uc_plain", "Plain")
     ck("(r) github_projects lists the linked project, not one without a link",
        store.github_projects() == [(uid, cur)])
     store.set_project_github(uid, None)
