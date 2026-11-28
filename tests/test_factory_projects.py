@@ -77,9 +77,9 @@ async def main():
         ck("create_project answers with the id, name and goal",
            uid and out.get("name") == "Shop" and out.get("goal") == "Sell things", out)
         p = store.get_project(uid) or {}
-        ck("a factory project, led by its maker, stored as custom",
+        ck("a factory project, led by its maker, with no template",
            p.get("kind") == "software_factory" and p.get("lead_person_id") == "local"
-           and p.get("template") == "custom" and p.get("status") == "active", p)
+           and "template" not in p and p.get("status") == "active", p)
         listed = json.loads(await m.list_projects())
         ck("list_projects lists it", any(x["id"] == uid and x["name"] == "Shop" for x in listed), listed)
         tl = json.loads(await m.project_timeline(project="Shop"))
@@ -94,7 +94,7 @@ async def main():
                                                  "kind": "software_factory", "icon": "🚀"})
         b = r.json()
         ck("created (201), the template, params and objects ignored",
-           r.status_code == 201 and b.get("template") == "custom" and b.get("params") == {}
+           r.status_code == 201 and "template" not in b and "params" not in b
            and b.get("objects") == [] and b.get("icon") == "🚀", r.text)
         blog = b.get("id")
         ck("the card: lead, members, default",

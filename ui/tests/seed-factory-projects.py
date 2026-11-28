@@ -124,7 +124,7 @@ finally:
 sys.path.insert(0, os.getcwd())
 from sqlalchemy import update  # noqa: E402
 
-from tares.session_store.tables import tickets as tickets_table, usecases  # noqa: E402
+from tares.session_store.tables import tickets as tickets_table, projects  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 store = Store(home)
@@ -133,7 +133,7 @@ for name, hours in (("project-b1", 0.05), ("project-b2", 2), ("project-w", 26), 
                     ("project-z", 240)):
     moved = datetime.now(timezone.utc) - timedelta(seconds=int(hours * 3600))
     with store.sessions_db.begin() as c:
-        c.execute(update(usecases).where(usecases.c.id == ids[name]).values(updated_at=moved))
+        c.execute(update(projects).where(projects.c.id == ids[name]).values(updated_at=moved))
         c.execute(update(tickets_table).where(tickets_table.c.project == ids[name]).values(updated_at=moved))
 store.close()
 print(json.dumps(ids))

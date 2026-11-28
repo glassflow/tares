@@ -279,7 +279,7 @@ async def main():
         print("== the route and the tool ==")
         ann = store.create_person("Ann", email="ann@example.com")
         ben = store.create_person("Ben", email="ben@example.com")
-        store.create_project("p1", "custom", "alpha", {}, lead_person_id=ann["id"])
+        store.create_project("p1", "alpha", lead_person_id=ann["id"])
 
         async def key(name, scopes, person=None):
             async with mk() as cx:

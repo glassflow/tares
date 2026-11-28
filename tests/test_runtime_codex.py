@@ -234,7 +234,7 @@ async def main():
     store = app.state.store
     hdr = {"Authorization": f"Bearer {ROOT_TOKEN}"}
     async with app.router.lifespan_context(app):
-        store.create_project("p1", "custom", "alpha", {}, lead_person_id=None)
+        store.create_project("p1", "alpha", lead_person_id=None)
         store.set_setting("crew_settings", json.dumps({"autonomy": "L3-review"}))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=hdr) as root:
             print("d. the route")

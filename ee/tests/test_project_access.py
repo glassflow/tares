@@ -316,12 +316,12 @@ def unit():
     from tares.store import Store
     from sqlalchemy import insert
     from tares.envelope import now_utc
-    from tares.session_store.tables import usecases
+    from tares.session_store.tables import projects
     path = _db("old")
     s = Store(path)
     with s.sessions_db.begin() as c:    # a row as a version before leads and scopes wrote it
-        c.execute(insert(usecases).values(id="uc_old", recipe="custom", name="Old", params={},
-                                          status="active", created_at=now_utc(), updated_at=now_utc()))
+        c.execute(insert(projects).values(id="uc_old", name="Old", status="active",
+                                          created_at=now_utc(), updated_at=now_utc()))
     old = s.get_project("uc_old")
     ck("an old project reads scope team and no lead", old["scope"] == "team" and old["lead_person_id"] is None,
        str(old))

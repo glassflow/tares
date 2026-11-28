@@ -159,8 +159,8 @@ async def seed(app) -> dict:
     atlas = world["atlas"] = await make_project(app, world, "kim", "Atlas")
     beacon = world["beacon"] = await make_project(app, world, "kim", "Beacon")
     vault = world["vault"] = await make_project(app, world, "lee", NAME)
-    store.create_project(ASIDE, "custom", "Aside", {})
-    store.create_project(LATER, "custom", "Later", {})
+    store.create_project(ASIDE, "Aside")
+    store.create_project(LATER, "Later")
     async with client(app, who["lee"]) as cx:
         r = await cx.patch(f"/api/projects/{vault}", json={"scope": "private"})
         assert r.status_code < 300 and store.get_project(vault)["scope"] == "private", r.text
@@ -241,7 +241,7 @@ async def check_cost(app, world, before: dict):
        moved(was, now) == {"other": 1, LATER: 1}, (moved(was, now), now))
 
     # the session with no other project joins a second private one, which is then deleted too
-    store.create_project(SECOND, "custom", "Quartzite", {})
+    store.create_project(SECOND, "Quartzite")
     store.set_project_scope(SECOND, "private")
     store.link_session(SECOND, "per-0001", None)
     await ingest(app, world, turn("per-0001", 92, SECRET, "second-per-0001"))
@@ -262,7 +262,7 @@ def check_records(store):
     digest = hashlib.sha256(b"Onyx").hexdigest()
 
     # a delete that stopped half way had taken the source out of the project already
-    store.create_project("uc_opal", "custom", "Opal", {})
+    store.create_project("uc_opal", "Opal")
     store.set_project_scope("uc_opal", "private")
     store._change_deleted_private(lambda d: d.update(
         {"uc_opal": {"name": digest, "at": older.isoformat(), "sources": ["a"]}}))

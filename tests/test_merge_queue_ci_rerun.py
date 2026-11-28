@@ -190,7 +190,7 @@ async def main():
             self.n = n
             self.uid = uid or "uc_" + name.replace("-", "")
             if uid is None:
-                store.create_project(self.uid, "custom", name, {}, goal="A project for the test")
+                store.create_project(self.uid, name, goal="A project for the test")
                 store.set_project_kind(self.uid, "software_factory")
                 store.set_handover(self.uid, [{"path": "/w/a", "name": name}], autonomy, None,
                                    now_utc(), person_id=person["id"])

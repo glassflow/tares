@@ -270,9 +270,8 @@ async def tares(shipped):
         ck("once the lines are complete the same session reads from the table, with the same text",
            r2.json().get("lines_from") == "table" and [x["text"] for x in r2.json()["lines"]] == texts,
            r2.json().get("lines_from"))
-        ck("the session is tied to the project, and no source row is added to it (TR-1811)",
-           SID in [x["session"] for x in store.project_sessions(uid)]
-           and not [o for o in store.list_project_objects(uid) if o["kind"] == "source"])
+        ck("the session is tied to the project (TR-1811)",
+           SID in [x["session"] for x in store.project_sessions(uid)])
         print("== Tares: session state ==")
         ck("no state before the plugin reports one", ss[0]["state"] is None, ss[0])
         said = {"type": "assistant", "sessionId": SID, "timestamp": at(1, 0),

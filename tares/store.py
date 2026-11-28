@@ -36,11 +36,11 @@ from .session_store.tables import settings as settings_table
 from .session_store.tables import api_keys as api_keys_table
 from .session_store.tables import people as people_table
 from .session_store.tables import project_members as members_table
-from .session_store.tables import usecases as projects_table
-from .session_store.tables import usecase_objects as objects_table
-from .session_store.tables import usecase_log as plog_table
+from .session_store.tables import projects as projects_table
+from .session_store.tables import project_docs as pdocs_table
+from .session_store.tables import project_skills as pskills_table
+from .session_store.tables import project_log as plog_table
 from .session_store.tables import docs as docs_table
-from .session_store.tables import skills as skills_table
 from .session_store.tables import shared_skills as shared_skills_table
 from .session_store.tables import github_credentials as github_table
 from .session_store.tables import model_usage as usage_table
@@ -157,8 +157,6 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def _upgrade(self) -> None:
         """The data upgrades every open runs; each is idempotent."""
-        self._skills_upgrade()
-        self._factory_kind_upgrade()
         self._factory_upgrade()
         self._ticket_pr_columns()
         self._people_upgrade()
@@ -180,44 +178,17 @@ class Store(FactoryStore, ClaudeUsageStore):
                 created_at=now_utc(), created_via="boot").on_conflict_do_nothing(
                 index_elements=["id"]))
 
-    def _skills_upgrade(self) -> None:
-        """Once per database: the skills each project kept become skills of the cell that those
-        projects use. Two projects' skills of the same name and text are one skill; the same name
-        with different text keeps both, the second named name-2 (and so on). All of it is in the
-        session store, in one transaction."""
-        if self.get_setting("skills_shared") is not None:
-            return
-        k, s, o = skills_table, shared_skills_table, objects_table
-        with self.sessions_db.begin() as conn:
-            for project, name, desc, body, c, u in conn.execute(
-                    select(k.c.project, k.c.name, k.c.description, k.c.body, k.c.created_at,
-                           k.c.updated_at).order_by(k.c.created_at, k.c.project)).all():
-                use, n = name, 2
-                while True:
-                    have = conn.execute(select(s.c.body).where(s.c.name == use)).first()
-                    if have is None or have[0] == body:
-                        break
-                    use, n = f"{name}-{n}", n + 1
-                if have is None:
-                    conn.execute(s.insert().values(name=use, description=desc, body=body,
-                                                   made_by=project, created_at=c, updated_at=u))
-                if use != name:   # the project's own row follows the new name
-                    conn.execute(o.update().where(
-                        (o.c.usecase_id == project) & (o.c.kind == "skill") & (o.c.name == name)
-                    ).values(name=use))
-                if conn.execute(select(o.c.name).where(
-                        (o.c.usecase_id == project) & (o.c.kind == "skill") & (o.c.name == use))).first() is None:
-                    conn.execute(o.insert().values(usecase_id=project, kind="skill", key=f"skill:{use}",
-                                                   name=use, customized=False, created_at=c or now_utc()))
-        self._set_setting_once("skills_shared", "1")      # after the commit: see _wiring_upgrade
-
     def projects_using(self, kind: str, name: str) -> list[str]:
-        """The projects whose object list has this part (any kind), oldest membership first."""
-        o = objects_table
+        """The projects that include the doc (`kind` "doc") or use the skill ("skill") of that
+        name, oldest first."""
+        if kind not in ("doc", "skill"):
+            raise ValueError(f"no project part of kind {kind!r}")
+        t, col = (pdocs_table, pdocs_table.c.doc) if kind == "doc" else (
+            pskills_table, pskills_table.c.skill)
         with self.sessions_db.read() as conn:
             return list(conn.execute(
-                select(o.c.usecase_id).where(o.c.kind == kind, o.c.name == name)
-                .group_by(o.c.usecase_id).order_by(func.min(o.c.created_at))).scalars())
+                select(t.c.project).where(col == name).order_by(t.c.created_at, t.c.project)
+            ).scalars())
 
     def ping(self) -> None:
         """Cheapest possible liveness probe for /health: one SELECT 1 in the session store. Raises
@@ -401,50 +372,42 @@ class Store(FactoryStore, ClaudeUsageStore):
                 index_elements=["key"]))
 
     # ── projects ──
-    def create_project(self, uid: str, template: str, name: str, params: dict,
-                       status: str = "active", goal: str | None = None,
-                       lead_person_id: str | None = None, icon: str | None = None) -> None:
+    def create_project(self, uid: str, name: str, status: str = "active",
+                       goal: str | None = None, lead_person_id: str | None = None,
+                       icon: str | None = None) -> None:
         ts = now_utc()
         with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(insert(projects_table).values(
-                id=uid, recipe=template, name=name, params=params, status=status, created_at=ts,
-                updated_at=ts, last_error=None, goal=goal or None,
-                lead_person_id=lead_person_id or None, scope="team", icon=icon or None))
-        # an id made again (a setup that was undone puts its draft back) is no deleted project
+                id=uid, name=name, status=status, created_at=ts, updated_at=ts,
+                goal=goal or None, lead_person_id=lead_person_id or None, scope="team",
+                icon=icon or None))
+        # an id made again (a delete that was undone puts it back) is no deleted project
         self._change_deleted_private(lambda d: d.pop(uid, None))
 
-    def update_project(self, uid: str, params: dict | None = None, status: str | None = None,
-                       last_error: str | None = "", name: str | None = None,
+    def update_project(self, uid: str, status: str | None = None, name: str | None = None,
                        goal: str | None = "") -> None:
-        """last_error and goal: "" (default) leaves it unchanged; None clears it; a string sets
-        it."""
+        """goal: "" (default) leaves it unchanged; None clears it; a string sets it."""
         vals: dict = {"updated_at": now_utc()}
         if goal != "":
             vals["goal"] = goal
-        if params is not None:
-            vals["params"] = params
         if status is not None:
             vals["status"] = status
         if name is not None:
             vals["name"] = name
-        if last_error != "":
-            vals["last_error"] = last_error
         with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(**vals))
 
     @staticmethod
     def _project_row(r) -> dict:
-        return {"id": r[0], "template": r[1], "name": r[2], "params": r[3] or {},
-                "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7],
-                "goal": r[8], "kind": r[9], "lead_person_id": r[10],
-                "scope": r[11] or "team", "icon": r[12]}
+        return {"id": r[0], "name": r[1], "status": r[2], "created_at": r[3], "updated_at": r[4],
+                "goal": r[5], "kind": r[6], "lead_person_id": r[7], "scope": r[8] or "team",
+                "icon": r[9]}
 
     @staticmethod
     def _project_cols():
         t = projects_table
-        return (t.c.id, t.c.recipe, t.c.name, t.c.params, t.c.status, t.c.created_at,
-                t.c.updated_at, t.c.last_error, t.c.goal, t.c.kind, t.c.lead_person_id, t.c.scope,
-                t.c.icon)
+        return (t.c.id, t.c.name, t.c.status, t.c.created_at, t.c.updated_at, t.c.goal, t.c.kind,
+                t.c.lead_person_id, t.c.scope, t.c.icon)
 
     @kept
     def list_projects(self, *, kind=None, status_in=None, status_not_in=None, ids=None,
@@ -677,28 +640,6 @@ class Store(FactoryStore, ClaudeUsageStore):
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 kind=kind or None))
 
-    def _factory_kind_upgrade(self) -> None:
-        """Once: a project from before project kinds that holds docs and tickets and no agent was
-        made by a spec session; it is a software factory project. Lock not needed (init)."""
-        if self.get_setting("factory_kind_filled") is not None:
-            return
-        t, o = projects_table, objects_table
-        with self.sessions_db.read() as conn:
-            custom = set(conn.execute(select(t.c.id).where(
-                t.c.kind.is_(None), t.c.recipe == "custom")).scalars())
-            with_docs = set(conn.execute(select(o.c.usecase_id).where(o.c.kind == "doc")).scalars())
-            with_agents = set(conn.execute(select(o.c.usecase_id).where(
-                o.c.kind == "agent")).scalars())
-            ticketed = (set(conn.execute(select(tickets_table.c.project).distinct()).scalars())
-                        if custom else set())
-        if custom:
-            hit = sorted((custom & ticketed & with_docs) - with_agents)
-            if hit:
-                with self.sessions_db.begin() as conn:
-                    conn.execute(update(t).where(t.c.id.in_(hit), t.c.kind.is_(None)).values(
-                        kind="software_factory"))
-        self._set_setting_once("factory_kind_filled", "1")
-
     def get_project_by_name(self, name: str) -> dict | None:
         return next((u for u in self.list_projects() if u["name"] == name), None)
 
@@ -726,7 +667,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                     api_keys_table.c.project == uid, api_keys_table.c.revoked_at.is_(None)
                 ).values(revoked_at=now_utc()))
             with self.sessions_db.begin() as conn:
-                conn.execute(delete(objects_table).where(objects_table.c.usecase_id == uid))
+                conn.execute(delete(pdocs_table).where(pdocs_table.c.project == uid))
+                conn.execute(delete(pskills_table).where(pskills_table.c.project == uid))
             with self.sessions_db.begin() as conn:
                 conn.execute(delete(members_table).where(members_table.c.project == uid))
             self._forget_unused_skills()   # a skill another project uses stays
@@ -738,7 +680,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                 conn.execute(delete(tickets_table).where(tickets_table.c.project == uid))
             self._factory_forget_project(uid)
             with self.sessions_db.begin() as conn:
-                conn.execute(delete(plog_table).where(plog_table.c.usecase_id == uid))
+                conn.execute(delete(plog_table).where(plog_table.c.project == uid))
                 conn.execute(delete(projects_table).where(projects_table.c.id == uid))
         self._usage_forget_project(uid, private)   # before a team project's links go, below
         over = sorted({uid, *self.deleted_private_projects()})   # their links keep no state
@@ -779,44 +721,15 @@ class Store(FactoryStore, ClaudeUsageStore):
         with self.sessions_db.begin() as conn:
             conn.execute(stmt)
 
-    def get_project_setup(self, uid: str) -> dict | None:
-        """What the guided setup kept on a project ({plan, step, practice_run, ...}), or None. The
-        guided setup went with the source catalog (TR-1811); a project made with it keeps the row."""
+    def list_project_skills(self, uid: str) -> list[dict]:
+        """The skills the project uses, as {kind "skill", key "skill:<name>", name, created_at},
+        oldest first: the `objects` of the project's card."""
+        t = pskills_table
         with self.sessions_db.read() as conn:
-            r = conn.execute(select(projects_table.c.setup).where(
-                projects_table.c.id == uid)).first()
-        return r[0] if r and r[0] else None
-
-    def set_project_setup(self, uid: str, setup: dict | None) -> None:
-        # default=str: a value JSON cannot hold (a datetime) is kept as its text, as before
-        clean = json.loads(json.dumps(setup, default=str)) if setup is not None else None
-        with self._swrite, self.sessions_db.begin() as conn:
-            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
-                setup=clean, updated_at=now_utc()))
-
-    def upsert_project_object(self, uid: str, kind: str, key: str, name: str) -> None:
-        t = objects_table
-        with self._swrite, self.sessions_db.begin() as conn:
-            conn.execute(self.sessions_db.upsert(t).values(
-                usecase_id=uid, kind=kind, key=key, name=name, customized=False,
-                created_at=now_utc()).on_conflict_do_update(
-                index_elements=["usecase_id", "kind", "key"], set_={"name": name}))
-
-    def list_project_objects(self, uid: str) -> list[dict]:
-        t = objects_table
-        with self.sessions_db.read() as conn:
-            rows = conn.execute(select(t.c.kind, t.c.key, t.c.name, t.c.customized,
-                                       t.c.created_at).where(t.c.usecase_id == uid).order_by(
-                t.c.created_at, t.c.kind, t.c.key)).all()
-        return [{"kind": r[0], "key": r[1], "name": r[2], "customized": bool(r[3]),
-                 "created_at": r[4]} for r in rows]
-
-    # ── skills (TR-332): parts of the cell (P-TR-216), used by projects; validated by
-    # tares/skills.py before they get here ──
-    def delete_project_object(self, uid: str, kind: str, key: str) -> None:
-        t = objects_table
-        with self._swrite, self.sessions_db.begin() as conn:
-            conn.execute(delete(t).where(t.c.usecase_id == uid, t.c.kind == kind, t.c.key == key))
+            rows = conn.execute(select(t.c.skill, t.c.created_at).where(t.c.project == uid)
+                                .order_by(t.c.created_at, t.c.skill)).all()
+        return [{"kind": "skill", "key": f"skill:{r[0]}", "name": r[0], "created_at": r[1]}
+                for r in rows]
 
     # ── skills (TR-332): parts of the cell (P-TR-216), used by projects; validated by
     # tares/skills.py before they get here ──
@@ -829,24 +742,23 @@ class Store(FactoryStore, ClaudeUsageStore):
     def list_skills(self, project: str) -> list[dict]:
         """The skills a project uses, without their bodies: name, description, updated_at, size
         (bytes of the body)."""
-        s, o = shared_skills_table, objects_table
+        s, o = shared_skills_table, pskills_table
         with self.sessions_db.read() as conn:
             rows = conn.execute(
                 select(s.c.name, s.c.description, s.c.updated_at, self._body_size(s.c.body))
-                .select_from(s.join(o, and_(o.c.kind == "skill", o.c.name == s.c.name)))
-                .where(o.c.usecase_id == project).distinct().order_by(s.c.name)).all()
+                .select_from(s.join(o, o.c.skill == s.c.name))
+                .where(o.c.project == project).order_by(s.c.name)).all()
         return [{"name": r[0], "description": r[1], "updated_at": r[2], "size": int(r[3] or 0)}
                 for r in rows]
 
     def list_all_skills(self) -> list[dict]:
         """Every skill on the cell with its body, the project that made it (`project`) and the
         projects that use it (`projects`)."""
-        s, o = shared_skills_table, objects_table
+        s, o = shared_skills_table, pskills_table
         with self.sessions_db.read() as conn:
             rows = conn.execute(select(s.c.name, s.c.description, s.c.body, s.c.made_by)
                                 .order_by(s.c.name)).all()
-            users = conn.execute(select(o.c.name, o.c.usecase_id).where(o.c.kind == "skill")
-                                 .group_by(o.c.name, o.c.usecase_id)).all()
+            users = conn.execute(select(o.c.skill, o.c.project)).all()
         by: dict[str, list] = {}
         for n, u in users:
             by.setdefault(n, []).append(u)
@@ -855,11 +767,10 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def get_skill(self, project: str | None, name: str) -> dict | None:
         """A skill the project uses (any project, with None)."""
-        s, o = shared_skills_table, objects_table
+        s, o = shared_skills_table, pskills_table
         with self.sessions_db.read() as conn:
-            if project is not None and conn.execute(select(o.c.name).where(
-                    o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name)
-                    .limit(1)).first() is None:
+            if project is not None and conn.execute(select(o.c.skill).where(
+                    o.c.project == project, o.c.skill == name)).first() is None:
                 return None
             r = conn.execute(select(s.c.name, s.c.description, s.c.body, s.c.created_at,
                                     s.c.updated_at).where(s.c.name == name)).first()
@@ -869,14 +780,12 @@ class Store(FactoryStore, ClaudeUsageStore):
     def _use_skill(self, conn, project: str, name: str) -> bool:
         """The project uses the skill; True when it did not before. Runs in `conn`, a session
         store transaction."""
-        o = objects_table
-        if conn.execute(select(o.c.name).where(
-                o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name)
-                .limit(1)).first() is not None:
+        o = pskills_table
+        if conn.execute(select(o.c.skill).where(
+                o.c.project == project, o.c.skill == name)).first() is not None:
             return False
         conn.execute(self.sessions_db.upsert(o).values(
-            usecase_id=project, kind="skill", key=f"skill:{name}", name=name, customized=False,
-            created_at=now_utc()).on_conflict_do_nothing())
+            project=project, skill=name, created_at=now_utc()).on_conflict_do_nothing())
         return True
 
     def use_skill(self, project: str, name: str) -> bool:
@@ -909,20 +818,18 @@ class Store(FactoryStore, ClaudeUsageStore):
     def delete_skill(self, project: str, name: str) -> bool:
         """The project stops using the skill; the skill goes when no project uses it any more.
         Returns whether the project had it."""
-        o = objects_table
+        o = pskills_table
         with self._swrite, self.sessions_db.begin() as conn:
-            had = conn.execute(select(o.c.name).where(
-                o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name)
-                .limit(1)).first()
-            conn.execute(delete(o).where(
-                o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name))
+            had = conn.execute(select(o.c.skill).where(
+                o.c.project == project, o.c.skill == name)).first()
+            conn.execute(delete(o).where(o.c.project == project, o.c.skill == name))
             self._forget_unused_skills(conn)
         return had is not None
 
     def _forget_unused_skills(self, conn=None) -> None:
         """Skills no project uses any more go. `conn`: the session store transaction to run in."""
-        s, o = shared_skills_table, objects_table
-        stmt = delete(s).where(s.c.name.not_in(select(o.c.name).where(o.c.kind == "skill")))
+        s, o = shared_skills_table, pskills_table
+        stmt = delete(s).where(s.c.name.not_in(select(o.c.skill)))
         if conn is not None:
             conn.execute(stmt)
             return
@@ -931,14 +838,6 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def skill_users(self, name: str) -> list[str]:
         return self.projects_using("skill", name)
-
-    def mark_skill_customized(self, project: str, name: str) -> None:
-        """A skill a template planned was edited by hand: a re-plan keeps the edit."""
-        o = objects_table
-        with self._swrite, self.sessions_db.begin() as conn:
-            conn.execute(update(o).where(
-                o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name
-            ).values(customized=True))
 
     # ── docs and tickets (TR-403): validated by tares/docs.py before they get here ──
     @staticmethod
@@ -982,18 +881,17 @@ class Store(FactoryStore, ClaudeUsageStore):
     def get_doc(self, project: str | None, doc_id: str) -> dict | None:
         """A doc the project includes (any doc, with None), with its body and the projects that
         include it."""
-        o = objects_table
+        o = pdocs_table
         with self.sessions_db.read() as conn:
-            if project is not None and conn.execute(select(o.c.name).where(
-                    o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id)
-                    .limit(1)).first() is None:
+            if project is not None and conn.execute(select(o.c.doc).where(
+                    o.c.project == project, o.c.doc == doc_id)).first() is None:
                 return None
             r = conn.execute(select(*self._doc_cols(), docs_table.c.body).where(
                 docs_table.c.id == doc_id)).first()
             if not r:
                 return None
-            users = list(conn.execute(select(o.c.usecase_id).where(
-                o.c.kind == "doc", o.c.name == doc_id).order_by(o.c.usecase_id)).scalars())
+            users = list(conn.execute(select(o.c.project).where(
+                o.c.doc == doc_id).order_by(o.c.project)).scalars())
         return {**self._doc_row(r, r[8]), "projects": users}
 
     def personal_doc(self, person_id: str, kind: str) -> dict | None:
@@ -1011,38 +909,36 @@ class Store(FactoryStore, ClaudeUsageStore):
         project does not include is absent, as get_doc gives None for it."""
         if not doc_ids:
             return {}
-        d, o = docs_table, objects_table
+        d, o = docs_table, pdocs_table
         with self.sessions_db.read() as conn:
             rows = conn.execute(
-                select(d.c.id, d.c.title).select_from(
-                    d.join(o, and_(o.c.kind == "doc", o.c.name == d.c.id)))
-                .where(o.c.usecase_id == project, d.c.id.in_(list(doc_ids))).distinct()).all()
+                select(d.c.id, d.c.title).select_from(d.join(o, o.c.doc == d.c.id))
+                .where(o.c.project == project, d.c.id.in_(list(doc_ids)))).all()
         return {r[0]: r[1] for r in rows}
 
     def list_docs(self, project: str, kind: str | None = None) -> list[dict]:
         """The docs a project includes, without bodies: size in bytes instead."""
-        d, o = docs_table, objects_table
+        d, o = docs_table, pdocs_table
         q = (select(*self._doc_cols(), self._body_size(d.c.body))
-             .select_from(d.join(o, and_(o.c.kind == "doc", o.c.name == d.c.id)))
-             .where(o.c.usecase_id == project, d.c.owner.is_(None)))
+             .select_from(d.join(o, o.c.doc == d.c.id))
+             .where(o.c.project == project, d.c.owner.is_(None)))
         if kind:
             q = q.where(d.c.kind == kind)
         with self.sessions_db.read() as conn:
-            rows = conn.execute(q.distinct().order_by(d.c.created_at, d.c.id)).all()
+            rows = conn.execute(q.order_by(d.c.created_at, d.c.id)).all()
         return [{**self._doc_row(r), "size": int(r[8] or 0)} for r in rows]
 
     def list_cell_docs(self, viewer: str | None = None) -> list[dict]:
         """Every doc on the cell (no bodies), with the projects that include it. A personal doc
         is listed only to its person (`viewer`, a people.id): nobody else sees it, whatever their
         rights."""
-        d, o = docs_table, objects_table
+        d, o = docs_table, pdocs_table
         with self.sessions_db.read() as conn:
             rows = conn.execute(
                 select(*self._doc_cols(), self._body_size(d.c.body))
                 .where(or_(d.c.owner.is_(None), d.c.owner == (viewer or "")))
                 .order_by(d.c.title, d.c.id)).all()
-            users = conn.execute(select(o.c.name, o.c.usecase_id).where(o.c.kind == "doc")
-                                 .group_by(o.c.name, o.c.usecase_id)).all()
+            users = conn.execute(select(o.c.doc, o.c.project)).all()
         by: dict[str, list] = {}
         for n, u in users:
             by.setdefault(n, []).append(u)
@@ -1051,9 +947,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def _use_doc(self, conn, project: str, doc_id: str) -> None:
         """Runs in `conn`, a session store transaction."""
-        conn.execute(self.sessions_db.upsert(objects_table).values(
-            usecase_id=project, kind="doc", key=f"doc:{doc_id}", name=doc_id, customized=False,
-            created_at=now_utc()).on_conflict_do_nothing())
+        conn.execute(self.sessions_db.upsert(pdocs_table).values(
+            project=project, doc=doc_id, created_at=now_utc()).on_conflict_do_nothing())
 
     def use_doc(self, project: str, doc_id: str) -> bool:
         """A doc already on the cell, included in one more project. False when there is no such
@@ -1070,23 +965,21 @@ class Store(FactoryStore, ClaudeUsageStore):
         """The project stops including the doc; the doc is deleted when no project includes it
         any more and it was made by a project (a doc made on the cell stays). A ticket of this
         project whose working doc it was loses the link. Returns whether the project had it."""
-        o, t = objects_table, tickets_table
+        o, t = pdocs_table, tickets_table
         with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(t).where(t.c.project == project, t.c.working_doc == doc_id)
                          .values(working_doc=None))
-            had = conn.execute(select(o.c.name).where(
-                o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id).limit(1)).first()
-            conn.execute(delete(o).where(
-                o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id))
+            had = conn.execute(select(o.c.doc).where(
+                o.c.project == project, o.c.doc == doc_id)).first()
+            conn.execute(delete(o).where(o.c.project == project, o.c.doc == doc_id))
             self._forget_unused_docs(conn)
         return had is not None
 
     def _forget_unused_docs(self, conn=None) -> None:
         """Docs a project made that no project includes any more go. `conn`: the session store
         transaction to run in."""
-        d, o = docs_table, objects_table
-        stmt = delete(d).where(d.c.made_by.is_not(None),
-                               d.c.id.not_in(select(o.c.name).where(o.c.kind == "doc")))
+        d, o = docs_table, pdocs_table
+        stmt = delete(d).where(d.c.made_by.is_not(None), d.c.id.not_in(select(o.c.doc)))
         if conn is not None:
             conn.execute(stmt)
             return
@@ -1562,9 +1455,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         with self.sessions_db.read() as conn:
             if saved and conn.execute(select(t.c.id).where(t.c.id == saved)).first() is not None:
                 return saved
-            found = conn.execute(select(t.c.id).where(t.c.recipe == "default").order_by(
-                t.c.created_at, t.c.id).limit(1)).first()
-        return found[0] if found else None
+        return None
 
     def _ensure_default_project(self) -> str:
         """The default project's id, creating the project if the cell has none yet. Called with
@@ -1581,21 +1472,20 @@ class Store(FactoryStore, ClaudeUsageStore):
                     else "Default project"
                 ts = now_utc()
                 conn.execute(insert(t).values(
-                    id=uid, recipe="default", name=name, params={}, status="active",
-                    created_at=ts, updated_at=ts, last_error=None))
+                    id=uid, name=name, status="active", created_at=ts, updated_at=ts))
         self.set_setting("default_project", uid)
         return uid
 
     def log_project(self, uid: str, action: str, detail: str = "") -> None:
         with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(insert(plog_table).values(
-                usecase_id=uid, logged_at=now_utc(), action=action, detail=detail[:2000]))
+                project=uid, logged_at=now_utc(), action=action, detail=detail[:2000]))
 
     def list_project_log(self, uid: str, limit: int = 100) -> list[dict]:
         t = plog_table
         with self.sessions_db.read() as conn:
             rows = conn.execute(select(t.c.logged_at, t.c.action, t.c.detail).where(
-                t.c.usecase_id == uid).order_by(t.c.logged_at.desc()).limit(limit)).all()
+                t.c.project == uid).order_by(t.c.logged_at.desc()).limit(limit)).all()
         return [{"at": r[0], "action": r[1], "detail": r[2]} for r in rows]
 
     # ── GitHub credentials: a token or an App stored once ──
@@ -1968,10 +1858,13 @@ class Store(FactoryStore, ClaudeUsageStore):
         # one transaction: the guard above answers False once removed_at is set, so a crash must
         # not leave it set with the tickets still theirs
         with self._swrite, self.sessions_db.begin() as conn:
-            # open tickets only: a finished one keeps the name of who did it
+            # open tickets only: a finished one keeps the name of who did it. A NULL status or
+            # stage is open (NOT IN is not true for NULL, TR-1692)
             conn.execute(update(t).where(
-                t.c.assignee_person_id == pid, t.c.status.not_in(("done", "canceled")),
-                t.c.stage.not_in(("merged", "shipped"))).values(assignee_person_id=None))
+                t.c.assignee_person_id == pid,
+                or_(t.c.status.is_(None), t.c.status.not_in(("done", "canceled"))),
+                or_(t.c.stage.is_(None), t.c.stage.not_in(("merged", "shipped"))))
+                .values(assignee_person_id=None))
             # what they led or held is nobody's now: it falls to the next owner in line
             # (factory_owners), and the project says it has no lead
             conn.execute(update(projects_table).where(

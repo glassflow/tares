@@ -100,7 +100,7 @@ async def main():
                            headers={"Authorization": f"Bearer {TOKEN}"}, timeout=30)
 
     uid = "uc_prscope"
-    store.create_project(uid, "custom", "pr-scope", {}, goal="A goal")
+    store.create_project(uid, "pr-scope", goal="A goal")
     store.set_project_kind(uid, "software_factory")
 
     def ticket(title, **fields):

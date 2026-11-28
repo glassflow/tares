@@ -304,7 +304,7 @@ async def add_pat(cx, token, name="pat"):
 
 
 def projects(store):
-    store.create_project("uc_team", "custom", "Team", {})
+    store.create_project("uc_team", "Team")
     store.set_handover("uc_team", [{"path": "/src/app", "name": "acme/app"}], None, "test",
                        datetime.now(timezone.utc))
     for repo in ("Acme/Lib", "acme/unfollowed", "acme/patonly", "other/site"):
@@ -804,7 +804,7 @@ async def auth_on():
             ann = store.create_person("Ann", "ann@example.com")["id"]
             bob = store.create_person("Bob", "bob@example.com")["id"]
             projects(store)
-            store.create_project("uc_priv", "custom", "Private", {})
+            store.create_project("uc_priv", "Private")
             store.create_ticket("uc_priv", "builder", "private work", repo="acme/secret")
             store.set_project_scope("uc_priv", "private")
             store.add_project_member("uc_priv", ann)
@@ -834,7 +834,7 @@ async def auth_off():
         store = app.state.store
         async with client(app, "http://127.0.0.1:8787") as cx:
             projects(store)
-            store.create_project("uc_priv", "custom", "Private", {})
+            store.create_project("uc_priv", "Private")
             store.create_ticket("uc_priv", "builder", "private work", repo="acme/secret")
             store.set_project_scope("uc_priv", "private")
             drop_credentials(store)

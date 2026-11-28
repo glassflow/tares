@@ -107,8 +107,8 @@ async def main():
     m._cx = mf._cx = lambda timeout=10: mk()
 
     async with app.router.lifespan_context(app):
-        store.create_project("p1", "custom", "alpha", {})
-        store.create_project("p2", "custom", "beta", {})
+        store.create_project("p1", "alpha")
+        store.create_project("p2", "beta")
         async with mk() as root:
             print("== installed, and in /health ==")
             ck("the built-in memory integration is installed",

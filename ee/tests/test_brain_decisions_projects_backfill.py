@@ -126,7 +126,7 @@ async def main():
         ck("the real loop is running", dec is not None and dec.task is not None and not dec.task.done())
 
         def project(pid, repos, scope="team"):
-            store.create_project(pid, "factory", "Name of " + pid, {})
+            store.create_project(pid, "Name of " + pid)
             store.set_handover(pid, [{"path": "/work/" + r.split("/")[-1], "name": r} for r in repos], None, "t", now_utc())
             if scope != "team":
                 store.set_project_scope(pid, scope)

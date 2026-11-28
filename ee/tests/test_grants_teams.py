@@ -83,8 +83,8 @@ async def migration():
                        "# Grants\n\n- \"run the tests\" (2026-10-01)\n- \"open pull requests\" (2026-10-02)\n",
                        by="tares")
     s.set_setting("global_grants", gid)
-    s.create_project("p1", "custom", "Legacy", {})
-    s.create_project("p2", "custom", "Other", {})
+    s.create_project("p1", "Legacy")
+    s.create_project("p2", "Other")
     own = s.create_doc("p1", "grants", "Grants: Legacy",
                        "# Grants\n\n- \"touch the staging cluster\" (2026-10-03)\n", by="x")
     s.use_doc("p1", gid)

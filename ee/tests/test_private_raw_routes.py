@@ -71,8 +71,8 @@ async def main():
             pid[who] = r.json()["person"]["id"]
 
         open_uid, vault = "prj-edgewatch", "prj-zephyrwatch"
-        store.create_project(open_uid, "custom", "Edgewatch", {}, goal="Keep edge-proxy healthy")
-        store.create_project(vault, "custom", "Zephyrwatch", {}, goal="Keep zephyr-api healthy",
+        store.create_project(open_uid, "Edgewatch", goal="Keep edge-proxy healthy")
+        store.create_project(vault, "Zephyrwatch", goal="Keep zephyr-api healthy",
                              lead_person_id=pid["lee"])
         store.set_project_scope(vault, "private")
         doc = store.create_doc(vault, "notes", "Zephyr notes", "The zephyr notes.")

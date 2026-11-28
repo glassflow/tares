@@ -6,15 +6,11 @@
    "icon": null,
    "id": "uc_small",
    "kind": "software_factory",
-   "last_error": null,
    "lead": null,
    "lead_person_id": null,
    "members": [],
    "name": "small",
    "objects": [],
-   "params": {
-    "objects": []
-   },
    "progress": {
     "canceled": 0,
     "closed": 2,
@@ -27,8 +23,7 @@
    },
    "ready_to_close": false,
    "scope": "team",
-   "status": "active",
-   "template": "custom"
+   "status": "active"
   },
   {
    "default": false,
@@ -36,15 +31,11 @@
    "icon": null,
    "id": "uc_big",
    "kind": "software_factory",
-   "last_error": null,
    "lead": null,
    "lead_person_id": null,
    "members": [],
    "name": "big",
    "objects": [],
-   "params": {
-    "objects": []
-   },
    "progress": {
     "canceled": 0,
     "closed": 6,
@@ -57,8 +48,7 @@
    },
    "ready_to_close": false,
    "scope": "team",
-   "status": "active",
-   "template": "custom"
+   "status": "active"
   },
   {
    "default": false,
@@ -66,15 +56,11 @@
    "icon": null,
    "id": "uc_solo",
    "kind": "software_factory",
-   "last_error": null,
    "lead": null,
    "lead_person_id": null,
    "members": [],
    "name": "solo",
    "objects": [],
-   "params": {
-    "objects": []
-   },
    "progress": {
     "canceled": 0,
     "closed": 1,
@@ -87,8 +73,7 @@
    },
    "ready_to_close": false,
    "scope": "team",
-   "status": "active",
-   "template": "custom"
+   "status": "active"
   },
   {
    "default": false,
@@ -96,19 +81,14 @@
    "icon": null,
    "id": "uc_plain",
    "kind": null,
-   "last_error": null,
    "lead": null,
    "lead_person_id": null,
    "members": [],
    "name": "plain",
    "objects": [],
-   "params": {
-    "objects": []
-   },
    "ready_to_close": false,
    "scope": "team",
-   "status": "active",
-   "template": "custom"
+   "status": "active"
   }
  ]
 }

@@ -24,13 +24,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from alembic import command  # noqa: E402
-from sqlalchemy import func, inspect, select, text  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
 
 from tares import session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
-from tares.session_store import SessionStore  # noqa: E402
-from tares.session_store.tables import (metadata, session_commands,  # noqa: E402
+from tares.session_store.tables import (session_commands,  # noqa: E402
                                         session_files, session_said, session_turns, sessions)
 from tares.store import Store  # noqa: E402
 
@@ -38,7 +36,6 @@ PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
 SRC = "claude_code"
-HEAD = "0027_drop_move_bookkeeping"
 
 
 def ck(name, ok, detail=""):
@@ -345,72 +342,6 @@ def compare(s, label):
     ck(f"{label} said_lately, last_said and files_touched equal the old readers for every session", ok)
 
 
-def revision():
-    print("== revision 0005_session_turns ==")
-    d = tempfile.mkdtemp()
-    schema = dsn = None
-    if PG:
-        import psycopg
-        schema = "st_" + uuid.uuid4().hex[:12]
-        dsn = f"{PG}?options=-csearch_path%3D{schema}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {schema}")
-    try:
-        sdb = SessionStore(d, dsn)
-        sdb.upgrade()
-        insp = inspect(sdb.engine)
-        new = {"session_turns", "session_said", "session_files"}
-        ck("the three tables exist", new <= set(insp.get_table_names()))
-        cols = lambda t: sorted(c["name"] for c in insp.get_columns(t))  # noqa: E731
-        ck("session_turns columns", cols("session_turns") == sorted(
-            ["session", "line_key", "source", "at", "person", "text"]))
-        ck("session_said columns", cols("session_said") == sorted(
-            ["session", "line_key", "source", "at", "text"]))
-        ck("session_files columns", cols("session_files") == sorted(
-            ["session", "path", "source", "last_at"]))
-        pk = lambda t: insp.get_pk_constraint(t)["constrained_columns"]  # noqa: E731
-        ck("the keys", pk("session_turns") == ["session", "line_key"]
-           and pk("session_said") == ["session", "line_key"] and pk("session_files") == ["session", "path"])
-        ix = lambda t: sorted(tuple(i["column_names"]) for i in insp.get_indexes(t))  # noqa: E731
-        ck("the indexes", ix("session_turns") == [("at",), ("session", "at")]
-           and ix("session_said") == [("session", "at")]
-           and ix("session_files") == [("session", "last_at")], (ix("session_turns"), ix("session_said"), ix("session_files")))
-        with sdb.begin() as c:
-            c.execute(text("INSERT INTO session_files (session, path) VALUES ('k', 'x')"))
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, "0004_session_facts")
-        names = inspect(sdb.engine).get_table_names()
-        ck("a downgrade removes the three tables and keeps the facts tables",
-           not (new & set(names)) and {"session_messages", "session_commands", "sessions"} <= set(names), names)
-        sdb.upgrade()
-        ck("an upgrade after it builds them again", new <= set(inspect(sdb.engine).get_table_names()))
-        sdb.upgrade()
-        ck("an upgrade at the head again changes nothing", new <= set(inspect(sdb.engine).get_table_names()))
-        # the stamped case: tables made by hand while the version is behind
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, "0004_session_facts")
-        with sdb.begin() as c:
-            for t in ("session_turns", "session_said", "session_files"):
-                metadata.tables[t].create(c)
-            c.execute(text("INSERT INTO session_files (session, path) VALUES ('kept', 'p')"))
-        sdb.upgrade()
-        with sdb.begin() as c:
-            v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
-            kept = c.execute(select(session_files.c.path).where(session_files.c.session == "kept")).scalar()
-        ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == [HEAD] and kept == "p", (v, kept))
-        sdb.close()
-    finally:
-        if PG:
-            import psycopg
-            with psycopg.connect(PG, autocommit=True) as c:
-                c.execute(f"DROP SCHEMA {schema} CASCADE")
-
-
 def extraction():
     print("== the extraction rules ==")
     jx = session_ingest._jx
@@ -430,7 +361,6 @@ def extraction():
 
 
 def main():
-    revision()
     extraction()
     print("== the readers return what the old readers did ==")
     d = tempfile.mkdtemp()

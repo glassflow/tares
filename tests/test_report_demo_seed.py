@@ -133,7 +133,7 @@ def monday(t):
 
 
 TABLES = {
-    "usecases": "id name created_at",
+    "projects": "id name created_at",
     "tickets": "id project number stage status repo pr created_at updated_at",
     "ticket_history": "ticket project changed_at field value",
     "ticket_checks": "project checked_at",
@@ -193,7 +193,7 @@ def stage_times(db):
 def week_checks(db, label):
     """What the Report reads, in each of the last eight ISO weeks."""
     weeks = [week(s) for s in db["starts"]]
-    projects = [u["id"] for u in db["usecases"] if u["id"].startswith("uc_demo_")]
+    projects = [u["id"] for u in db["projects"] if u["id"].startswith("uc_demo_")]
     levels = {uid: ("L3" if uid in (BILLING, "uc_demo_office") else "L4") for uid in projects}
     stages = stage_times(db)
     ticket = {t["id"]: t for t in db["tickets"]}
@@ -709,7 +709,7 @@ def refresh_checks(root):
     unseeded = os.path.join(root, "unseeded")
     os.makedirs(unseeded)
     with opened(unseeded) as s:
-        s.create_project("uc_other", "custom", "Somebody Else", {})
+        s.create_project("uc_other", "Somebody Else")
     before = snapshot(unseeded)
     no = run_seed(unseeded, "--refresh-crew")
     after = snapshot(unseeded)
@@ -793,7 +793,7 @@ def half_checks(root, wanted):
     again = counts(snapshot(half))
     ck("the next run writes it again from the start", code == 0 and "Wrote 8 weeks" in said,
        said[-800:])
-    exact = ("usecases", "milestones", "milestone_acceptances", "milestone_check_results",
+    exact = ("projects", "milestones", "milestone_acceptances", "milestone_check_results",
              "people", "crews", "session_stations", "project_sessions", "handovers",
              "ticket_numbers")
     ck("with no row twice", all(again.get(t) == wanted.get(t) for t in exact),
@@ -818,7 +818,7 @@ def other_projects_checks(root):
     theirs = os.path.join(root, "theirs")
     os.makedirs(theirs)
     with opened(theirs) as s:
-        s.create_project("uc_other", "custom", "Somebody Else", {})
+        s.create_project("uc_other", "Somebody Else")
     before = snapshot(theirs)
     refused = run_seed(theirs)
     ck("it is refused, with the project named",

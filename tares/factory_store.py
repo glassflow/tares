@@ -28,7 +28,7 @@ from .session_store.tables import (project_sessions, session_commands, session_m
 from .session_store.tables import sessions as sessions_table
 from .session_store.tables import pr_events as pr_events_table
 from .session_store.tables import integration_keys as integration_keys_table
-from .session_store.tables import usecases as projects_table
+from .session_store.tables import projects as projects_table
 from .session_store.tables import people as people_table
 from .session_store.tables import ticket_history as history_table
 from .session_store.tables import ticket_numbers as numbers_table

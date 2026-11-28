@@ -2,13 +2,12 @@
 
     python tests/test_revision_imports.py
 
-An old database must get from a revision what it got when the revision was written. A revision
-that calls live code gets whatever that code does today. So env.py, the revisions and the frozen
-helpers (everything under tares/session_store/migrations) may import the standard library,
-SQLAlchemy, Alembic and migrations/frozen, and nothing else of Tares, except what ALLOWED names.
+A database must get from a revision what it got when the revision was written. A revision that
+calls live code gets whatever that code does today. So env.py and the revisions (everything under
+tares/session_store/migrations) may import the standard library, SQLAlchemy and Alembic, and
+nothing of Tares, except what ALLOWED names.
 
-The imports are read with ast, so one inside a function or under an `if` counts too. A frozen
-helper is imported as `from tares.session_store.migrations.frozen... import name`.
+The imports are read with ast, so one inside a function or under an `if` counts too.
 """
 import ast
 import os
@@ -16,12 +15,9 @@ import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 MIGRATIONS = os.path.join(ROOT, "tares", "session_store", "migrations")
-FROZEN = "tares.session_store.migrations.frozen"
 LIVE = ("tares", "tares_ee")
 
 # (file under migrations/, the module it imports): why it may
-# 0012 imported the live takeover until that module went with DuckDB (TR-1815): it calls the frozen
-# copy now, so nothing is allowed
 ALLOWED: dict = {}
 
 FAILS = []
@@ -44,14 +40,14 @@ def live_imports(source, path):
     found = []
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
-            # `import tares.x.y` binds `tares`, and with it every module of it: a frozen one too
+            # `import tares.x.y` binds `tares`, and with it every module of it
             found += [(node.lineno, a.name) for a in node.names if _live(a.name)]
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if node.level:                        # relative: fine while it stays under migrations/
                 if node.level - 1 > depth:
                     found.append((node.lineno, "." * node.level + module))
-            elif _live(module) and module != FROZEN and not module.startswith(FROZEN + "."):
+            elif _live(module):
                 found.append((node.lineno, module))
         elif isinstance(node, ast.Call):          # __import__(...), importlib.import_module(...)
             f = node.func
@@ -70,12 +66,9 @@ def the_check_itself():
             ("from tares import", "from tares import store", rev, ["tares"]),
             ("import tares...", "import tares.store", rev, ["tares.store"]),
             ("import tares as", "import tares.store as s", rev, ["tares.store"]),
-            ("import of a frozen module by its full name",
-             "import tares.session_store.migrations.frozen.takeover", rev,
-             ["tares.session_store.migrations.frozen.takeover"]),
-            ("a name that only starts like frozen",
-             "from tares.session_store.migrations.frozenish import x", rev,
-             ["tares.session_store.migrations.frozenish"]),
+            ("a module under migrations by its full name",
+             "from tares.session_store.migrations import helpers", rev,
+             ["tares.session_store.migrations"]),
             ("the enterprise package", "from tares_ee import team", rev, ["tares_ee"]),
             ("inside a function", "def upgrade():\n    from tares.session_store import tables\n", rev,
              ["tares.session_store"]),
@@ -83,8 +76,6 @@ def the_check_itself():
              rev, ["tares"]),
             ("relative, out of migrations from a revision", "from ...tables import settings", rev,
              ["...tables"]),
-            ("relative, out of migrations from a frozen module", "from ... import pr_columns",
-             "frozen/x.py", ["..."]),
             ("relative, out of migrations from env.py", "def f():\n    from .. import tables\n", "env.py",
              [".."]),
             ("by name at run time", "import importlib\nimportlib.import_module('tares.store')", rev,
@@ -96,9 +87,7 @@ def the_check_itself():
             ("a revision that imports logging, sqlalchemy and alembic",
              "import logging\n\nimport sqlalchemy as sa\nfrom alembic import op\n"
              "from sqlalchemy.dialects import postgresql\n", rev),
-            ("a frozen helper", f"from {FROZEN}.takeover import takeover\nfrom {FROZEN} import takeover", rev),
-            ("relative inside migrations", "from .takeover import takeover\nfrom ..frozen import takeover\n",
-             "frozen/x.py"),
+            ("relative inside migrations", "from . import helpers\n", rev),
             ("a package named like tares", "import taresque", rev)):
         got = live_imports(source, path)
         ck(f"{label} passes", not got, got)
@@ -119,10 +108,9 @@ def the_tree():
                 used.add((path, what))
             else:
                 bad.append(f"migrations/{path}:{line} imports {what}")
-    ck("it read env.py, the revisions and the frozen helpers", "env.py" in files
-       and "versions/0019_ticket_pr_columns.py" in files and "frozen/pr_columns.py" in files, files)
-    ck("none imports live code (copy what it needs into the revision or into migrations/frozen/)",
-       not bad, bad)
+    ck("it read env.py and the revisions", "env.py" in files
+       and "versions/0001_baseline.py" in files, files)
+    ck("none imports live code (copy what it needs into the revision)", not bad, bad)
     ck("every entry of ALLOWED has a reason and is still needed",
        all(ALLOWED.values()) and used == set(ALLOWED), set(ALLOWED) - used)
 

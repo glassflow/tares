@@ -59,7 +59,7 @@ def attempt(name, fn):
 def new_store(**kw):
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
     s = Store(os.path.join(tempfile.mkdtemp(), "t"), **kw)
-    s.create_project(PROJECT, "custom", "proj", {})
+    s.create_project(PROJECT, "proj")
     return s
 
 

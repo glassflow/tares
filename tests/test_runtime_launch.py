@@ -305,7 +305,7 @@ async def main():
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=hdr)
 
     async with app.router.lifespan_context(app):
-        store.create_project("p1", "custom", "alpha", {}, lead_person_id=None)
+        store.create_project("p1", "alpha", lead_person_id=None)
         async with mk() as root:
             r = await root.put("/api/factory/integrations/monitoring", json={
                 "name": "otlp",

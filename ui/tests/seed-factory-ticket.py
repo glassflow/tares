@@ -33,7 +33,7 @@ def ago(**kw):
 
 def project(name, factory=True):
     uid = f"uc_{name.replace('-', '')}"
-    store.create_project(uid, "custom", name, {}, goal="Publish 1,000 answers to common questions on the docs site.")
+    store.create_project(uid, name, goal="Publish 1,000 answers to common questions on the docs site.")
     if factory:
         store.set_project_kind(uid, "software_factory")
     ids[name] = uid

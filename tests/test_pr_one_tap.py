@@ -85,7 +85,7 @@ async def main():
 
     async with app.router.lifespan_context(app):
         uid = "uc_shop"
-        store.create_project(uid, "custom", "shop", {}, goal="Sell things")
+        store.create_project(uid, "shop", goal="Sell things")
         store.set_project_kind(uid, "software_factory")
         store.set_handover(uid, [{"path": "/w/shop", "name": REPO}], None, None, now_utc())
         tid = store.create_ticket(uid, "tares", "Add the cart", repo=REPO)

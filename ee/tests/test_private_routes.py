@@ -184,7 +184,7 @@ async def main():
             ck("Bob sees it as a name and its lead, nothing else", row == {
                 "id": uid, "name": "Secret", "scope": "private", "hidden": True,
                 "lead": {"id": pa, "name": "Ann"}}, str(row))
-            ck("... and the team project whole", any(p["id"] == team and "template" in p for p in lst))
+            ck("... and the team project whole", any(p["id"] == team and "goal" in p and "objects" in p for p in lst))
             lst = (await cx.get(f"{B}/api/projects", headers=A_)).json()["projects"]
             row = next(p for p in lst if p["id"] == uid)
             ck("Ann sees it whole", "hidden" not in row and row["name"] == "Secret" and "members" in row, str(row)[:200])

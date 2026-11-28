@@ -80,7 +80,7 @@ REPO = "example-org/web"
 
 def project(name, lead):
     uid = "uc_report_" + name[-1]
-    store.create_project(uid, "custom", name, {}, goal="g", lead_person_id=ids[lead])
+    store.create_project(uid, name, goal="g", lead_person_id=ids[lead])
     store.set_project_kind(uid, "software_factory")
     ids[name] = uid
     return uid

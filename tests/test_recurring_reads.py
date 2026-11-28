@@ -115,7 +115,7 @@ def seed(store):
     n = 0
     for i in range(5):
         uid = f"uc_rec{i}"
-        store.create_project(uid, "custom", f"Recurring project {i}", {}, goal="g")
+        store.create_project(uid, f"Recurring project {i}", goal="g")
         store.set_project_kind(uid, "software_factory")
         for j in range(8):
             tid = store.create_ticket(uid, "linear" if j % 3 == 0 else "tares", f"Ticket {j}",

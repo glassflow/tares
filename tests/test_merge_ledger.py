@@ -309,7 +309,7 @@ async def cell():
 
     def project(name, autonomy="L3-review", title=None, handed=True):
         uid = "uc_" + name
-        store.create_project(uid, "custom", title or name, {}, goal="A project for the test")
+        store.create_project(uid, title or name, goal="A project for the test")
         store.set_project_kind(uid, "software_factory")
         if handed:
             hand(uid, autonomy)
@@ -769,7 +769,7 @@ async def cell():
 
         print("== the report's rows ==")
         quiet = project("Quiet", title="Zeta notes", handed=False)
-        store.create_project("uc_plain", "custom", "Plain", {}, goal="g")
+        store.create_project("uc_plain", "Plain", goal="g")
         hand("uc_plain", "L3-review")      # a hand-over alone does not make it a factory project
         plus = project("plus", title="+Plus")
         hand(plus, "L3-review", [{"path": "/home/dev/work/shop", "name": "shop"}])

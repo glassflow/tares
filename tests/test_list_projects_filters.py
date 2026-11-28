@@ -37,11 +37,11 @@ def ids(rows):
 
 
 def make(uid, name, status="active", kind="software_factory", age=0):
-    store.create_project(uid, "custom", name, {}, status=status)
+    store.create_project(uid, name, status=status)
     if kind:
         store.set_project_kind(uid, kind)
     with store.sessions_db.begin() as c:    # a distinct, increasing created_at so the order is the one asked for
-        c.execute(text("UPDATE usecases SET created_at = :t WHERE id = :i"),
+        c.execute(text("UPDATE projects SET created_at = :t WHERE id = :i"),
                   {"t": now - timedelta(days=100 - age), "i": uid})
 
 
@@ -52,7 +52,7 @@ make("c", "C", "later", "software_factory", 3)
 make("d", "D", "active", None, 4)
 make("e", "E", "draft", "other", 5)
 with store.sessions_db.begin() as c:
-    c.execute(text("UPDATE usecases SET status = NULL WHERE id = 'e'"))
+    c.execute(text("UPDATE projects SET status = NULL WHERE id = 'e'"))
 
 allp = store.list_projects()
 ck("default gives every project, oldest first", ids(allp) == ["a", "b", "c", "d", "e"], ids(allp))
@@ -225,7 +225,7 @@ store.set_handover("p_order", [{"path": "/x/q", "name": None}], None, "t", now)
 store.set_handover("p_cancel", [{"path": "/x/a", "name": "o/a"}], None, "t", now)
 store.finish_handover("p_cancel", "done", None, "t", now - timedelta(days=40))
 with store.sessions_db.begin() as c:
-    c.execute(text("UPDATE usecases SET updated_at = NULL WHERE id = 'p_empty'"))
+    c.execute(text("UPDATE projects SET updated_at = NULL WHERE id = 'p_empty'"))
 
 handovers = store.handovers_by_project(list(CASES))
 milestones = store.milestones_by_project(list(CASES))

@@ -296,7 +296,7 @@ async def main():
 
     def project(name, autonomy=None, handed=True, review="fakerev", ci="fakeci"):
         uid = "uc_" + name.replace("-", "")
-        store.create_project(uid, "custom", name, {}, goal="A project for the test")
+        store.create_project(uid, name, goal="A project for the test")
         store.set_project_kind(uid, "software_factory")
         if handed:
             store.set_handover(uid, [{"path": "/w/a", "name": name}], autonomy, None, now_utc(),

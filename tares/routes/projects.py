@@ -51,11 +51,9 @@ def router(deps: Deps) -> APIRouter:
         raise e
 
     def _project_card(uid: str) -> dict:
-        """What a project key is told about its project: who it is and what it is made of, not
-        its template parameters (they can hold credentials)."""
+        """What a project key is told about its project: who it is and what it is made of."""
         p = store.get_project(uid) or {}
-        return {"id": uid, "name": p.get("name"), "template": p.get("template"),
-                "goal": p.get("goal"),
+        return {"id": uid, "name": p.get("name"), "goal": p.get("goal"),
                 "status": p.get("status"), "created_at": p.get("created_at"),
                 "skills": [s["name"] for s in store.list_skills(uid)]}
 

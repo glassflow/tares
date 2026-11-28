@@ -115,7 +115,7 @@ def ticket_view():
     check must pass over such an id and still leave out what a session the caller cannot read ran."""
     print("== the ticket view with a NUL in a recorded command's session id ==")
     s = open_store()
-    s.create_project("uc_open", "software_factory", "Open", {})
+    s.create_project("uc_open", "Open")
     s.link_session("uc_open", "mine")
     s.link_session("uc_hidden", "closed")        # a project the caller cannot see
     tid = s.create_ticket("uc_open", "tares", "a ticket")

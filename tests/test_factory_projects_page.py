@@ -180,7 +180,7 @@ async def main():
             before = dict(calls)
             for i in range(20):
                 uid = f"uc_more{i:02d}"
-                store.create_project(uid, "custom", f"more-{i:02d}", {}, goal="Another")
+                store.create_project(uid, f"more-{i:02d}", goal="Another")
                 store.set_project_kind(uid, "software_factory")
                 tickets(uid, 3)
             r = await counted_get()

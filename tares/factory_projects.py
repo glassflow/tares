@@ -2,12 +2,11 @@
 
 A project is what a team works on: a name, a goal, an icon, a status, a lead and its members. What it
 is made of lives beside it in the session store: its docs, skills, tickets, milestones and sessions.
-There are no templates: a project's `template` (the stored `recipe` column) is `custom` for every
-project made here and `default` for the cell's default project, and an old project keeps whatever it
-was made from as data only. The routes accept a `template` field and ignore it.
+There are no templates. The routes accept a `template` field and ignore it.
 
-The default project (store.default_project_id) is made the first time something has no other project
-to sit in, so a cell where everything starts in a project has none. It takes a goal and an icon but
+The default project (store.default_project_id, named by the setting `default_project`) is made the
+first time something has no other project to sit in, so a cell where everything starts in a project
+has none. It takes a goal and an icon but
 no new name, and cannot be deleted.
 """
 from __future__ import annotations
@@ -15,8 +14,6 @@ from __future__ import annotations
 import uuid
 
 GOAL_MAX = 200
-CUSTOM = "custom"
-DEFAULT = "default"
 
 
 class ProjectError(ValueError):
@@ -80,8 +77,7 @@ class Projects:
         """A project as the API returns it: its row, who leads it and who is on it, whether it is
         the default project, and `objects`, the skills it uses (each {kind, key, name, ...})."""
         uid = row["id"]
-        objects = [{**o, "missing": False} for o in self.store.list_project_objects(uid)
-                   if o["kind"] == "skill"]
+        objects = [{**o, "missing": False} for o in self.store.list_project_skills(uid)]
         lead, members = self._who(row)
         return {**row, "objects": objects, "lead": lead, "members": members,
                 "default": uid == default}
@@ -115,7 +111,7 @@ class Projects:
         if self.store.get_project_by_name(name) is not None:
             raise ProjectError(f"a project named {name!r} already exists")
         uid = "uc_" + uuid.uuid4().hex[:10]
-        self.store.create_project(uid, CUSTOM, name, {}, status="active", goal=goal, icon=icon,
+        self.store.create_project(uid, name, status="active", goal=goal, icon=icon,
                                   lead_person_id=lead_person_id)
         if kind:
             self.store.set_project_kind(uid, kind)
@@ -132,7 +128,7 @@ class Projects:
         row = self._require(uid)
         name = (name or "").strip() or None
         if name and name != row["name"]:
-            if self._is_default(row):
+            if uid == self.default_id():
                 raise ProjectError("the default project keeps its name")
             other = self.store.get_project_by_name(name)
             if other is not None and other["id"] != uid:
@@ -161,24 +157,20 @@ class Projects:
 
     def resume(self, uid: str) -> dict:
         self._require(uid)
-        self.store.update_project(uid, status="active", last_error=None)
+        self.store.update_project(uid, status="active")
         self.store.log_project(uid, "resumed", "")
         return self.get(uid)
 
     def delete(self, uid: str) -> dict:
         """Remove the project and everything that is only its (store.delete_project). The default
         project cannot be deleted."""
-        row = self._require(uid)
-        if self._is_default(row) or uid == self.default_id():
+        self._require(uid)
+        if uid == self.default_id():
             raise ProjectError("the default project cannot be deleted")
         self.store.delete_project(uid)
         return {"ok": True}
 
     # ── internals ──
-    @staticmethod
-    def _is_default(row: dict) -> bool:
-        return row.get("template") == DEFAULT
-
     def _require(self, uid: str) -> dict:
         row = self.store.get_project(uid)
         if row is None:

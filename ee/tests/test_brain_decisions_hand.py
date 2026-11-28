@@ -426,9 +426,9 @@ async def main():
 
         print("== the list: every place, filters, counts ==")
         reset()
-        store.create_project("pa", "factory", "Alpha", {})
-        store.create_project("pb", "factory", "Beta", {})
-        store.create_project("sec", "factory", "Secret", {})
+        store.create_project("pa", "Alpha")
+        store.create_project("pb", "Beta")
+        store.create_project("sec", "Secret")
         store.set_project_scope("sec", "private")
         D = lambda by, at, **kw: {"decided_by": [by], "decided_at": at, **kw}
         await put("acme_web", "docs/adr/1.md", "Repo one", D("Ann", "2026-03-10", where="repo_folder", repo="acme/web", changed_by=["Bo"], changed_at="2026-03-12"), uri="https://github.com/acme/web/blob/main/docs/adr/1.md")
@@ -529,7 +529,7 @@ async def main():
         r = await listing(project="pa")
         ck("project= keeps only factory_project rows, not another place's row naming it", [d["title"] for d in r.json()["decisions"]] == ["Alpha spec"], r.text[:300])
         await put("misc", "stray-2", "Names a new project, by hand", D("Dee", "2026-04-06", where="by_hand", project="pb2"))
-        store.create_project("pb2", "factory", "Beta two", {})
+        store.create_project("pb2", "Beta two")
         f = (await listing()).json()["filters"]
         ck("filters.projects has only projects with a factory project row", "pb2" not in [p["id"] for p in f["projects"]], str(f))
         async with lore.client() as c:   # the strays go, so the paging checks below see the same rows as before
@@ -648,7 +648,7 @@ async def auth_off():
                                                 "metadata": {"where": "repo_folder", "decided_by": ["A"], "decided_at": "2026-01-01"}}])
             await c.put_documents("factory_projects", [{"external_id": "project:pa:doc:s1", "title": "p", "text": "t", "kind": "decision", "uri": None,
                                                         "metadata": {"where": "factory_project", "decided_by": ["A"], "decided_at": "2026-01-01", "project": "pa"}}])
-        app.state.store.create_project("pa", "factory", "Alpha", {})
+        app.state.store.create_project("pa", "Alpha")
         r = await cx.get("/api/brain/decisions")
         ck("... and false on every other row, whoever is asking", {d["id"]: d["can_delete"] for d in r.json()["decisions"] if d["id"].startswith(("repo-", "project:"))} == {"repo-1": False, "project:pa:doc:s1": False}, r.text[:300])
         await cx.aclose()

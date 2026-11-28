@@ -105,7 +105,7 @@ async def main():
 
     def project(name):
         uid = f"uc_{name.replace('-', '')}"
-        store.create_project(uid, "custom", name, {}, goal="A goal")
+        store.create_project(uid, name, goal="A goal")
         store.set_project_kind(uid, "software_factory")
         return uid
 
@@ -205,7 +205,7 @@ async def main():
 
     print("== who may read it ==")
     ck("not a project: 404", (await cx.get("/api/factory/projects/uc_nothing/github")).status_code == 404)
-    store.create_project("uc_plain", "custom", "plain", {}, goal="x")
+    store.create_project("uc_plain", "plain", goal="x")
     ck("not a factory project: 404", (await cx.get("/api/factory/projects/uc_plain/github")).status_code == 404)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as anon:
         ck("no token: refused", (await anon.get(f"/api/factory/projects/{g}/github")).status_code in (401, 403))

@@ -27,14 +27,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from alembic import command  # noqa: E402
-from sqlalchemy import inspect, select, text  # noqa: E402
+from sqlalchemy import select, text  # noqa: E402
 
 from tares import metrics, session_archive, session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_archive import ArchiveError, FileBackend, S3Backend, backend_for  # noqa: E402
-from tares.session_store import SessionStore  # noqa: E402
-from tares.session_store.tables import (metadata, session_archive_parts,  # noqa: E402
+from tares.session_store.tables import (session_archive_parts,  # noqa: E402
                                         session_lines, sessions)
 from tares.store import Store  # noqa: E402
 
@@ -42,7 +40,6 @@ PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 1, 8, 0, 0, tzinfo=timezone.utc)
 NOW = T0 + timedelta(days=30)               # a month on: every session of the test is over a week old
-HEAD = "0027_drop_move_bookkeeping"
 SRC = "claude_code"
 _N = [0]
 os.environ.pop("TARES_ARCHIVE_URL", None)
@@ -152,72 +149,6 @@ class Flaky(session_archive.Backend):
 def on_pg(s):
     """Whether this Store keeps its session state in Postgres (CI sets TARES_TEST_PG for every suite)."""
     return s.sessions_db.dialect == "postgresql"
-
-
-def revision():
-    print("== revision 0007_session_archive ==")
-    d = tempfile.mkdtemp()
-    schema = dsn = None
-    if PG:
-        import psycopg
-        schema = "sa_" + uuid.uuid4().hex[:12]
-        dsn = f"{PG}?options=-csearch_path%3D{schema}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {schema}")
-
-    def step_down(sdb, to):
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, to)
-
-    def version(sdb):
-        with sdb.begin() as c:
-            return [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
-
-    try:
-        sdb = SessionStore(d, dsn)
-        sdb.upgrade()
-        insp = inspect(sdb.engine)
-        ck("the table exists", "session_archive_parts" in insp.get_table_names())
-        ck("its columns", sorted(c["name"] for c in insp.get_columns("session_archive_parts")) == sorted(
-            ["session", "part", "first_seq", "last_seq", "lines", "bytes", "md5", "key", "written_at"]))
-        ck("its key is (session, part)", insp.get_pk_constraint("session_archive_parts")[
-            "constrained_columns"] == ["session", "part"])
-        ck("the store is at the head", version(sdb) == [HEAD], version(sdb))
-        with sdb.begin() as c:
-            c.execute(text("INSERT INTO sessions (session, lines_complete) VALUES ('x', true), "
-                           "('y', true)"))
-            c.execute(text("INSERT INTO session_archive_parts (session, part) VALUES ('x', 1)"))
-        step_down(sdb, "0006_session_lines")
-        names = inspect(sdb.engine).get_table_names()
-        with sdb.begin() as c:
-            fx = c.execute(text("SELECT lines_complete FROM sessions WHERE session = 'x'")).scalar()
-            fy = c.execute(text("SELECT lines_complete FROM sessions WHERE session = 'y'")).scalar()
-        ck("a downgrade removes the table and keeps the sessions and the line table",
-           "session_archive_parts" not in names and "sessions" in names and "session_lines" in names, names)
-        ck("and a session that had a part is no longer trusted as whole", not fx and fy, (fx, fy))
-        sdb.upgrade()
-        ck("an upgrade after it builds the table again", "session_archive_parts" in inspect(
-            sdb.engine).get_table_names() and version(sdb) == [HEAD])
-        sdb.upgrade()
-        ck("an upgrade at the head again changes nothing", version(sdb) == [HEAD])
-        # the stamped case: the table was made by hand while the version is behind
-        step_down(sdb, "0006_session_lines")
-        with sdb.begin() as c:
-            metadata.tables["session_archive_parts"].create(c)
-            c.execute(text("INSERT INTO session_archive_parts (session, part, key) VALUES ('kept', 1, 'k')"))
-        sdb.upgrade()
-        with sdb.begin() as c:
-            kept = c.execute(text("SELECT key FROM session_archive_parts WHERE session = 'kept'")).scalar()
-        ck("an upgrade over a table that already exists stamps the revision and keeps the rows",
-           version(sdb) == [HEAD] and kept == "k", (version(sdb), kept))
-        sdb.close()
-    finally:
-        if PG:
-            import psycopg
-            with psycopg.connect(PG, autocommit=True) as c:
-                c.execute(f"DROP SCHEMA {schema} CASCADE")
 
 
 def file_archive():
@@ -690,7 +621,6 @@ def pg_lock():
 
 
 if __name__ == "__main__":
-    revision()
     file_archive()
     late_lines()
     failures()

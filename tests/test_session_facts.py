@@ -20,17 +20,14 @@ import os
 import re
 import sys
 import tempfile
-import uuid
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from alembic import command  # noqa: E402
-from sqlalchemy import func, inspect, select, text  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
 
 from tares import session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
-from tares.session_store import SessionStore  # noqa: E402
-from tares.session_store.tables import (metadata, session_commands,  # noqa: E402
+from tares.session_store.tables import (session_commands,  # noqa: E402
                                         session_messages, sessions)
 from tares.store import Store  # noqa: E402
 
@@ -216,68 +213,6 @@ def strip_session(rows):
     return [{k: v for k, v in r.items() if k not in ("session", "from")} for r in rows]
 
 
-def revision():
-    print("== revision 0004_session_facts ==")
-    d = tempfile.mkdtemp()
-    schema = dsn = None
-    if PG:
-        import psycopg
-        schema = "sf_" + uuid.uuid4().hex[:12]
-        dsn = f"{PG}?options=-csearch_path%3D{schema}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {schema}")
-    try:
-        sdb = SessionStore(d, dsn)
-        sdb.upgrade()
-        insp = inspect(sdb.engine)
-        ck("both tables exist", {"session_messages", "session_commands"} <= set(insp.get_table_names()))
-        ck("session_messages columns", sorted(c["name"] for c in insp.get_columns("session_messages")) == sorted(
-            ["tool_use_id", "source", "session", "at", "to_station", "type", "text"]))
-        ck("session_commands columns", sorted(c["name"] for c in insp.get_columns("session_commands")) == sorted(
-            ["tool_use_id", "source", "session", "at", "command", "exit_code", "output_tail", "result_at",
-             "cwd", "outcome"]))
-        ck("each is keyed by its tool_use id",
-           insp.get_pk_constraint("session_messages")["constrained_columns"] == ["tool_use_id"]
-           and insp.get_pk_constraint("session_commands")["constrained_columns"] == ["tool_use_id"])
-        ck("each has an index on (session, at)", all(
-            any(i["column_names"] == ["session", "at"] for i in insp.get_indexes(t))
-            for t in ("session_messages", "session_commands")))
-        with sdb.begin() as c:
-            c.execute(text("INSERT INTO session_commands (tool_use_id, command) VALUES ('k', 'x')"))
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, "0003_sessions")
-        names = inspect(sdb.engine).get_table_names()
-        ck("a downgrade removes both tables and keeps sessions",
-           "session_messages" not in names and "session_commands" not in names and "sessions" in names, names)
-        sdb.upgrade()
-        ck("an upgrade after it builds them again", {"session_messages", "session_commands"}
-           <= set(inspect(sdb.engine).get_table_names()))
-        # the stamped case: tables made by hand while the version is behind
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, "0003_sessions")
-        with sdb.begin() as c:
-            metadata.tables["session_messages"].create(c)
-            metadata.tables["session_commands"].create(c)
-            c.execute(text("INSERT INTO session_commands (tool_use_id, command) VALUES ('kept', 'x')"))
-        sdb.upgrade()
-        with sdb.begin() as c:
-            v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
-            kept = c.execute(select(session_commands.c.command).where(
-                session_commands.c.tool_use_id == "kept")).scalar()
-        ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0027_drop_move_bookkeeping"] and kept == "x", (v, kept))
-        sdb.close()
-    finally:
-        if PG:
-            import psycopg
-            with psycopg.connect(PG, autocommit=True) as c:
-                c.execute(f"DROP SCHEMA {schema} CASCADE")
-
-
 def codex():
     """A Codex station's lines (TR-1595): what `tares.session_codex` makes of the recorder's facts, stored
     like any session line. A command's row is made at its start and takes its end from the item."""
@@ -339,7 +274,6 @@ def codex():
 
 
 def main():
-    revision()
     codex()
     print("== the readers return what the old readers did ==")
     d = tempfile.mkdtemp()

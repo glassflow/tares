@@ -59,7 +59,7 @@ async def main():
             keys[who] = {"Authorization": f"Bearer {r.json()['secret']}"}
             pids[who] = r.json()["person"]["id"]
         store = app.state.store
-        store.create_project("prj-x", "software_factory", "Project X", {}, goal="Build X")
+        store.create_project("prj-x", "Project X", goal="Build X")
 
         async def seen(who):
             """What the three screens show, for this person, right now."""
@@ -127,7 +127,7 @@ async def main():
         print("== the Tickets filter orders its projects by what waits on the person ==")
         # a project whose tickets are all out of the builders' hands but for a passed PR waits on
         # its owner; a busier project is newer. For someone it does not wait on, the newer leads.
-        store.create_project("prj-y", "software_factory", "Project Y", {}, goal="Build Y")
+        store.create_project("prj-y", "Project Y", goal="Build Y")
         store.set_project_kind("prj-y", "software_factory")
         store.update_project("prj-y", status="active")
         # prj-x keeps its passed PR in review (a done ticket would leave review, TR-1008)

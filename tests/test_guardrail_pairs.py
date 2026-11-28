@@ -210,8 +210,8 @@ async def main():
     async with app.router.lifespan_context(app):
         ann = store.create_person("Ann", email="ann@example.com")
         ben = store.create_person("Ben", email="ben@example.com")
-        store.create_project("p1", "custom", "alpha", {}, lead_person_id=ann["id"])
-        store.create_project("p2", "custom", "beta", {}, lead_person_id=ben["id"])
+        store.create_project("p1", "alpha", lead_person_id=ann["id"])
+        store.create_project("p2", "beta", lead_person_id=ben["id"])
         shop = json.loads(await m.create_project("Shop", "Sell things"))["id"]
         blog = json.loads(await m.create_project("Blog", "Write things"))["id"]
         await mf.write_milestone("Store", "", [], project="Shop")
@@ -762,7 +762,7 @@ async def main():
 
             print("== deleting a project, /health ==")
             clear()
-            store.create_project("p3", "custom", "gamma", {}, lead_person_id=ann["id"])
+            store.create_project("p3", "gamma", lead_person_id=ann["id"])
             store.save_guardrail_pair("project", "p3", "pre_merge", "gr_a", "block")
             store.save_guardrail_pair("project", "p1", "pre_merge", "gr_a", "block")
             store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", "block")

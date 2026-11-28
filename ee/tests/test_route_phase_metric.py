@@ -91,7 +91,7 @@ async def main():
                            headers={"Authorization": f"Bearer {TOKEN}"}, timeout=60)
 
     uid = "uc_routephase"
-    store.create_project(uid, "custom", "route-phase", {}, goal="A goal")
+    store.create_project(uid, "route-phase", goal="A goal")
     store.set_project_kind(uid, "software_factory")
     m1 = store.create_milestone(uid, "M1: first", "Done.", [{"check": "open it", "expect": "it loads"}])
     tid = store.create_ticket(uid, "tares", "The ticket", milestone=m1, repo=REPO)

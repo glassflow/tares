@@ -13,17 +13,14 @@ import subprocess
 import sys
 import tempfile
 import threading
-import uuid
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from alembic import command  # noqa: E402
-from sqlalchemy import inspect, select, text  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 from tares import factory, metrics, session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
-from tares.session_store import SessionStore  # noqa: E402
-from tares.session_store.tables import metadata, sessions  # noqa: E402
+from tares.session_store.tables import sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
@@ -264,64 +261,9 @@ def failure_is_refused():
     s.close()
 
 
-def revision():
-    print("== revision 0003_sessions ==")
-    d = tempfile.mkdtemp()
-    schema = None
-    dsn = None
-    if PG:
-        import psycopg
-        schema = "ss_" + uuid.uuid4().hex[:12]
-        dsn = f"{PG}?options=-csearch_path%3D{schema}"
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"CREATE SCHEMA {schema}")
-    try:
-        sdb = SessionStore(d, dsn)
-        sdb.upgrade()
-        names = inspect(sdb.engine).get_table_names()
-        ck("sessions exists, and session_ingest_marks went with 0027", "sessions" in names
-           and "session_ingest_marks" not in names, names)
-        cols = {c["name"]: c for c in inspect(sdb.engine).get_columns("sessions")}
-        ck("sessions has its ten columns", sorted(cols) == sorted(
-            ["session", "source", "started_at", "last_line_at", "line_count", "tool_calls",
-             "coordination_calls", "lines_complete", "updated_at", "lines_origin"]), sorted(cols))
-        ck("its counters are not null", all(not cols[c]["nullable"] for c in
-                                            ("line_count", "tool_calls", "coordination_calls", "lines_complete")))
-        ck("last_line_at has an index", any(i["column_names"] == ["last_line_at"]
-                                            for i in inspect(sdb.engine).get_indexes("sessions")))
-        with sdb.begin() as c:
-            c.execute(text("INSERT INTO sessions (session) VALUES ('x')"))
-            r = c.execute(select(sessions)).one()
-        ck("a row made with only its key gets zero counters and lines_complete false",
-           (r.line_count, r.tool_calls, r.coordination_calls, r.lines_complete) == (0, 0, 0, False), tuple(r))
-        with sdb.begin() as c:
-            cfg = sdb._config()
-            cfg.attributes["connection"] = c
-            command.downgrade(cfg, "0002_session_tables")
-        names = inspect(sdb.engine).get_table_names()
-        ck("a downgrade removes both tables", "sessions" not in names and "session_ingest_marks" not in names, names)
-        ck("and keeps the older ones", "session_stations" in names, names)
-        # the stamped case: the tables are already there (made by hand) while the version is behind
-        with sdb.begin() as c:
-            metadata.tables["sessions"].create(c)
-            c.execute(text("INSERT INTO sessions (session, line_count) VALUES ('kept', 3)"))
-        sdb.upgrade()
-        with sdb.begin() as c:
-            v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
-            kept = c.execute(select(sessions.c.line_count).where(sessions.c.session == "kept")).scalar()
-        ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0027_drop_move_bookkeeping"] and kept == 3, (v, kept))
-        sdb.close()
-    finally:
-        if PG:
-            import psycopg
-            with psycopg.connect(PG, autocommit=True) as c:
-                c.execute(f"DROP SCHEMA {schema} CASCADE")
-
-
 def main():
     for fn in (through_append, parity, catalog_source, start_output, coordination_text, concurrent,
-               failure_is_refused, revision):
+               failure_is_refused):
         fn()
     if FAILS:
         print("FAIL", ", ".join(FAILS))

@@ -42,7 +42,9 @@ SEED = 1124
 # Row counts of a real factory cell, 2026-11-24. Tables that held no rows are in "zero" and are not
 # seeded (the store makes the 2 metadata tables itself). The tables of the source catalog, the query
 # log, Ask, triggers and agents are left out: Tares 2.0 makes none of them (TR-1810, TR-1811), and the
-# usecase_objects rows that named a source, a trigger or an agent with them.
+# rows of the project parts table that named a source, a trigger or an agent with them. The tables
+# go by their 2.0 names (TR-1816): `projects`, `project_log`, and `project_docs` for the doc rows of
+# the project parts table.
 SHAPE = {
     "date": "2026-11-24",
     "tables": {
@@ -60,19 +62,19 @@ SHAPE = {
         "session_states": 2123, "session_stations": 2091, "session_turns": 27918,
         "session_usage": 219361, "sessions": 2145, "settings": 30,
         "spec_questions": 3, "ticket_checks": 4052, "ticket_history": 3387, "ticket_numbers": 29,
-        "tickets": 858, "usecase_log": 65, "usecase_objects": 969, "usecases": 33, "waiting_told": 23,
+        "tickets": 858, "project_log": 65, "project_docs": 969, "projects": 33, "waiting_told": 23,
     },
     "zero": [
         "brain_repo_folders", "finding_feedback", "guardrail_pairs", "guardrail_rules",
         "handover_overrides", "incident_log", "incident_notes", "incidents",
         "milestone_acceptances", "pending_memory", "pending_writeback", "project_integrations",
         "project_merge_method", "project_secrets", "services",
-        "session_archive_parts", "shared_skills", "signoffs", "skills",
+        "session_archive_parts", "shared_skills", "signoffs",
         "watch_state",
     ],
     # how the rows are cut, so the pages find the same mix of work as the real cell's
     "mix": {
-        "usecase_status": {"done": 19, "active": 12, "later": 2},     # 31 factory, 1 challenger, 1 default
+        "project_status": {"done": 19, "active": 12, "later": 2},     # 31 factory, 1 challenger, 1 default
         "projects_with_tickets": 29, "projects_with_desk": 21, "projects_with_reviews": 19,
         "tickets": {"owner_linear": 794, "with_pr": 555, "with_depends_on": 554,
                     "with_assignee": 470, "with_working_doc": 717, "repos": 13},
@@ -92,7 +94,6 @@ SHAPE = {
                       "spec": 25, "memory": 16, "grants": 12, "personal_agents": 2,
                       "personal_memory": 1},
         "doc_links_beyond_first": 73,
-        "usecase_objects": {"doc": 969},
         "api_keys_with_person": 25,
         "stations": 120,
         "station_roles": {"builder": 547, "reviewer": 711, "releaser": 561, "orchestrator": 272},
@@ -359,25 +360,26 @@ class _Gen:
                          self.people[i % len(self.people)] if with_person else None])
         self.put_t("api_keys", "id, name, prefix, hash, scopes, created_at, last_used_at, revoked_at, "
                                "project, person_id", rows)
-        # settings: harmless keys of their own
-        rows = [[f"seed.note_{i:02d}", str(i), NOW - timedelta(days=i)] for i in range(self.need("settings"))]
+        # settings: harmless keys of their own, and one left for `default_project` (projects_group)
+        rows = [[f"seed.note_{i:02d}", str(i), NOW - timedelta(days=i)]
+                for i in range(self.need("settings") - 1)]
         self.put_s(session_table("settings"), [dict(zip(("key", "value", "updated_at"), r)) for r in rows])
 
     # ── projects: one through the Store API, the rest as rows ─────────────────────────────────
     def projects_group(self):
         rng, st = self.rng, self.store
-        total = self.shape["tables"]["usecases"]
+        total = self.shape["tables"]["projects"]
         status = []
-        for s, n in self.mix["usecase_status"].items():
+        for s, n in self.mix["project_status"].items():
             status += [s] * n
         # 29 factory projects with tickets (19 done, 10 active), 2 later without, then the 2 others
         tp = self.mix["projects_with_tickets"]
-        done_n = self.mix["usecase_status"]["done"]
+        done_n = self.mix["project_status"]["done"]
         order = ["done"] * done_n + ["active"] * (tp - done_n)
         rng.shuffle(order)
         order.remove("active")
         order.insert(0, "active")                                  # project 0 is the one the API makes
-        order += ["later"] * self.mix["usecase_status"]["later"]
+        order += ["later"] * self.mix["project_status"]["later"]
         order += ["active"] * (total - len(order) - 1) + ["active"]
         weights = [1 / (i + 1) ** 0.9 for i in range(tp)]
         for i in range(total):
@@ -396,26 +398,25 @@ class _Gen:
                 "crew": i % len(self.crews)})
         # project 0 through the Store API (its tickets, review and desk item follow below)
         p0 = self.projects[0]
-        st.create_project(p0["uid"], "custom", p0["name"], {}, goal=f"Make {p0['name']} fast and clear.")
+        st.create_project(p0["uid"], p0["name"], goal=f"Make {p0['name']} fast and clear.")
         st.set_project_kind(p0["uid"], "software_factory")
         rows = []
         for p in self.projects[1:]:
-            rows.append([p["uid"], "custom" if p["kind"] != "challenger_workflow" else "challenger_workflow",
-                         p["name"], {}, p["status"], p["created"], p["updated"], None,
-                         f"Make {p['name']} fast and clear.", None, None, None, p["kind"],
+            rows.append([p["uid"], p["name"], p["status"], p["created"], p["updated"],
+                         f"Make {p['name']} fast and clear.", None, None, p["kind"],
                          p["lead"], "team", ["\U0001f9ed", "\U0001f9e0", "\U0001f3ce️", "\U0001f41e"][p["i"] % 4] if p["i"] in (31, 32, 30, 29) else None])
-        self.projects[32]["recipe_default"] = True
-        self.put_t("usecases", "id, recipe, name, params, status, created_at, updated_at, last_error, goal, "
-                               "setup, linear, github_issues, kind, lead_person_id, scope, icon", rows)
+        self.put_t("projects", "id, name, status, created_at, updated_at, goal, linear, github_issues, kind, "
+                               "lead_person_id, scope, icon", rows)
         # the anchor's own row keeps the dates the others have
         from sqlalchemy import update
-        from tares.session_store.tables import usecases as projects_t
+        from tares.session_store.tables import projects as projects_t
         with st.sessions_db.begin() as c:
             c.execute(update(projects_t).where(projects_t.c.id == p0["uid"]).values(
                 created_at=p0["created"], updated_at=p0["updated"], lead_person_id=p0["lead"]))
             # the project with no kind: the default one
             c.execute(update(projects_t).where(projects_t.c.id == self.projects[total - 1]["uid"]).values(
-                recipe="default", kind=None))
+                kind=None))
+        st.set_setting("default_project", self.projects[total - 1]["uid"])
 
     # ── tickets ────────────────────────────────────────────────────────────────────────────────
     def tickets_group(self):
@@ -831,37 +832,37 @@ class _Gen:
             raise RuntimeError(f"{len(rows)} docs planned, SHAPE has {self.shape['tables']['docs']}")
         self.put_t("docs", "id, kind, title, body, made_by, updated_by, created_at, updated_at, owner", rows)
         # links: each doc in its project, then the extras in a second one
-        want = self.shape["tables"]["usecase_objects"]
-        orows = [[uid, "doc", f"doc:{did}", did, False, at] for uid, did, at in links]
+        want = self.shape["tables"]["project_docs"]
+        orows = [[uid, did, at] for uid, did, at in links]
         extra = mix["doc_links_beyond_first"]
         for k in range(extra):
             uid, did, at = links[(k * 11) % len(links)]
             other = projects[(next(i for i, p in enumerate(projects) if p["uid"] == uid) + 1 + k) % len(projects)]
-            orows.append([other["uid"], "doc", f"doc:{did}", did, False, at])
+            orows.append([other["uid"], did, at])
         seen, uniq = set(), []
         for r in orows:
-            if (r[0], r[1], r[2]) not in seen:
-                seen.add((r[0], r[1], r[2]))
+            if (r[0], r[1]) not in seen:
+                seen.add((r[0], r[1]))
                 uniq.append(r)
         # fill what duplicates removed with links to one more project
         k = 0
         while len(uniq) < want:
             uid, did, at = links[(k * 7 + 3) % len(links)]
             other = projects[(k * 3 + 2) % len(projects)]
-            key = (other["uid"], "doc", f"doc:{did}")
+            key = (other["uid"], did)
             k += 1
             if key not in seen and other["uid"] != uid:
                 seen.add(key)
-                uniq.append([other["uid"], "doc", f"doc:{did}", did, False, at])
-        self.put_t("usecase_objects", "usecase_id, kind, key, name, customized, created_at", uniq[:want])
+                uniq.append([other["uid"], did, at])
+        self.put_t("project_docs", "project, doc, created_at", uniq[:want])
         # the project log: two rows each, and one automatic
-        n = self.need("usecase_log")
+        n = self.need("project_log")
         rows = []
         for k, p in enumerate(self.projects):
             rows.append([p["uid"], p["created"], "create", None])
             rows.append([p["uid"], p["created"] + timedelta(seconds=1), "created", None])
         rows.append([self.projects[0]["uid"], NOW - timedelta(days=2), "auto", None])
-        self.put_t("usecase_log", "usecase_id, logged_at, action, detail", rows[:n])
+        self.put_t("project_log", "project, logged_at, action, detail", rows[:n])
         # hand-overs, grants, members, checks, wiring
         n = self.need("handovers")
         rows = []

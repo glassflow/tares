@@ -71,7 +71,7 @@ async def main():
             keys[who] = {"Authorization": f"Bearer {r['secret']}"}
             pids[who] = r["person"]["id"]
         store = app.state.store
-        store.create_project("prj-q", "software_factory", "Project Quiet", {}, goal="Build it")
+        store.create_project("prj-q", "Project Quiet", goal="Build it")
         store.set_project_kind("prj-q", "software_factory")
         store.set_project_lead("prj-q", pids["alex"])
         store.set_project_scope("prj-q", "private")

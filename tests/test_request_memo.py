@@ -77,8 +77,8 @@ def elsewhere(fn):
 def on_the_store():
     store = Store(os.path.join(_TMP, "store"))
     seen = watch(store)
-    store.create_project("uc_a", "custom", "First", {"repos": ["acme/shop"]}, goal="one")
-    store.create_ticket("uc_a", "tares", "A ticket")
+    store.create_project("uc_a", "First", goal="one")
+    store.create_ticket("uc_a", "tares", "A ticket", depends_on=["dep"])
     store.set_setting("k", "v1")
     read = lambda: store.get_setting("k")
 
@@ -113,17 +113,18 @@ def on_the_store():
     with request_memo.scope():
         first = store.list_projects()
         first[0]["name"] = "changed"
-        first[0]["params"]["repos"].append("x/y")
         first.append({"id": "extra"})
+        deep = store.tickets_by_project(["uc_a"])
+        deep["uc_a"][0]["depends_on"].append("x/y")
         second = store.list_projects()
         ck("changing the first answer changes no later one",
            [p.get("name") for p in second] == ["First"]
-           and second[0]["params"]["repos"] == ["acme/shop"],
+           and store.tickets_by_project(["uc_a"])["uc_a"][0]["depends_on"] == ["dep"],
            second)
-        second[0]["params"]["repos"].clear()
-        third, n = selects(seen, store.list_projects)
+        store.tickets_by_project(["uc_a"])["uc_a"][0]["depends_on"].clear()
+        third, n = selects(seen, lambda: store.tickets_by_project(["uc_a"]))
         ck("nor does changing a kept answer",
-           n == 0 and third[0]["params"]["repos"] == ["acme/shop"], (n, third))
+           n == 0 and third["uc_a"][0]["depends_on"] == ["dep"], (n, third))
         tickets = store.tickets_by_project(["uc_a"])
         tickets["uc_a"] = []                         # what the Projects route does to its answer
         ck("a replaced list stays the caller's own", len(store.tickets_by_project(["uc_a"])["uc_a"]) == 1)
@@ -143,7 +144,7 @@ def on_the_store():
         ck("a write made on the session store directly ends it too", read() == "v3", read())
     with request_memo.scope():
         store.list_projects()
-        store.create_project("uc_b", "custom", "Second", {}, goal="two")
+        store.create_project("uc_b", "Second", goal="two")
         ck("a new row is read after it is written", len(store.list_projects()) == 2)
 
     # two page reads share nothing
@@ -188,7 +189,7 @@ def on_the_store():
 
     # the integration reads (TR-1617)
     store.set_choice("memory", "tares", {}, "root")
-    store.create_project("uc_c", "custom", "Third", {}, goal="three")
+    store.create_project("uc_c", "Third", goal="three")
     store.set_project_choice("uc_c", "ci", "local", {}, "root")
     with request_memo.scope():
         for label, fn in (("get_choice", lambda: store.get_choice("memory")),
@@ -238,14 +239,14 @@ async def on_the_daemon():
                 r = await cx.get(path)
                 return r, seen[start:]
 
-            store.create_project("uc_one", "custom", "One", {}, goal="one")
+            store.create_project("uc_one", "One", goal="one")
             store.set_project_kind("uc_one", "software_factory")
             for path in PAGES:
                 r, ran = await get(path)
                 ck(f"{path} answers 200", r.status_code == 200, r.text[:200])
                 ck(f"{path} reads inside a memo", True in had, had)
                 again = collections.Counter((sql, params) for sql, params in ran
-                                            if "FROM usecases" in sql or "FROM people" in sql)
+                                            if "FROM projects" in sql or "FROM people" in sql)
                 ck(f"{path} asks nothing about projects or people twice",
                    again and max(again.values()) == 1, [k for k, v in again.items() if v > 1][:3])
             r, ran = await get("/api/projects/uc_one")
@@ -253,7 +254,7 @@ async def on_the_daemon():
                r.status_code == 200 and had == {False} and not ran, (r.status_code, had, len(ran)))
             r, _ = await get("/api/factory/setup/progress")
             first = r.json()["projects"]
-            store.create_project("uc_two", "custom", "Two", {}, goal="two")
+            store.create_project("uc_two", "Two", goal="two")
             store.set_project_kind("uc_two", "software_factory")
             r, _ = await get("/api/factory/setup/progress")
             ck("the next request reads the projects again",

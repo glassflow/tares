@@ -275,13 +275,13 @@ async def _project_id(cx, project: str = "") -> tuple[str | None, str | None]:
 
 @mcp.tool()
 async def list_projects() -> str:
-    """List the projects you can work in: id, name, template and status. With a project key it is
+    """List the projects you can work in: id, name and status. With a project key it is
     the one project the key belongs to."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/projects")
     if r.status_code >= 400:
         return r.text
-    return json.dumps([{k: p.get(k) for k in ("id", "name", "template", "status")}
+    return json.dumps([{k: p.get(k) for k in ("id", "name", "status")}
                        for p in r.json().get("projects") or [] if not p.get("hidden")], default=str)
 
 

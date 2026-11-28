@@ -46,8 +46,8 @@ def fails(coro, exc):
 
 tmp = tempfile.mkdtemp(prefix="tares-tickets-tares-")
 s = Store(os.path.join(tmp, "t"))
-s.create_project("p1", "blank", "One", {})
-s.create_project("p2", "blank", "Two", {})
+s.create_project("p1", "One")
+s.create_project("p2", "Two")
 b = TicketsTares(s)
 
 print("== installed ==")

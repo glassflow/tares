@@ -111,7 +111,7 @@ async def main():
     def project(name, autonomy="L4-ship"):
         """A factory project a crew has, with the Tares reviewer."""
         uid = "uc_" + name
-        store.create_project(uid, "custom", name, {}, goal="A project for the test")
+        store.create_project(uid, name, goal="A project for the test")
         store.set_project_kind(uid, "software_factory")
         store.set_handover(uid, [{"path": "/w/a", "name": name}], autonomy, None, now_utc(),
                            person_id=person["id"])

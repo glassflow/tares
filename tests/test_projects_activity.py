@@ -75,7 +75,7 @@ async def api():
         await mf.hand_over(project="Shop", repo="/w/shop")
         old = datetime.now(timezone.utc) - timedelta(days=9)
         with store.sessions_db.begin() as c:
-            c.execute(text("UPDATE usecases SET updated_at = :t WHERE id IN (:a, :b)"),
+            c.execute(text("UPDATE projects SET updated_at = :t WHERE id IN (:a, :b)"),
                       {"t": old, "a": shop, "b": blog})
         newest = old + timedelta(days=3)
         with store.sessions_db.begin() as c:
@@ -122,7 +122,7 @@ async def reread():
         store.update_ticket(tid, pr=pr)
         with store.sessions_db.begin() as c:
             c.execute(text("UPDATE tickets SET updated_at = :t WHERE id = :i"), {"t": old, "i": tid})
-            c.execute(text("UPDATE usecases SET updated_at = :t WHERE id = :i"), {"t": old, "i": uid})
+            c.execute(text("UPDATE projects SET updated_at = :t WHERE id = :i"), {"t": old, "i": uid})
         reads = []
 
         async def same(_store, repo, number, prev=None, **changes):

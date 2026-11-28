@@ -265,7 +265,7 @@ def world(link=None, seed=True):
     reset()
     s = newstore()
     s.upsert_github_credential("cred-a", "tok-a")
-    s.create_project("p1", "custom", "p", {"objects": []})
+    s.create_project("p1", "p")
     s.set_project_github("p1", link if link is not None else {
         "repo": REPO, "issue_label": LABEL, "url": f"https://github.com/{REPO}",
         "credential": "cred-a"})
