@@ -144,21 +144,21 @@ def old_store():
     from tares.session_store import VERSION_TABLE as VT
     from tares.store import Store, StoreUnavailable
     home = tempfile.mkdtemp()
-    sdb = SessionStore(home)
-    with sdb.engine.begin() as conn:       # a 1.61.0 cell: its version table at its head
-        conn.execute(text(f"CREATE TABLE {VT} (version_num VARCHAR(64) NOT NULL PRIMARY KEY)"))
-        conn.execute(text(f"INSERT INTO {VT} VALUES ('0024_merge_ledger')"))
-    sdb.close()
+    first = Store(home)                    # wherever this run keeps stores (SQLite, or the pg harness)
+    sdb = first.sessions_db
+    with sdb.engine.begin() as conn:       # now it reads as a 1.61.0 cell: its version at the 1.x head
+        conn.execute(text(f"UPDATE {VT} SET version_num = '0024_merge_ledger'"))
+    first.close()
     try:
-        Store(home)
+        Store(home).close()
         ck("the store does not open on it", False, "it opened")
     except StoreUnavailable as e:
         ck("the store does not open on it, and says to convert it first",
            "Tares 1.x" in e.reason and "migration script" in e.reason, e.reason)
-    sdb = SessionStore(home)
-    ck("and the database is left as it was", versions(sdb) == ["0024_merge_ledger"], versions(sdb))
-    sdb.close()
-
+    sdb = SessionStore(home) if sdb.dialect == "sqlite" else None
+    if sdb is not None:
+        ck("and the database is left as it was", versions(sdb) == ["0024_merge_ledger"], versions(sdb))
+        sdb.close()
 
 if __name__ == "__main__":
     one_revision()
