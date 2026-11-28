@@ -45,6 +45,18 @@ OLD_REVISIONS = frozenset((
     "0025_integration_keys_pr_events", "0026_drop_catalog_sources", "0027_drop_move_bookkeeping"))
 
 
+_READ_VERBS = ("select", "with", "show", "explain", "values", "table")
+
+
+def _refuse_write(conn, cursor, statement, parameters, context, executemany):
+    """A Postgres `read()` runs at AUTOCOMMIT (TR-1819), where a write would commit on its own and
+    nothing would roll it back: any statement that is not a read raises instead of running."""
+    if statement.lstrip().lstrip("(").split(None, 1)[0].lower() not in _READ_VERBS:
+        raise RuntimeError(f"a write inside SessionStore.read(): {statement.split(None, 1)[0]}; "
+                           "write in begin() instead")
+    return statement, parameters
+
+
 class OldStore(RuntimeError):
     """The database is a Tares 1.x one: the store refuses to start on it (the daemon serves its
     degraded page with this reason) instead of running against tables it does not have."""
@@ -75,10 +87,22 @@ class SessionStore:
         so it does not queue behind a writer and no writer queues behind it (WAL gives it the last
         committed state, the same one from its first query to its end). On Postgres it is a plain
         transaction like `begin()`, each statement seeing what had committed when it ran; a read
-        whose queries must agree uses `consistent_read()`."""
+        whose queries must agree uses `consistent_read()`. That is what each statement sees on its
+        own too, so on Postgres the read runs its statements without a BEGIN and a COMMIT around
+        them: two round trips fewer per read, which a page of many reads feels (TR-1819)."""
         with self._turns or contextlib.nullcontext():
             with self.engine.connect() as conn:
                 conn = conn.execution_options(deferred=True)
+                if self.dialect == "postgresql":
+                    # no transaction would undo a write here, so a write is refused before it runs
+                    conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+                    event.listen(conn, "before_cursor_execute", _refuse_write, retval=True)
+                    try:
+                        with conn.begin():
+                            yield conn
+                    finally:
+                        event.remove(conn, "before_cursor_execute", _refuse_write)
+                    return
                 with conn.begin():
                     yield conn
 

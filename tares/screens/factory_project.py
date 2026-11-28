@@ -35,6 +35,7 @@ from .. import factory_home as fh
 from .. import factory_waiting as fw
 from .. import licence
 from .. import project_secrets
+from .. import request_memo
 from .. import status_words
 from .. import team as team_mod
 from ..envelope import now_utc
@@ -128,16 +129,18 @@ def ticket_state(t: dict, blocked_by: list[str]) -> str:
 
 class Turns:
     """Whose turn each ticket is (factory.turn_of), for screens that list tickets of one or more
-    projects. Reads the project's autonomy once per project and the open merge queue once."""
+    projects. Reads the project's autonomy once per project and the open merge queue once. A
+    screen that has read the hand-overs of its projects (store.handovers_by_project) gives them as
+    `handovers`, so a list of many projects reads no hand-over again (TR-1819)."""
 
-    def __init__(self, store):
-        self.store, self._level = store, {}
+    def __init__(self, store, handovers: dict | None = None):
+        self.store, self._level, self._handovers, self._memo = store, {}, handovers, {}
         self._queue = {r["ticket"]: r for r in store.merge_queue_open() if r.get("ticket")}
 
     def level(self, uid: str) -> str:
         if uid not in self._level:
             from ..merge_queue import autonomy_of   # merge_queue imports the screens' modules
-            self._level[uid] = autonomy_of(self.store, uid)
+            self._level[uid] = autonomy_of(self.store, uid, self._handovers, self._memo)
         return self._level[uid]
 
     def of(self, uid: str, t: dict, blocked_by: list[str], last: dict | None,
@@ -299,19 +302,25 @@ def register(app, h: Deps):
         person who is neither the lead nor on the member list: `can_join` (a team project, and a
         key that writes) or `ask_lead` (a private one). All are false on a cell without an
         enterprise licence: the routes behind them answer 402 there, so the page shows no control."""
-        def ref(pid):
-            x = store.get_person(pid) if pid else None
-            return ({"id": x["id"], "name": x["name"] or x.get("email") or x["id"],
-                     "picture": x.get("picture")} if x else None)
         counts: dict[str, int] = {}
         for t in tickets:
             who = t.get("assignee_person_id")
             if who and t.get("status") != "canceled":
                 counts[who] = counts.get(who, 0) + 1
+        rows = store.list_project_members(p["id"])
+        # the lead, the members and the assignees in one read, not one read each (TR-1819)
+        known = store.people_by_ids([p.get("lead_person_id"), *counts,
+                                     *(m["person_id"] for m in rows)])
+
+        def card(x):
+            return ({"id": x["id"], "name": x["name"] or x.get("email") or x["id"],
+                     "picture": x.get("picture")} if x else None)
+
+        def ref(pid):
+            return card((known.get(pid) or store.get_person(pid)) if pid else None)
         lead = ref(p.get("lead_person_id"))
         if lead:
             lead["tickets"] = counts.get(lead["id"], 0)
-        rows = store.list_project_members(p["id"])
         added = [m["person_id"] for m in rows]
         # `local` is the one person of a cell with auth off and has the secrets however they joined
         joined = {m["person_id"] for m in rows if m["reason"] == "self" and m["person_id"] != "local"}
@@ -325,8 +334,8 @@ def register(app, h: Deps):
         admin = scopes is None or "admin" in scopes
         is_lead = bool(lead and me.get("id") == lead["id"])
         # the cell's first person before anyone signed in (no email, named "You") is nobody to pick
-        everyone = [r for r in (ref(x["id"]) for x in store.list_people()
-                                if not (x["id"] == "local" and not x.get("email"))) if r]
+        everyone = [card(x) for x in store.list_people()
+                    if not (x["id"] == "local" and not x.get("email"))]
         team = team_mod.enabled()   # the ee team loaded and the licence allows it; a key alone is not enough
         outside = bool(team and me.get("id") and not is_lead and me["id"] not in added)
         private = p.get("scope") == "private"
@@ -338,6 +347,7 @@ def register(app, h: Deps):
                 "you": me.get("id"), "people": everyone if (team and (admin or is_lead)) else []}
 
     @app.get("/api/factory/projects/{uid}")
+    @request_memo.page
     def factory_project(uid: str, request: Request):
         """The whole project page in one read (404 for a project that is not a software factory
         project, and for a draft, which opens at its setup on today's page)."""
@@ -352,7 +362,7 @@ def register(app, h: Deps):
         roles, station_rows = read_roles()
         rd = factory_mod.readiness(tickets)
         reviews = store.last_reviews([t["id"] for t in tickets])
-        turns = Turns(store)
+        turns = Turns(store, {uid: handover} if handover else {})
         number = {m["id"]: f"M{i + 1}" for i, m in enumerate(milestones)}
         refs = {t["id"]: factory_mod.label(t) for t in tickets}
 

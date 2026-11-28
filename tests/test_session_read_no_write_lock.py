@@ -4,7 +4,8 @@ On SQLite `begin()` and `snapshot()` start with BEGIN IMMEDIATE, so a long read 
 Each read here is held open half way, with its transaction still open, while lines are ingested
 through `Store.append`: the ingest finishes, and a read of several queries still answers from one
 state. Then every read function is called and the transactions it opened are looked at: SQLite's
-deferred BEGIN only; on Postgres the isolation it had before.
+deferred BEGIN only; on Postgres each statement sees what had committed when it ran (the default
+level, or AUTOCOMMIT, which a plain read runs at since TR-1819), never a snapshot.
 
 Plain:                python tests/test_session_read_no_write_lock.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -303,6 +304,10 @@ def opened(s, call):
     return seen
 
 
+# what a plain read on Postgres may run at: each statement sees what had committed when it ran
+COMMITTED = {"default", "AUTOCOMMIT"}
+
+
 def transactions(s):
     plain, agreeing = reads(s)
     sqlite = s.sessions_db.dialect == "sqlite"
@@ -324,7 +329,7 @@ def transactions(s):
         elif name in agreeing:
             ck(f"{name} reads at REPEATABLE READ", "REPEATABLE READ" in seen, seen)
         else:
-            ck(f"{name} reads at the default isolation", set(seen) == {"default"}, seen)
+            ck(f"{name} reads what had committed, not a snapshot", bool(seen) and set(seen) <= COMMITTED, seen)
 
 
 def first_reads(s):
@@ -348,7 +353,7 @@ def first_transactions(s):
         if sqlite:
             ck(f"{name} reads with no write lock", seen[:1] == ["BEGIN"], seen)
         else:
-            ck(f"{name} reads at the default isolation", set(seen) == {"default"}, seen)
+            ck(f"{name} reads what had committed, not a snapshot", bool(seen) and set(seen) <= COMMITTED, seen)
 
 
 def every_read_function():
@@ -379,9 +384,32 @@ def in_memory():
     s.close()
 
 
+def no_write_in_read():
+    print("== a write inside read() ==")
+    s = open_store()
+    if s.sessions_db.dialect != "postgresql":
+        print("  skip  only Postgres reads run without a transaction")
+        s.close()
+        return
+    from sqlalchemy import text
+    before = s.get_setting("tr1819_probe")
+    try:
+        with s.sessions_db.read() as conn:
+            conn.execute(text("SELECT 1"))
+            conn.execute(text("INSERT INTO settings (key, value) VALUES ('tr1819_probe', 'x')"))
+        ck("a write inside read() is refused", False, "it ran")
+    except Exception as e:
+        ck("a write inside read() is refused, naming begin()", "begin()" in str(e), e)
+    ck("and nothing was written", s.get_setting("tr1819_probe") == before, s.get_setting("tr1819_probe"))
+    with s.sessions_db.read() as conn:
+        ck("a read after it still answers", conn.execute(text("select 1")).scalar() == 1)
+    s.close()
+
+
 if __name__ == "__main__":
     held_reads()
     every_read_function()
     in_memory()
+    no_write_in_read()
     print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
     sys.exit(1 if FAILS else 0)

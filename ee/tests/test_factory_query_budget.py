@@ -77,16 +77,16 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # Statements per route for the cell seeded below, by the backend the store is on (SQLite, or Postgres
 # when TARES_TEST_PG is set): the count measured plus 2 percent, rounded up. Each backend has its own
 # entry, so a change that moves one can move only that one. The history of each count, ticket by
-# ticket from TR-1472 to TR-1725, is in this file's git log; since TR-1815 everything is in the session
+# ticket from TR-1472 to TR-1819, is in this file's git log; since TR-1815 everything is in the session
 # store, so on SQLite every read is a transaction of its own and costs its BEGIN, and on Postgres a
 # statement is a round trip.
-_TODAY = {"home": 54, "projects": 44, "project": 90, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
+_TODAY = {"home": 54, "projects": 44, "project": 57, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
 DONE_PROJECTS = 12
 DONE_EXTRA = 5
-_SQLITE = {**_TODAY, "home": 101, "projects": 83, "project": 174, "ticket": 54, "raw_tickets": 17,
+_SQLITE = {**_TODAY, "home": 101, "projects": 83, "project": 107, "ticket": 54, "raw_tickets": 17,
            "raw_ticket": 26}
 # Setup, its progress and Crew had no entry before TR-1634 and TR-1633; their counts are kept the
 # same way.
