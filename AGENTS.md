@@ -67,7 +67,9 @@ changes in the contract, not here.
 
 The console is paper: cream surfaces, brown ink, amber for action only. Its type voices are in the
 comment at the top of `ui/src/styles.css`. Copy from the edition screens (`ui/src/editions`), never
-from `ui/src/pages`, whose inline styles predate the kit.
+from the legacy components directly under `ui/src/components`, whose inline styles predate the kit.
+`ui/src/pages` holds only the component gallery (`pages/dev`); the platform and AI SRE consoles are
+deleted (TR-1820).
 
 - **Build from the kit.** Import from `@/components/edition` (barrel `index.ts`): `Button`,
   `Input`, `Select`, `Textarea`, `Checkbox`, `Switch`, `Dialog`, `Panel`, `ListSection`, `ListRow`,
@@ -85,8 +87,9 @@ from `ui/src/pages`, whose inline styles predate the kit.
   (`ui/src/editions`, `components/edition`, `ui/src/ee`) may break `kit-only` only while it is in
   the register (`ui/eslint-rules/kit-register.mjs`) with its reason: a value computed at run time
   (a bar's width), a control the kit has no primitive for yet, a native picker kept on purpose, or a
-  legacy panel waiting for its move. The legacy pages (`ui/src/pages` and the shared components
-  outside the kit) are frozen at their count in `ui/kit-contract.baseline.json`. A file that gets
+  legacy panel waiting for its move. The legacy components (the files directly under
+  `ui/src/components`, such as Ask chat and the usage, licence and sign-in panels) are frozen at their count
+  in `ui/kit-contract.baseline.json`. A file that gets
   cleaner lowers its count in the same PR with `npm run kit-baseline`, which never raises one
   without `--raise` and a reason in the PR.
 - **Colour.** The roles are listed under Colour budget in `.impeccable.md`, and the utilities come
@@ -95,13 +98,13 @@ from `ui/src/pages`, whose inline styles predate the kit.
   `:root` block of `ui/src/styles.css`. No `--kit-*` outside the token block.
   `npm run token-contract` runs through `ui/eslint-token-contract.config.mjs`; it scans every string
   in `ui/src` (CSS holds the definitions and is exempt).
-- **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`. The platform pages are
+- **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`. The legacy components are
   checked too, each held at its count in `ui/words-contract.baseline.json`: add none, and when you
   remove some, `npm run words-baseline` lowers the count in the same PR.
 - **Time** comes from `ui/src/lib/time.ts`: a UTC stamp (`formatStampUTC`) with "3h ago" in its
   tooltip (`formatDistance`), a day as `Nov 12, 2026` (`formatDayUTC`), a length in words
   (`ageWords`, `spanWords`, `durationWords`). A grouped
-  number is `formatCount` from `ui/src/lib/number.ts`. The legacy pages keep their locale calls at
+  number is `formatCount` from `ui/src/lib/number.ts`. The legacy usage panels keep their locale calls at
   the count in `ui/time-contract.baseline.json`, lowered with `npm run time-baseline`. Tests:
   `npm run test:time`.
 - **Motion** reads the classes in `ui/src/paper/paper-motion.css` (vendored; rule in
@@ -125,8 +128,9 @@ from `ui/src/pages`, whose inline styles predate the kit.
   `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
   npm run test:time && npm run design-contract && npm run motion-contract && npm run test:closure &&
   npm run build`, and the gallery suite when you touched `components/edition`. `test:closure`
-  (`ui/tests/factory-closure.cjs`) walks the imports from `ui/src/main.tsx` and fails when the
-  console reaches a platform page (`ui/src/pages`, except `pages/dev`) or an AI SRE screen. `design-contract` runs through
+  (`ui/tests/factory-closure.cjs`) walks the imports from `ui/src/main.tsx` and fails when an
+  import reaches `ui/src/pages` outside `pages/dev`, `ui/src/editions/sre` or the edition chooser,
+  so the deleted platform and AI SRE consoles stay gone. `design-contract` runs through
   `ui/eslint-design-contract.config.mjs`. An exception goes in the register with a reason, never in
   an `eslint-disable` comment (inline config is off).
 - A change to one of these conventions changes this section in the same PR, and the check that
