@@ -36,6 +36,8 @@ from tares.session_store.tables import (challenges, crews, metadata,  # noqa: E4
                                         session_moves, session_said, session_states,
                                         session_stations, session_turns, session_usage, sessions)
 from tares.store import Store  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first, forget_fills  # noqa: E402
 
 SRC = "claude_code"
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
@@ -64,10 +66,9 @@ def attempt(name, fn):
     return got
 
 
-def new_store(edition, **kw):
+def new_store(**kw):
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
     s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"), **kw)
-    s.set_setting("edition", edition)
     s.create_project(PROJECT, "custom", "proj", {})
     return s
 
@@ -246,9 +247,9 @@ def check_posted_rows(s, say):
          [("s", "challenge_commit", "factory/TR-1", "proj")])
 
 
-def posted(edition):
-    print(f"== a posted batch, {edition} edition ==")
-    s = new_store(edition)
+def posted():
+    print("== a posted batch ==")
+    s = new_store()
     conn = connector(s)
     batch = posted_batch()
     before = json.dumps(batch)
@@ -288,22 +289,12 @@ def posted(edition):
     ck("the meter reading", bool(name) and name["model"]["display_name"] == "Claude", got)
     no_nul_in_sessions_db(s)
 
-    if edition == "platform":
-        got = duck(s, "SELECT count(*) FROM events")[0][0]
-        ck("DuckDB holds every line", got == len(envs), got)
-        got = duck(s, "SELECT event_type, text FROM events WHERE contains(coalesce(text, ''), chr(0))"
-                      " OR contains(event_type, chr(0)) OR contains(coalesce(payload, ''), '\\u0000')"
-                      " OR contains(coalesce(labels, ''), '\\u0000')")
-        ck("none with a NUL", got == [], got[:3])
-
     # the passes of a start over what was just posted add nothing
     attempt("the turns fill completes", lambda: session_ingest.fill_turns(s, chunk=2))
     attempt("the facts fill completes", lambda: session_ingest.fill_facts(s))
     attempt("the sessions reconcile completes", lambda: session_ingest.reconcile_sessions(s))
     attempt("the usage fill completes", s._claude_usage_fill)
     attempt("the challenger fill completes", s._challenges_fill)
-    if edition == "platform":                  # DuckDB has no mark for a factory's own lines
-        check_posted_rows(s, "after the fills, ")
     s.con.close()
 
 
@@ -334,7 +325,7 @@ def old_lines():
 
 def hold_in_duckdb(s):
     """The lines above as a version before TR-1707 mapped them, in DuckDB alone: how a cell holds
-    them after a write of its sessions tables failed. `s` is a platform store."""
+    them after a write of its sessions tables failed (tests/_old_cell.py, record=False)."""
     real = session_map._without_nul
     session_map._without_nul = lambda o: o
     try:
@@ -343,13 +334,13 @@ def hold_in_duckdb(s):
         session_map._without_nul = real
     assert any(Z in (e.text or "") for e in envs) and any(Z in e.labels.get("branch", "")
                                                           for e in envs), "the lines lost their NULs"
-    record, keep = session_ingest.record, s._keep_challenges
-    session_ingest.record = lambda *a, **k: None
+    keep = s._keep_challenges
     s._keep_challenges = lambda *a, **k: None
     try:
-        s.append(envs)
+        append_duckdb_first(s, envs, record=False)
     finally:
-        session_ingest.record, s._keep_challenges = record, keep
+        s._keep_challenges = keep
+    forget_fills(s)                    # the fills of the next start read them
     return envs
 
 
@@ -376,7 +367,7 @@ def check_old_facts(s, say):
 
 def held_by_duckdb():
     print("== lines DuckDB already holds with NULs: the fills of a start ==")
-    s = new_store("platform")
+    s = new_store()
     hold_in_duckdb(s)
     for turn in (1, 2):
         attempt(f"the turns fill completes, pass {turn}",
@@ -404,8 +395,8 @@ def held_by_duckdb():
 
 def counted_before():
     """SQLite takes a NUL, so a version before TR-1707 stored such a reply and challenger line as
-    they were. The fills, which read them again at a platform start, do not add them twice."""
-    s = new_store("platform")
+    they were. The fills, which read them again at a start, do not add them twice."""
+    s = new_store()
     if s.sessions_db.dialect != "sqlite":
         s.con.close()
         return
@@ -461,9 +452,8 @@ def moved(age, target):
 
 
 def _moved(target):
-    s = new_store("platform")
+    s = new_store()
     envs = hold_in_duckdb(s)
-    s.set_setting("edition", "factory")
     with contextlib.redirect_stdout(io.StringIO()):
         attempt("the sessions reconcile completes", lambda: session_ingest.reconcile_sessions(s))
     out = io.StringIO()
@@ -518,7 +508,7 @@ def first_state_start():
         print("  skip  TARES_TEST_PG is not set")
         return
     import psycopg
-    s = new_store("platform", state_dsn="")
+    s = new_store(state_dsn="")
     path = s.path
     envs = hold_in_duckdb(s)
     s.set_session_state("old", "idle", f"wai{Z}ting", T0)
@@ -590,8 +580,7 @@ def unit():
 
 def main():
     unit()
-    for edition in ("platform", "factory"):
-        posted(edition)
+    posted()
     held_by_duckdb()
     counted_before()
     moved(timedelta(hours=1), session_move.TARGET)

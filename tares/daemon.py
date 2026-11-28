@@ -46,7 +46,6 @@ from . import factory as factory_mod
 from . import memory_route
 from .integrations.builtin import memory_tares
 from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, milestone_summary, project_secrets, morning_status as morning_mod, standup as standup_mod, waiting_slack as waiting_slack_mod
-from . import edition as edition_mod
 from . import factory_home, request_memo, screens
 from . import report as report_mod
 from . import linear as _linear
@@ -348,10 +347,6 @@ class GithubAppCreateIn(BaseModel):
     public_url: str = ""         # this cell's address as GitHub reaches it; empty = this request's
 
 
-class EditionIn(BaseModel):
-    edition: str
-
-
 class AnthropicKeyIn(BaseModel):
     key: str    # blank-to-keep is not offered here: the only edits are "set a new one" or DELETE
 
@@ -408,18 +403,20 @@ def make_app() -> FastAPI:
               f"and restart.", flush=True)
         return _degraded_app(e.reason)
 
-    # The edition is settled here, before the seed project below: a seeded empty cell would
-    # otherwise look like a cell with data and be settled as platform.
-    edition_mod.settle(store)
-
+    # What the daemon starts in the background, by name, in the order it starts them: the threads
+    # here, then the lifespan's tasks (app.state.started_tasks, tests/test_factory_startup.py).
+    started: list[str] = []
     # The sessions table catches up with the events in the background (TR-1471); the lines stored
     # from here on are counted as they arrive.
-    store.start_session_reconcile()
-    # the factory edition's recent sessions are rebuilt in the session store, once (TR-1609)
-    session_move.start(store)
-    # factory edition: the times of the stored lines are read into memory in the background, so the
+    if store.start_session_reconcile() is not None:
+        started.append("session_reconcile")
+    # the recent sessions are rebuilt in the session store, once (TR-1609)
+    if session_move.start(store) is not None:
+        started.append("session_move")
+    # the times of the stored lines are read into memory in the background, so the
     # first trigger and page do not wait for it (TR-1695)
-    session_digest.start(store)
+    if session_digest.start(store) is not None:
+        started.append("session_digest")
 
     projects = Projects(store)
 
@@ -437,36 +434,37 @@ def make_app() -> FastAPI:
             _metrics.set_info(None)
         _metrics.prime(providers=[p["id"] for p in providers_mod.list_providers(store)["providers"]])
         _metrics.set_licence_probe(licence.peek)
-        # providers the environment handed the cell list their models now, not on a click
-        asyncio.create_task(providers_mod.discover_env_entries(store))
         loop_stop = asyncio.Event()
         loop_mod.attach(asyncio.get_running_loop())   # handlers in threads start work here
-        loop_watch = asyncio.create_task(_metrics.watch_event_loop(loop_stop))
-        # pull requests read again in the background, not only when a project is opened (TR-1010)
-        pr_sync_task = asyncio.create_task(factory_api.sync_prs(store, loop_stop))
-        # the morning status goes out from here, whoever's laptop is shut (TR-825)
-        morning_task = asyncio.create_task(_morning.run(loop_stop))
-        # the licence: checked again every minute, and the desk told as it nears its end (TR-912)
-        licence_task = asyncio.create_task(licence.run(store, loop_stop))
-        waiting_task = asyncio.create_task(_waiting_slack.run(loop_stop))
-        # sessions idle for a week move from the session store to the archive, once an hour (TR-1506)
-        archive_task = asyncio.create_task(session_archive.run(store, loop_stop))
-        # the weekly figures the report reads, built once and then kept current (TR-1666)
-        report_task = asyncio.create_task(report_mod.run(store, loop_stop))
-        # Linear and GitHub Issues tickets kept in step by their integrations (TR-1806)
         from .integrations import sync as integration_sync
-        sync_task = asyncio.create_task(integration_sync.run(store, loop_stop))
+        tasks: dict[str, asyncio.Task] = {}
+
+        def start(name: str, coro) -> None:
+            tasks[name] = asyncio.create_task(coro)
+            _app.state.started_tasks.append(name)
+        _app.state.started_tasks = list(started)
+        # providers the environment handed the cell list their models now, not on a click
+        start("provider_models", providers_mod.discover_env_entries(store))
+        start("event_loop_watch", _metrics.watch_event_loop(loop_stop))
+        # pull requests read again in the background, not only when a project is opened (TR-1010)
+        start("pr_sync", factory_api.sync_prs(store, loop_stop))
+        # the morning status goes out from here, whoever's laptop is shut (TR-825)
+        start("morning_status", _morning.run(loop_stop))
+        # the licence: checked again every minute, and the desk told as it nears its end (TR-912)
+        start("licence", licence.run(store, loop_stop))
+        start("waiting_slack", _waiting_slack.run(loop_stop))
+        # sessions idle for a week move from the session store to the archive, once an hour (TR-1506)
+        start("session_archive", session_archive.run(store, loop_stop))
+        # the weekly figures the report reads, built once and then kept current (TR-1666)
+        start("report", report_mod.run(store, loop_stop))
+        # Linear and GitHub Issues tickets kept in step by their integrations (TR-1806)
+        start("integration_sync", integration_sync.run(store, loop_stop))
         print("taresd: console at / · management API at /api")
         yield
         loop_stop.set()
-        loop_watch.cancel()
-        pr_sync_task.cancel()
-        morning_task.cancel()
-        licence_task.cancel()
-        waiting_task.cancel()
-        archive_task.cancel()
-        report_task.cancel()
-        sync_task.cancel()
+        for name, task in tasks.items():
+            if name != "provider_models":   # a one-off call: left to finish, as before
+                task.cancel()
 
     # the interactive API reference lives under /api so /docs is the console's Docs and memory page
     app = FastAPI(title="taresd", lifespan=lifespan, docs_url="/api/reference", redoc_url=None)
@@ -1095,13 +1093,10 @@ def make_app() -> FastAPI:
             _err(KeyError(f"no active key {kid!r}"), 404)
         return {"ok": True, "note": "key revoked"}
 
-    def _edition_out() -> dict:
-        value, needed = edition_mod.edition(store)
-        return {"edition": value, "edition_name": edition_mod.NAMES[value], "edition_needed": needed}
-
     def _whoami_edition() -> dict:
-        out = _edition_out()
-        return out
+        # Fixed values the console still reads to pick its screens, until the console's edition
+        # code goes (TR-1817). Nothing on the cell asks or checks which edition it is any more.
+        return {"edition": "factory", "edition_name": "Software Factory", "edition_needed": False}
 
     # ── People: who is on the cell. Keys belong to them; the credential names who is calling ──
     def _person_out(p: dict) -> dict:
@@ -1755,23 +1750,6 @@ def make_app() -> FastAPI:
         except ValueError as e:
             _err(e)
         return {"ok": True, **providers_mod.list_providers(store)}
-
-    # ── the cell's edition (TR-724): admin through the /api/settings prefix rule ──
-    def _edition_settings() -> dict:
-        return {**_edition_out(), "env_value": os.getenv(edition_mod.EDITION_ENV) or None,
-                "choices": [{"id": e, "name": edition_mod.NAMES[e]} for e in edition_mod.EDITIONS]}
-
-    @app.get("/api/settings/edition")
-    def get_edition():
-        return _edition_settings()
-
-    @app.put("/api/settings/edition")
-    def set_edition(body: EditionIn):
-        value = edition_mod._valid(body.edition)
-        if value is None:
-            _err(ValueError("edition must be one of " + ", ".join(edition_mod.EDITIONS)))
-        store.set_setting(edition_mod.EDITION_SETTING, value)
-        return {"ok": True, **_edition_settings()}
 
     # ── the Slack bot token: same contract as the Anthropic key ──────────────
     # One token per instance, behind the cell's Slack posts. It is a credential, so it is
@@ -3414,7 +3392,7 @@ def make_app() -> FastAPI:
     _waiting_slack = waiting_slack_mod.WaitingSlack(store, fx.waiting_for_person)
     waiting_slack_mod.register(app, store, h, _waiting_slack)
     app.state.waiting_slack = _waiting_slack
-    # the edition screens (tares/screens/__init__.py lists them)
+    # the screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, morning=_morning))
     integrations_api.register(app, store, h)
     guardrails_api.register(app, store, h)
@@ -3422,12 +3400,9 @@ def make_app() -> FastAPI:
 
     @app.get("/api/home")
     async def home(request: Request):
-        """One read for the home screen of the cell's edition; the platform has none."""
-        value, _needed = edition_mod.edition(store)
-        if value == "factory":
-            # one page read: its repeated small reads run once (TR-1631)
-            return await asyncio.to_thread(request_memo.run, factory_home.build, store, fx, request)
-        return JSONResponse({"error": "no home on this edition"}, status_code=404)
+        """One read for the home screen."""
+        # one page read: its repeated small reads run once (TR-1631)
+        return await asyncio.to_thread(request_memo.run, factory_home.build, store, fx, request)
 
     # what the Claude Code sessions spend: the plan's limits and tokens by project
     claude_usage.register(app, store, _hidden_ids)

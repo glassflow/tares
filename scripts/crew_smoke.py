@@ -319,7 +319,7 @@ class Smoke:
 
     def start_tares(self) -> None:
         d = self.spawn("tares-up", TARES + ["up", "--host", "127.0.0.1", "--port", str(self.port), "--data-dir",
-                                            str(self.work / "tares-home"), "--edition", "factory"])
+                                            str(self.work / "tares-home")])
         wait_until("scratch Tares", lambda: d.poll() is None and "integrations" in
                    (http("GET", self.url + "/health").get("capabilities") or []), 90)
         m = self.spawn("tares-mcp", TARES + ["mcp", "--transport", "streamable-http", "--host", "127.0.0.1", "--port",

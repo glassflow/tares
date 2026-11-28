@@ -26,7 +26,7 @@ one name per line); the `e2e` job runs them in shards (`tests/ci_e2e.py`, one po
 Browser suites locally: `cd ui && npm ci && npm run build && npx playwright install chromium`, then from the repo root
 `python tests/ci_e2e.py` (all) or `python tests/ci_e2e.py --list` (names).
 ee tests: `python tests/ci_run.py --suite ee` (the list is `ee/tests/ci_list.txt`).
-A licensed scratch daemon: `python ee/tests/licensed.py serve --port 8799 --data-dir $(mktemp -d) [--edition factory] [--auth] [--licence expired]`.
+A licensed scratch daemon: `python ee/tests/licensed.py serve --port 8799 --data-dir $(mktemp -d) [--auth] [--licence expired]`.
 `python tests/factory/otel_bg_probe.py file` (or `env`) is a by-hand check, not in CI, that a `claude --bg` station sends its OTLP logs, traces and metrics
 to a local receiver; it needs the `claude` CLI.
 A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `test_ci_list` fails for a
@@ -148,7 +148,6 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_MAX_DB_SIZE` | storage limit `/api/usage` and `/health` measure against; unset = the volume the database sits on |
 | `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507); default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
-| `TARES_EDITION` | the cell's edition on its first start: factory, sre or platform; after that the value saved in the cell wins and Settings, Edition changes it |
 | `TARES_WEBHOOK_ALLOW_PRIVATE` | let an integration's URL point at an internal address (loopback, private, link-local); off by default |
 | `TARES_TRACING_ENABLED` | station telemetry on/off: where the crew stations' Claude Code sends its OTLP logs, traces and metrics (the monitoring choice saved on the cell wins over it) |
 | `TARES_TRACING_PROVIDER`, `TARES_TRACING_ENDPOINT` | the station telemetry backend: `rius` (endpoint preset) or `otlp` (any OTLP/HTTP endpoint) |

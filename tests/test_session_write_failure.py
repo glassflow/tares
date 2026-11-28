@@ -1,4 +1,4 @@
-"""A session store write that fails is never lost in the factory edition (TR-1665).
+"""A session store write that fails is never lost (TR-1665).
 
 The factory's pages read only the session store, so it is written first. While it takes no write,
 `/ingest` answers 503 and nothing is stored; the same lines sent again give what a delivery with no
@@ -7,7 +7,7 @@ the M1 drain (`session_drain`) copies it from DuckDB later; one that can never b
 once. With an archive the factory keeps accepted lines out of DuckDB (TR-1647), so the session store
 is their only copy: a batch whose session can be neither counted nor marked is refused, a drain that
 could not write facts and turns keeps the session marked, and a rebuild never drops a line only the
-store holds. The platform editions behave as before.
+store holds.
 
 Plain:                python tests/test_session_write_failure.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -180,11 +180,10 @@ def clear_facts(s, sid):
             c.execute(delete(t).where(t.c.session == sid))
 
 
-def open_store(edition="factory", moved=True):
+def open_store(moved=True):
     """A new store. `moved`: the one-time move is complete (planned with nothing to move)."""
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
     s = Store(os.path.join(tempfile.mkdtemp(dir=_TMP), "t.duckdb"))
-    s.set_setting("edition", edition)
     if moved:
         session_move.plan(s)
     return s
@@ -728,21 +727,6 @@ def unfilled(want):
        (rows_of(s, "s"), row(s, "s")))
 
 
-def platform():
-    print("== the platform edition is as before ==")
-    s = open_store("platform")
-    with down(s):
-        e, out = raised(lambda: s.append(work("s", "ts")))
-    ck("a store that is down does not refuse the batch", e is None and duck(s, "s") == 6,
-       (repr(e), duck(s, "s")))
-    s = open_store("platform")
-    refuse(s)
-    e, out = raised(lambda: s.append(work("s", "ts", mark="REFUSE")))
-    ck("a refused line is counted and marked, in one go", e is None and row(s, "s") == (6, 3, 1, False)
-       and "caught up at the next start" in out, (repr(e), row(s, "s"), out))
-    ck("and the drain leaves it alone", session_drain.drain(s) == 0 and marks(s) == [])
-
-
 def tail():
     print("== the newest readable lines (F2) ==")
     for what, days in (("table", 0), ("archive", 20)):
@@ -832,7 +816,6 @@ def main():
     unmarkable()
     verdict_of_a_refused_row()
     unfilled(want)
-    platform()
     tail()
     os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp()
     asyncio.run(route())

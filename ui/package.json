@@ -29,7 +29,6 @@
     "test:factory-tickets": "vite build && node tests/factory-tickets.e2e.cjs",
     "test:platform": "vite build && node tests/projects-list.e2e.cjs && node tests/project-idle.e2e.cjs && node tests/login-handoff.e2e.cjs",
     "test:components": "vite build && node tests/component-gallery.e2e.cjs",
-    "test:choose-edition": "vite build && node tests/choose-edition.e2e.cjs",
     "test:words": "node tests/words.selftest.cjs && node tests/words.check.cjs",
     "test:tokens": "node tests/tokens.parity.cjs",
     "test:paper": "node tests/paper.vendored.cjs",

@@ -44,7 +44,7 @@ test_grant_decline_sticks
 test_grants_teams
 test_licence_cloud
 test_mcp_brain
-test_mcp_editions_ee
+test_mcp_outcome_tools_ee
 test_my_work
 test_offer_and_brief_reads
 test_owner_claims_local_team

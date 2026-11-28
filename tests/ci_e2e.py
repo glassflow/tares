@@ -44,7 +44,7 @@ WEIGHT = {
     "factory-setup": 56, "brain-ask": 53, "factory-reviews": 52, "factory-home": 48,
     "factory-crew": 48, "factory-ticket": 45,
     "brain-connect": 33, "edition-routes": 29, "projects-list": 28, "factory-projects": 28,
-    "factory-docs": 28, "edition-shell": 27, "brain-repos": 27, "choose-edition": 26, "crew-people": 25,
+    "factory-docs": 28, "edition-shell": 27, "brain-repos": 27, "crew-people": 25,
     "brain-decisions": 22, "factory-project-controls": 19, "ee-chunk": 18, "source-claude-code": 17, "other-project": 16, "connect": 15, "a11y": 13,
     "redirects": 9, "factory-secrets": 9,
     "component-gallery": 9, "project-idle": 8, "ee-project-access": 8,

@@ -17,7 +17,7 @@ for p in "$port" $((port + 1)); do
 done
 
 data=$(mktemp -d)
-env -i HOME="$HOME" PATH="$PATH" TARES_EDITION=factory TARES_OTLP_GRPC_PORT=off \
+env -i HOME="$HOME" PATH="$PATH" TARES_OTLP_GRPC_PORT=off \
   TARES_MCP_PORT=$((port + 1)) TARES_INSTANCE_NAME=demo \
   .venv/bin/tares up --port "$port" --data-dir "$data" >"$data/daemon.log" 2>&1 &
 daemon=$!

@@ -1,7 +1,7 @@
 """The outcome tools (TR-757): what needs me, how a project is doing, start a project and hand
 it to the crew. Each is one call to the same API the console reads. Registered on the same server
-as tares/mcp_server.py, which imports this module at its end; the edition filter there lists them
-first on a factory cell.
+as tares/mcp_server.py, which imports this module at its end and lists them first
+(OUTCOME_TOOLS).
 """
 from __future__ import annotations
 

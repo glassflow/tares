@@ -105,7 +105,7 @@ def mib(n: int) -> str:
 
 
 def main() -> int:
-    s = open_store("factory")
+    s = open_store()
     done = session_digest.warm(s)
     ck("an empty store warms to nothing", (done["sessions"], done["lines"]) == (0, 0), done)
     fill(s)

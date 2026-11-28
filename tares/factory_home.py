@@ -701,6 +701,7 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
     if joiner["joining"]:
         joiner["team"] = joiner_team(store, stations, open_ps, who["me"])
     onboarding = _onboarding(store, fx, request, mine, settings)
+    # `edition` is a fixed value kept for the console until its edition code goes (TR-1817)
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,

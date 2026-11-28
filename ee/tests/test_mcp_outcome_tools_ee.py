@@ -6,9 +6,9 @@ team adds (`ask_area`, `answer_question`, `list_questions`, `ask_brain`, `search
 cell with no licence does not list them and answers a call with the licence text. `sign_off` is not
 a tool: the cell has no sign-offs.
 
-The core side of the same tools is tests/test_mcp_editions.py and tests/test_handover_single.py.
+The core side of the same tools is tests/test_mcp_outcome_tools.py and tests/test_handover_single.py.
 
-Run: python ee/tests/test_mcp_editions_ee.py
+Run: python ee/tests/test_mcp_outcome_tools_ee.py
 """
 import asyncio, json, os, signal, socket, subprocess, sys, tempfile
 
@@ -52,7 +52,7 @@ async def wait(url, ok=lambda r: r.status_code == 200):
 
 def start(licence):
     dport, mport = free_port(), free_port()
-    tmp = tempfile.mkdtemp(prefix="mcp-editions-ee-")
+    tmp = tempfile.mkdtemp(prefix="mcp-outcome-tools-ee-")
     base = clean_env(TARES_OTLP_GRPC_PORT="off", TARES_AUTH_TOKEN=TOKEN, TARES_EDITION="factory",
                      TARES_LICENSE=licensed.test_licence() if licence else None)
     d = subprocess.Popen(licensed.daemon_argv(),

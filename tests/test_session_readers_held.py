@@ -1,14 +1,14 @@
 """The readers of `events` answer the same for transcript lines only the session store holds (TR-1647).
 
 A factory cell with an archive writes `claude_code` lines to the session store alone. The same lines
-are given to a platform cell (everything in DuckDB: what every reader answered before) and to factory
-cells that hold them in each of the ways they can be held: in the store alone, in the store after the
+are given to an older cell (everything in DuckDB, written as a platform cell wrote it before Tares 2.0:
+what every reader answered before, tests/_old_cell.py) and to cells that hold them in each of the ways they can be held: in the store alone, in the store after the
 DuckDB rows are deleted (in this test only), partly in the archive, and in a session a failed write
-left incomplete. Every reader of `events` answers each factory cell as it answers the platform one.
+left incomplete. Every reader of `events` answers each cell as it answers the older one.
 Then, through the app: a session's lines are read back with no claude_code row in DuckDB.
 
 One difference is expected and left out of the comparison: a line the store holds has no ingest time
-of its own, so it is read as the line's own time. The platform cell's rows are set to that. Nothing
+of its own, so it is read as the line's own time. The older cell's rows are set to that. Nothing
 else is left out: the counter's last_ingest, the clock of each cell's own write, is checked to be
 from this run.
 
@@ -43,6 +43,8 @@ import httpx  # noqa: E402
 from sqlalchemy import delete, func, select, update  # noqa: E402
 
 from tares import session_archive, session_events  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _old_cell import append_duckdb_first  # noqa: E402
 from tares.session_map import ClaudeCodeLines  # noqa: E402
 from tares.envelope import Envelope, now_utc  # noqa: E402
 from tares.session_store.tables import session_archive_parts, session_lines, sessions  # noqa: E402
@@ -127,9 +129,11 @@ def other_lines() -> list:
 
 
 # ── the cells ────────────────────────────────────────────────────────────────────────────────
-def open_store(edition):
+def open_store(old=False):
+    """A cell; `old`: one that writes its lines to DuckDB first, as a platform cell did."""
     s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
-    s.set_setting("edition", edition)
+    if old:
+        s.append = lambda envs: append_duckdb_first(s, envs)
     s.link_session("uc_hidden", "H")
     return s
 
@@ -160,19 +164,19 @@ def level(s):
 
 
 def platform():
-    s = open_store("platform")
+    s = open_store(old=True)
     seed(s)
     return level(s)
 
 
 def held_only():
-    s = open_store("factory")
+    s = open_store()
     seed(s)
     return s
 
 
 def deleted():
-    s = open_store("factory")
+    s = open_store()
     with patched(s, "_lines_skip_duckdb", lambda: False):      # written to both, as before the gate
         seed(s)
     with s._lock:
@@ -181,7 +185,7 @@ def deleted():
 
 
 def archived():
-    s = open_store("factory")
+    s = open_store()
     seed(s)
     assert session_archive.archive_pass(s) == 1
     return s
@@ -190,7 +194,7 @@ def archived():
 def incomplete():
     """S and T missed a write: their later lines are in DuckDB too, and one of them is not in the
     session store at all."""
-    s = open_store("factory")
+    s = open_store()
 
     def spoil():
         with s.sessions_db.begin() as c:
@@ -281,10 +285,10 @@ def readers() -> dict:
 
 
 def parity():
-    print("== every reader answers a factory cell as it answers a platform one ==")
+    print("== every reader answers a cell as it answers an older one ==")
     base = platform()
     want = {name: fn(base) for name, fn in readers().items()}
-    ck("c933t: the challenger trigger's count over the platform cell",
+    ck("c933t: the challenger trigger's count over the older cell",
        want["aggregate: the challenger trigger's count"] == {"S": 1, "H": 1},
        want["aggregate: the challenger trigger's count"])
     empty = [n for n, v in want.items() if not v and n != "read_window: an unknown session"]
@@ -337,21 +341,21 @@ def deleted_private():
         return ([obj(p)["sessionId"] for p in s.recent_payloads(SRC, 10, exclude=exclude)],
                 [r["key"] for r in s.recent_events(SRC, 2, exclude=exclude)])
 
-    for name, edition in (("platform", "platform"), ("factory", "factory")):
-        s = open_store(edition)
+    for name, old in (("older", True), ("now", False)):
+        s = open_store(old)
         s.create_project("uc_gone", "custom", "Gone", {})
         s.set_project_scope("uc_gone", "private")
         s.append([line("V", "user", "V first", 300), line("V", "user", "V second", 200)])
         s.append([tagged("G", 100), tagged("G", 50)])
         s.delete_project("uc_gone")
-        if edition == "platform":
+        if old:
             level(s)
         got = seen(s)
         ck(f"{name}: the newest lines are the other session's, as many as asked for",
            got == (["V", "V"], ["V", "V"]), got)
         s.create_project("uc_again", "custom", "Gone", {})
         s.append([tagged("W", -3600)])                      # later than the project that has the name
-        if edition == "platform":
+        if old:
             level(s)
         got = seen(s)
         ck(f"{name}: a line from after the name was taken again is read, the older ones are not",
@@ -360,8 +364,8 @@ def deleted_private():
 
 
 def edges():
-    print("== nothing stored, and a platform cell ==")
-    s = open_store("factory")
+    print("== nothing stored ==")
+    s = open_store()
     ck("no session row: every reader answers empty",
        s.aggregate([SRC], None, "count", MONTH) == {} and s.read_window([SRC], "S", MONTH) == []
        and s.newest_key([SRC], None, MONTH) is None and s.recent_events(SRC) == []
@@ -373,13 +377,6 @@ def edges():
     ck("a session with no line: empty", s.read_window([SRC], "E", MONTH) == []
        and s.aggregate([SRC], None, "count", MONTH) == {} and s.recent_events(SRC) == [])
     s.close()
-    # a factory cell on Postgres with no archive keeps writing DuckDB; on SQLite the folder is there
-    p = platform()
-    with patched(p, "sessions_db", None):
-        got = (p.aggregate([SRC], None, "count", HOUR, filters=ENDED), len(p.recent_events(SRC, 100)),
-               len(p.read_window([SRC], "S", HOUR, cap=100)))
-    ck("a platform cell asks the session store nothing", got == ({"S": 1, "H": 1}, 14, 5), got)
-    p.close()
 
 
 def counted():
@@ -398,9 +395,9 @@ def counted():
         got["until"] = s.aggregate([SRC], None, "count", HOUR, until=NOW - timedelta(seconds=285))
         return got
 
-    p, f = open_store("platform"), open_store("factory")
+    p, f = open_store(old=True), open_store()
     want, got = many(p), many(f)
-    ck("every aggregate answers as over the platform cell", got == want, (got, want))
+    ck("every aggregate answers as over the older cell", got == want, (got, want))
     ck("the numbers are the lines', not the groups'",
        got["count"] == {"S": 5} and got["sum"] == {"S": 17.0} and got["avg"] == {"S": 4.25}
        and got["until"] == {"S": 2} and type(got["count"]["S"]) is int, got)

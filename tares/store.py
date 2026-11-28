@@ -11,7 +11,6 @@ import json
 import os
 import re
 import threading
-import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -26,7 +25,7 @@ from .request_memo import kept
 from sqlalchemy import (Date, LargeBinary, Text, and_, case, cast, delete, func, insert, literal, null,
                         or_, select, union_all, update)
 
-from . import (edition, metrics, session_archive, session_digest, session_events, session_ingest,
+from . import (metrics, session_archive, session_digest, session_events, session_ingest,
                session_move, session_read, state_db)
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
@@ -407,7 +406,6 @@ class Store(FactoryStore, ClaudeUsageStore):
         # held by append (commit to DuckDB, then the sessions row) and by the reconcile's writes
         self._sess_lock = threading.Lock()
         self._archive_on = None            # whether an archive backend exists (settled at first use)
-        self._factory_mode = None          # (is the edition factory, until when), see _lines_skip_duckdb
         self._challenges_unreadable: set = set()    # challenger lines already logged as unreadable
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
@@ -646,35 +644,18 @@ class Store(FactoryStore, ClaudeUsageStore):
         if not cc:
             return self._append(envelopes)
         session_events.note(self, cc)       # before any of them reaches DuckDB (TR-1695)
-        # In the factory edition with an archive, the claude_code lines of a session the session
-        # store answers for alone go only there (TR-1479); anywhere else they are written to DuckDB
-        # as before. The reconcile at start holds the same lock, so a line is never counted by both.
+        # With an archive, the claude_code lines of a session the session store answers for alone
+        # go only there (TR-1479); anywhere else they are written to DuckDB too. The reconcile at
+        # start holds the same lock, so a line is never counted by both.
         gate = self._lines_skip_duckdb()
-        factory = self._factory_writes()
         with self._sess_lock:
             try:
                 held = session_ingest.holdable(self, cc) if gate else []
             except Exception:                # no answer from the session store: DuckDB keeps them
                 held = []
-            if factory:
-                held = self._append_session_first(envelopes, cc, held)
-            else:                            # counted into `sessions` after the commit
-                self._append(envelopes, held)
-                if not session_ingest.record(self, cc) and held:
-                    # the session store could not take them: DuckDB keeps them
-                    self._append_events(held)
+            held = self._append_session_first(envelopes, cc, held)
         if len(cc) > len(held):
             metrics.session_lines_to_duckdb(len(cc) - len(held))
-
-    def _factory_writes(self) -> bool:
-        """True when claude_code lines are written to the session store first (the factory edition,
-        TR-1665). A settings read that fails gives the last answer; with none yet, True: a factory
-        cell must not acknowledge lines its pages would never show."""
-        try:
-            self._factory_edition = edition.edition(self)[0] == "factory"
-        except Exception:
-            return getattr(self, "_factory_edition", True)
-        return self._factory_edition
 
     def _append_session_first(self, envelopes, cc, held) -> list:
         """The factory's order (TR-1665): the session store, then DuckDB. Raises
@@ -699,27 +680,13 @@ class Store(FactoryStore, ClaudeUsageStore):
             raise
         return held
 
-    _HELD_MODE_TTL = 30.0                  # seconds the edition answer of `_lines_skip_duckdb` is kept
-
     def _lines_skip_duckdb(self) -> bool:
-        """True when claude_code lines may go only to the session store: the edition is factory with
-        an archive backend (the folder archive always exists on SQLite; a Postgres cell needs
+        """True when claude_code lines may go only to the session store: there is an archive backend (the folder archive always exists on SQLite; a Postgres cell needs
         TARES_ARCHIVE_URL; the answer is settled once per process, so a cell restarts after the URL
         is set or fixed). A factory cell on Postgres with none keeps writing to DuckDB and says so
         once. Until the `sessions` table has caught up with the events already in DuckDB, the lines
         go to both: the readers scan events until then, and a line held back would be missing. Which
-        sessions are held is `session_ingest.holdable`'s call. The edition is read at most every
-        `_HELD_MODE_TTL` seconds: a switch applies within that time, not on the next batch."""
-        now = time.monotonic()
-        cached = self._factory_mode
-        if cached is None or now >= cached[1]:
-            try:
-                is_factory = edition.edition(self)[0] == "factory"
-            except Exception:
-                return False
-            cached = self._factory_mode = (is_factory, now + self._HELD_MODE_TTL)
-        if not cached[0]:
-            return False
+        sessions are held is `session_ingest.holdable`'s call."""
         if self._archive_on is None:
             try:
                 self._archive_on = session_archive.backend_of(self) is not None
@@ -743,7 +710,6 @@ class Store(FactoryStore, ClaudeUsageStore):
         session readers scan events until this has finished once, and read the table after (TR-1520);
         a failed pass leaves them on the scan and the next start tries again."""
         self._lines_skip_duckdb()          # says once, at start, when the lines still go to DuckDB
-        self._factory_writes()             # remembered, should a later settings read fail
         return session_ingest.start_reconcile(self)
 
     def _append_events(self, envelopes: list[Envelope]) -> None:
@@ -799,10 +765,9 @@ class Store(FactoryStore, ClaudeUsageStore):
     def _keep_challenges(self, envelopes) -> None:
         # the challenger's lines also go to `challenges` (sessions database): after the events
         # committed, or when the batch was refused (_append_session_first). One that cannot be
-        # written, or is lost to a crash in between, is copied from `events` at the next open
-        # (_challenges_fill) on a platform edition, if it got there. The factory edition runs that
-        # fill once (TR-1613) and the challenger sends a line once: there it is lost, said in the
-        # log and counted (`tares_challenges_lost_total`).
+        # written is lost: the fill from `events` (_challenges_fill) runs once (TR-1613) and the
+        # challenger sends a line once, so it is said in the log and counted
+        # (`tares_challenges_lost_total`).
         ch = [(e.source, e.key_value or "", e.event_time, e.event_type,
                str((e.labels or {}).get("branch") or ""),
                None if (e.labels or {}).get("tares_project") is None
@@ -2677,11 +2642,10 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def _table_payloads(self, source: str, limit: int, exclude) -> list[str] | None:
         """`recent_payloads` from `session_lines`, newest first by the line's time (TR-1613): the
-        lines still in the table, not the archived ones. None when DuckDB answers: a platform
-        edition, another connector's source, or a table with nothing to show while the one-time
-        move is not complete."""
-        if (edition.edition(self)[0] != "factory"
-                or source not in session_ingest.claude_code_sources(self)):
+        lines still in the table, not the archived ones. None when DuckDB answers: another
+        connector's source, or a table with nothing to show while the one-time move is not
+        complete."""
+        if source not in session_ingest.claude_code_sources(self):
             return None
         sessions, digests, moved = self._looked(exclude)
         got = session_read.newest_payloads(self, source, limit, set(sessions),
@@ -2690,8 +2654,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def recent_payloads(self, source: str, limit: int = 500,
                         exclude: dict | None = None) -> list[dict]:
-        """The lossless payloads of a source's most recent events (for field profiling). In the
-        factory edition a claude_code source is read from `session_lines` (`_table_payloads`)."""
+        """The lossless payloads of a source's most recent events (for field profiling). A
+        claude_code source is read from `session_lines` (`_table_payloads`)."""
         texts = self._table_payloads(source, int(limit), exclude)
         if texts is None:
             esql, eparams = self._exclude(exclude, [source])

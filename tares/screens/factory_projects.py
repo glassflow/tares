@@ -2,7 +2,7 @@
 
 Every software-factory project is one row, from one read: the projects, all their tickets in one
 query, the handovers and the crew's stations. A project the cell made for another kind of use (the
-Default, or one made before the edition was set) is left out. The rows are the home page's rows
+Default, or one made before project kinds) is left out. The rows are the home page's rows
 (`factory_home.project_row`) with the meta line worded for this page (builders, how long ago, pull
 requests waiting), the full repo names in `repo_names` and `can_close`, true for a project whose
 tickets are all merged. A finished project is a row too, in state "done".

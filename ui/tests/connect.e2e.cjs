@@ -4,7 +4,7 @@
  * port, or not at all, and each says so; with sign-in on, the token is masked on screen and real on the
  * clipboard, in its panel and in every snippet; each client gets its own snippet; the Webhook tab names
  * the first rule and says when Tares could not list the rules or has none; the Tools tab lists, searches,
- * loads, fails and retries. The factory and the SRE editions name rules their own way. Light and dark,
+ * loads, fails and retries. Light and dark,
  * 1440 and 390. The daemons are real; the MCP probe, the tools and the rules are mocked (connect.fixture.cjs).
  * Run:  npm run build && node tests/connect.e2e.cjs     (from ui/, tares installed in ../.venv)
  */
@@ -36,8 +36,7 @@ const text = async (loc) => (await loc.count()) === 1 ? (await loc.innerText()).
 (async () => {
   const signed = await startDaemon({ port: PORT, edition: "factory", licence: "valid", auth: TOKEN });
   const open_ = await startDaemon({ port: PORT + 1, edition: "factory", licence: "valid" });
-  const sre = await startDaemon({ port: PORT + 2, edition: "sre", licence: "valid" });
-  process.on("exit", () => { signed.stop(); open_.stop(); sre.stop(); });
+  process.on("exit", () => { signed.stop(); open_.stop(); });
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
 
   const open = async (to, { d = signed, width = 1440, dark = false, wait = "connect-endpoint", healthDelay = 0, ...mock } = {}) => {
@@ -216,12 +215,6 @@ const text = async (loc) => (await loc.count()) === 1 ? (await loc.innerText()).
       ck("rules failed: says Tares could not list them", (await text(b)).includes("Tares could not list its rules: database is locked"), await text(b));
       ck("rules failed: offers to try again", (await b.getByRole("button", { name: "Try again" }).count()) === 1);
       ck("rules failed: does not claim there are none", (await page.getByTestId("connect-no-rules").count()) === 0);
-      await ctx.close();
-    }
-    {
-      const { ctx, page } = await open("/connect?tab=push", { d: sre });
-      ck("sre: says check rule", (await page.evaluate(MAIN_TEXT)).includes("Add the endpoint to a check rule"));
-      await words(page, "sre webhook");
       await ctx.close();
     }
 

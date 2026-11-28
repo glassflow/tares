@@ -389,15 +389,6 @@ async def main():
             e = await anon.get(f"/api/factory/projects/{px}/tickets/T2")
             ck("without a token it is refused", e.status_code in (401, 403), e.status_code)
 
-        print("== a platform cell still serves the page ==")
-        async with cx_() as cx:
-            r = await cx.put("/api/settings/edition", json={"edition": "platform"})
-            ck("the edition switches to platform", r.status_code == 200, r.text)
-            r = await cx.get(f"/api/factory/projects/{px}/tickets/T2")
-            ck("the route is served on a platform cell too", r.status_code == 200 and r.json()["ref"] == "T2",
-               r.status_code)
-            await cx.put("/api/settings/edition", json={"edition": "factory"})
-
 
 print("== the code under test ==")
 ck("the module comes from this checkout", os.path.abspath(tares.__file__).startswith(ROOT), tares.__file__)

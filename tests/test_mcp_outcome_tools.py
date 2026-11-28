@@ -1,8 +1,9 @@
-"""MCP tools per edition (TR-757): a factory cell lists its outcome tools first, a crew station sees
-everything, a cell with no edition lists everything but the two factory home readers, and an unreachable
-daemon fails open to every tool. The AI SRE edition and its tools are gone (TR-1809), and so are the
-building-block tools of the source catalog (TR-1811), on every edition and for stations too.
-The filter is a tidy list, not a permission boundary: the daemon still checks every call.
+"""The outcome tools (TR-757, TR-1813): a cell lists its outcome tools first and every other tool it
+defines after them, a crew station too, and an unreachable daemon still lists every tool. The AI SRE
+tools are gone (TR-1809), and so are the building-block tools of the source catalog (TR-1811).
+The list is tidy, not a permission boundary: the daemon still checks every call.
+
+Run: python tests/test_mcp_outcome_tools.py
 """
 import asyncio, json, os, signal, subprocess, sys, tempfile
 import httpx
@@ -53,11 +54,9 @@ def _stop(*procs):
         except Exception: p.kill()
 
 
-def _start(edition, daemon=True, seed=None):
-    tmp = tempfile.mkdtemp(prefix="mcp-editions-")
-    if seed:
-        seed(os.path.join(tmp, "t.duckdb"))
-    base = clean_env(TARES_AUTH_TOKEN=TOKEN, TARES_EDITION=edition)
+def _start(daemon=True):
+    tmp = tempfile.mkdtemp(prefix="mcp-outcome-tools-")
+    base = clean_env(TARES_AUTH_TOKEN=TOKEN)
     d = None
     if daemon:
         d = _spawn("from tares.cli import run_daemon; run_daemon()",
@@ -97,8 +96,8 @@ async def up(daemon=True):
 
 
 async def factory():
-    print("== a factory cell ==")
-    d, m = _start("factory")
+    print("== a cell ==")
+    d, m = _start()
     try:
         if not await up():
             ck("daemon and mcp up", False); return
@@ -111,6 +110,7 @@ async def factory():
         sn = await names({**ROOT, **st})
         ck("a station sees no building block either", not set(OBJECTS) & set(sn) and "list_tickets" in sn,
            str(sorted(set(OBJECTS) & set(sn))))
+        ck("a station sees the same list as a person", sorted(sn) == sorted(n), str(set(sn) ^ set(n)))
 
         started = await call("start_project", {"name": "alpha", "goal": "ship the thing"})
         ck("start_project makes a project", '"name": "alpha"' in started, started)
@@ -169,7 +169,7 @@ async def factory():
             {"path": "/tmp/alpha", "name": "acme/alpha"}]})
         ck("hand_project_to_crew records the hand-over", sent.startswith("Recorded") and "/tmp/alpha" in sent, sent)
 
-        ck("a bad key fails open to every tool and the call says 401",
+        ck("a bad key still lists every tool and the call says 401",
            set(OUTCOMES) <= set(await names({"Authorization": "Bearer nope"})))
         ck("what_needs_me reports an error from the daemon",
            (await call("what_needs_me", {}, {"Authorization": "Bearer nope"})).startswith("error 401"))
@@ -177,30 +177,14 @@ async def factory():
         _stop(m, d)
 
 
-async def platform():
-    print("== a cell with no edition ==")
-    d, m = _start("")
-    try:
-        if not await up():
-            ck("daemon and mcp up", False); return
-        n = await names()
-        want = {"start_project", "hand_project_to_crew"}
-        ck("every tool but the two home readers is listed", want <= set(n) and "list_tickets" in n,
-           str(sorted(want - set(n))))
-        ck("the two tools that read the factory home stay off", not {"what_needs_me", "how_is_project"} & set(n))
-        ck("and no building block", not set(OBJECTS) & set(n), str(sorted(set(OBJECTS) & set(n))))
-    finally:
-        _stop(m, d)
-
-
 async def unreachable():
     print("== the daemon is unreachable ==")
-    d, m = _start("factory", daemon=False)
+    d, m = _start(daemon=False)
     try:
         if not await up(daemon=False):
             ck("mcp up", False); return
         n = await names()
-        ck("it fails open to every tool", set(OUTCOMES) <= set(n) and "list_tickets" in n, str(n))
+        ck("it lists every tool", set(OUTCOMES) <= set(n) and "list_tickets" in n, str(n))
     finally:
         _stop(m, d)
 
@@ -209,82 +193,15 @@ def words():
     print("== the outcome tools follow the words list ==")
     from tares import mcp_server, words as w
     tools = {t.name: t for t in mcp_server.mcp._tool_manager.list_tools()}
-    ck("all four are registered", set(OUTCOMES) == set(mcp_server.FACTORY_TOOLS) <= set(tools))
-    bad = [(n, w.offenders(n) + w.offenders(tools[n].description or "")) for n in mcp_server.FACTORY_TOOLS]
+    ck("all four are registered", set(OUTCOMES) == set(mcp_server.OUTCOME_TOOLS) <= set(tools))
+    bad = [(n, w.offenders(n) + w.offenders(tools[n].description or "")) for n in mcp_server.OUTCOME_TOOLS]
     ck("no forbidden word or em dash in a name or description", not any(b for _, b in bad), str(bad))
     ck("the AI SRE tools are gone (TR-1809)", not set(SRE_OUTCOMES) & set(tools), str(sorted(set(SRE_OUTCOMES) & set(tools))))
 
 
-class _Resp:
-    def __init__(self, status, body):
-        self.status_code, self._body = status, body
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError(self.status_code)
-    def json(self):
-        return self._body
-
-
-async def unit():
-    print("== the surface cache, in process ==")
-    from tares import mcp_server as ms
-
-    calls = []
-    answer = {"r": _Resp(200, {"edition": "factory"})}
-
-    class FakeCx:
-        def __init__(self, *a, **k): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def get(self, url):
-            calls.append(url)
-            return answer["r"]
-
-    real = (ms._cx, ms.AUTH_TOKEN, ms._HTTP)
-    ms._cx = lambda *a, **k: FakeCx()
-    ms._HTTP = False
-    old_ttl = os.environ.get("TARES_MCP_SURFACE_TTL")
-    try:
-        os.environ["TARES_MCP_SURFACE_TTL"] = "30"
-        ms._SURFACES.clear(); ms.AUTH_TOKEN = "t1"
-        a = await ms._surface(); b = await ms._surface()
-        ck("a second look within the TTL reuses the answer", a == b == "factory" and len(calls) == 1, str(calls))
-        ms.AUTH_TOKEN = "t2"
-        await ms._surface()
-        ck("each token has its own answer", len(calls) == 2, str(calls))
-        os.environ["TARES_MCP_SURFACE_TTL"] = "0"
-        await ms._surface()
-        ck("a TTL of 0 asks every time", len(calls) == 3, str(calls))
-        os.environ["TARES_MCP_SURFACE_TTL"] = "junk"
-        await ms._surface()
-        ck("a TTL that is not a number falls back to 30 s", len(calls) == 3, str(calls))
-        os.environ["TARES_MCP_SURFACE_TTL"] = "30"
-        ms._SURFACES.clear()
-        for i in range(260):
-            ms.AUTH_TOKEN = f"k{i}"
-            await ms._surface()
-        ck("the cache is emptied past 256 tokens", len(ms._SURFACES) < 260, str(len(ms._SURFACES)))
-        ms._SURFACES.clear(); ms.AUTH_TOKEN = "t9"
-        answer["r"] = _Resp(401, {})
-        ck("a 401 gives the unknown edition and every tool", await ms._surface() == "")
-        ms._SURFACES.clear()
-        answer["r"] = _Resp(200, {"name": "x"})
-        ck("a body with no edition fails open", await ms._surface() == "")
-        ck("an unknown edition shows the factory tools", ms._visible("what_needs_me", "", False))
-    finally:
-        ms._cx, ms.AUTH_TOKEN, ms._HTTP = real
-        ms._SURFACES.clear()
-        if old_ttl is None:
-            os.environ.pop("TARES_MCP_SURFACE_TTL", None)
-        else:
-            os.environ["TARES_MCP_SURFACE_TTL"] = old_ttl
-
-
 async def main():
     words()
-    await unit()
     await factory()
-    await platform()
     await unreachable()
     print(f"\n{P} passed, {F} failed")
 

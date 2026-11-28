@@ -105,7 +105,6 @@ test_degraded
 test_deleted_private_cost
 test_docs
 test_duckdb_memory
-test_edition
 test_ee_headers
 test_ee_packaging
 test_factory_batch_reads
@@ -145,6 +144,7 @@ test_factory_setup_progress
 test_factory_start
 test_factory_start_joiner
 test_factory_start_show
+test_factory_startup
 test_factory_takeover
 test_factory_ticket_page
 test_factory_tickets
@@ -181,9 +181,9 @@ test_login
 test_login_json
 test_login_keyring
 test_mcp_auth
-test_mcp_editions
 test_mcp_ee_tools
 test_mcp_factory_tools
+test_mcp_outcome_tools
 test_mcp_remote
 test_mcp_station_headers
 test_memory_integration

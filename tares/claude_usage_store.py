@@ -97,7 +97,7 @@ class ClaudeUsageStore:
         first start, then those from a day before the newest row on (a version that did not count
         them may have run in between). Lock not needed (init). The usage rows are in the session
         store and the replies are events, so they are read from DuckDB and written there. The
-        factory edition reads the events once and records it (`claude_usage_filled`, TR-1613); the
+        events are read once and that is recorded (`claude_usage_filled`, TR-1613); the
         SYNTHETIC rows are removed and unpriced rows priced at every start, as before."""
         u = session_usage
         with self.sessions_db.read() as conn:

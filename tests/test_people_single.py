@@ -31,7 +31,6 @@ ROOT = "root-token-people-single"
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = ROOT
-os.environ["TARES_EDITION"] = "sre"   # the edition whose Start hide follows the person
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 

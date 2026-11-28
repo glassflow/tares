@@ -378,17 +378,10 @@ async def main():
                 ck("and key-a is not touched", (await ax.get("/api/home")).json()["start"]["show"] is True)
                 await rx.delete("/api/home/start/hide")
 
-        print("== other editions ==")
+        print("== the home ==")
         async with mk() as cx:
             body = (await cx.get("/api/home")).json()
-            ck("the factory home carries start", "start" in body and body["edition"] == "factory")
-            await cx.put("/api/settings/edition", json={"edition": "platform"})
-            r = await cx.post("/api/home/start/hide")
-            ck("hide on the platform edition answers ok", r.status_code == 200 and r.json() == {"ok": True}, r.text)
-            await cx.delete("/api/home/start/hide")
-            r = await cx.get("/api/home")
-            ck("platform still has no home", r.status_code == 404)
-            await cx.put("/api/settings/edition", json={"edition": "factory"})
+            ck("the home carries start", "start" in body and body["edition"] == "factory")
 
 
 units()

@@ -2,13 +2,13 @@
 Team.mcp_tools() are registered into EE_TOOLS and listed only while the licence allows ee.
 
   No ee team   EE_TOOLS is empty, _ee_on is never awaited, the tool list is what it was.
-  ee team      a fake team with one tool, ee_ping, is registered; it never joins FACTORY_TOOLS.
+  ee team      a fake team with one tool, ee_ping, is registered; it never joins OUTCOME_TOOLS.
   Not allowed  hidden from list_tools for a person and for a crew station; call_tool answers the
                licence text and does not run the tool.
-  Allowed      listed after the outcome tools of a factory cell; call_tool runs it.
+  Allowed      listed after the outcome tools; call_tool runs it.
   Safety       a tool named like a core tool is skipped; a team whose mcp_tools raises leaves
                EE_TOOLS empty; a tool that cannot be taken back stays in EE_TOOLS; a tool list
-               that raises is survived; _visible keeps its old answer with its default ee_on.
+               that raises is survived.
   _ee_on       the real one, with the daemon call stubbed: ee_allowed true and false, any error
                or a body without ee_allowed gives False, the TTL, one answer per token.
 
@@ -44,12 +44,6 @@ async def fake_ee_on():
     global ASKED
     ASKED += 1
     return ALLOWED
-
-
-def surface(edition):
-    async def _s():
-        return edition
-    return _s
 
 
 async def ee_ping() -> str:
@@ -91,7 +85,6 @@ def call(name):
 
 real_ee_on = ms._ee_on
 ms._ee_on = fake_ee_on
-ms._surface = surface("factory")
 
 print("== no ee team ==")
 base = names()
@@ -102,9 +95,6 @@ ASKED = 0
 after = names()
 ck("the tool list is what it was", after == base, str(set(after) ^ set(base)))
 ck("_ee_on is never awaited", ASKED == 0, str(ASKED))
-ck("_visible keeps its answer with the default ee_on",
-   ms._visible("what_needs_me", "platform", False) is False and ms._visible("what_needs_me", "", False) is True
-   and ms._visible("answer_question", "factory", False) is True)
 
 print("== a team that raises, a name clash ==")
 team_mod._set_ee_for_tests(Boom())
@@ -149,7 +139,7 @@ print("== an ee team with one tool ==")
 team_mod._set_ee_for_tests(FakeTeam([ee_ping]))
 ms._register_ee_tools()
 ck("EE_TOOLS is {ee_ping}", ms.EE_TOOLS == {"ee_ping"}, str(ms.EE_TOOLS))
-ck("ee_ping is in no core set", not ({"ee_ping"} & (ms.FACTORY_TOOLS | ms.FACTORY_ONLY)))
+ck("ee_ping is not an outcome tool", "ee_ping" not in ms.OUTCOME_TOOLS)
 
 ALLOWED = False
 n = names()
@@ -214,8 +204,8 @@ finally:
 ALLOWED = True
 n = names()
 ck("listed for a person while allowed", "ee_ping" in n)
-ck("after the outcome tools on a factory cell",
-   n[:4] == [t for t in n if t in ms.FACTORY_TOOLS][:4] and n.index("ee_ping") >= 4, str(n[:6]))
+ck("after the outcome tools",
+   n[:4] == [t for t in n if t in ms.OUTCOME_TOOLS][:4] and n.index("ee_ping") >= 4, str(n[:6]))
 os.environ["FACTORY_ROLE"] = "builder"
 ck("listed for a crew station while allowed", "ee_ping" in names())
 del os.environ["FACTORY_ROLE"]

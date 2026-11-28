@@ -1,15 +1,14 @@
 /*
- * Browser e2e for TR-728: the shell of the factory and sre editions. Header (mark, Tares, edition
- * name, workspace switcher, search, account button), the left menu with only the entries that have a
- * page and Settings last, the account menu, the narrow layout (a Menu button and a drawer) and the
- * platform edition keeping its old sidebar.
+ * Browser e2e for TR-728: the console's shell. Header (mark, Tares, the factory's name, workspace
+ * switcher, search, account button), the left menu with only the entries that have a page and Settings
+ * last, the account menu and the narrow layout (a Menu button and a drawer).
  *
- * Every edition is checked closed and with the account menu open at 1440 and 390 wide, and at 390
- * with the drawer open; each state runs the words check, the header overlap check and, where the
- * page has one read call, the one-call check. Platform is shot at both widths.
+ * It is checked closed and with the account menu open at 1440 and 390 wide, and at 390 with the drawer
+ * open; each state runs the words check, the header overlap check and, where the page has one read
+ * call, the one-call check. The AI SRE and platform shells went with the edition (TR-1813).
  *
- * Starts three scratch daemons with an empty cell each (TARES_EDITION factory, sre, platform) on
- * TARES_E2E_PORT (default 8835), +1 and +2, each with a fresh data directory, and stops only those.
+ * Starts a scratch daemon with an empty cell on TARES_E2E_PORT (default 8835), with a fresh data
+ * directory, and stops only that one.
  * Run:  npm run test:edition-shell     (builds first: the daemon serves ui/dist; tares installed in ../.venv or on PATH)
  * Set SHOTS_DIR to keep screenshots. TARES_E2E_CHROME points Playwright at another Chrome binary.
  */
@@ -26,7 +25,7 @@ const { checkWords, offendersIn } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8835);
 const SHOTS = process.env.SHOTS_DIR;
-const EDITIONS = ["factory", "sre", "platform"];
+const EDITIONS = ["factory"];   // one kind of cell (TR-1813)
 const base = (e) => `http://127.0.0.1:${PORT + EDITIONS.indexOf(e)}`;
 
 let pass = 0, fail = 0;
@@ -56,7 +55,7 @@ async function waitFor(url, tries = 150) {
   try {
     EDITIONS.forEach((e, i) => {
       homes[e] = fs.mkdtempSync(path.join(os.tmpdir(), `tares-edition-shell-${e}-`));
-      const env = { ...process.env, TARES_EDITION: e, TARES_HOME: homes[e], TARES_PORT: String(PORT + i),
+      const env = { ...process.env, TARES_HOME: homes[e], TARES_PORT: String(PORT + i),
                     TARES_MCP_PORT: String(PORT + 20 + i), TARES_UI_DIST: dist,
                     PYTHONPATH: REPO };   // the venv installs the main checkout; this runs the code under test
       for (const k of ["TARES_SLACK_BOT_TOKEN", "TARES_SLACK_SIGNING_SECRET", "TARES_SLACK_CONNECT_URL", "TARES_AUTH_TOKEN",
@@ -126,25 +125,13 @@ async function waitFor(url, tries = 150) {
 
     const expect = {
       factory: { name: "Software Factory", menu: ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Report", "Crew", "People", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
-      // The AI SRE menu grows as each screen merges (Services, Incidents, Timeline, Settings): the menu must
-      // keep the full order, start with Home, end with Settings and hold the entries that exist today.
-      // The exact list is pinned per screen ticket in edition-routes.e2e.cjs.
-      sre: { name: "AI SRE", order: ["Home", "Services", "Incidents", "Timeline", "Runbooks and memory", "Settings"],
-             must: ["Home", "Timeline", "Runbooks and memory", "Settings"], page: "/explore", call: null },
     };
-    // True when the menu is the edition's: the exact list for factory; for AI SRE a run of its full order
-    // with the entries that exist today and Home first, Settings last.
-    const menuIs = (e, items) => {
-      const x = expect[e];
-      if (x.menu) return items.join(",") === x.menu.join(",");
-      let at = -1;
-      const inOrder = items.every((t) => (at = x.order.indexOf(t, at + 1)) >= 0);
-      return inOrder && x.must.every((t) => items.includes(t)) && items[0] === "Home" && items[items.length - 1] === "Settings";
-    };
-    const menuText = (e) => expect[e].menu ? expect[e].menu.join(", ") : expect[e].must.join(", ") + " (in this order: " + expect[e].order.join(", ") + ")";
+    // True when the menu is the exact list.
+    const menuIs = (e, items) => items.join(",") === expect[e].menu.join(",");
+    const menuText = (e) => expect[e].menu.join(", ");
 
-    // 1. each edition at 1440: header, menu, the pages the menu leads to
-    for (const e of ["factory", "sre"]) {
+    // 1. at 1440: header, menu, the pages the menu leads to
+    for (const e of EDITIONS) {
       const { page, ctx } = await open(e, 1440);
       await visit(page, e, "/projects");
       const htext = await page.getByTestId("edition-header").innerText();
@@ -168,10 +155,6 @@ async function waitFor(url, tries = 150) {
         await page.locator('nav[aria-label="Main"]').getByRole("link", { name: label, exact: true }).click();
         await page.waitForLoadState("networkidle");
         ck(`${e}: ${label} lands on a page`, (await page.locator("main").innerText()).includes("does not exist") === false);
-        if (label === "Timeline") {
-          await page.getByRole("heading", { level: 1, name: "Timeline", exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
-          ck("sre: the Timeline row opens the Timeline page, not Explore", new URL(page.url()).pathname === "/timeline" && (await page.getByRole("heading", { level: 1, name: "Timeline", exact: true }).count()) === 1, `${page.url()} ${await page.locator("main h1").allInnerTexts()}`);
-        }
         await shellWords(page, `${e} ${label}`);
       }
       await ctx.close();
@@ -260,17 +243,8 @@ async function waitFor(url, tries = 150) {
          (await page.getByTestId("brand-mark").getAttribute("src")) === "/tares-mark.svg" && (await page.getByTestId("brand-word").innerText()).trim() === "tares");
       await ctx.close();
     }
-    {
-      // the AI SRE cell never reads the brain
-      const { page, ctx } = await open("sre", 1440);
-      const reads = trackReads(page);
-      await visit(page, "sre", expect.sre.page);
-      ck("sre: no read of /api/brain and no group names", !reads.includes("/api/brain") && (await page.locator('[data-testid^="menu-group-"]').count()) === 0, reads.join(","));
-      await ctx.close();
-    }
-
     // 2. closed and account menu open, at 1440 and 390; the drawer at 390
-    for (const e of ["factory", "sre"]) {
+    for (const e of EDITIONS) {
       for (const w of [1440, 390]) {
         const { page, ctx } = await open(e, w);
         const tag = `${e} ${w}`;
@@ -348,8 +322,8 @@ async function waitFor(url, tries = 150) {
       }
     }
 
-    // 3. narrower still: 360 wide, both editions
-    for (const e of ["factory", "sre"]) {
+    // 3. narrower still: 360 wide
+    for (const e of EDITIONS) {
       const { page, ctx } = await open(e, 360);
       await visit(page, e, expect[e].page);
       await fits(page, `${e} 360`);
@@ -357,7 +331,7 @@ async function waitFor(url, tries = 150) {
     }
 
     // 4. a person's key names the person; a key shows Sign out
-    for (const e of ["factory", "sre"]) {
+    for (const e of EDITIONS) {
       const { page, ctx } = await open(e, 1440, { key: true, who: "Alex Kim" });
       await visit(page, e, "/projects");
       ck(`${e}: the initials button shows the name's initials`, (await page.getByTestId("account-button").innerText()).trim() === "AK",
@@ -371,7 +345,7 @@ async function waitFor(url, tries = 150) {
     }
 
     // 5. search and Enter prefill the Ask dialog; the question is not sent
-    for (const e of ["factory", "sre"]) {
+    for (const e of EDITIONS) {
       const { page, ctx } = await open(e, 1440, { askKey: true });
       await visit(page, e, expect[e].page);
       const posts = [];
@@ -408,7 +382,7 @@ async function waitFor(url, tries = 150) {
       }));
       return { page, ctx };
     };
-    for (const e of ["factory", "sre"]) {
+    for (const e of EDITIONS) {
       const plain = await open(e, 1440);
       await visit(plain.page, e, expect[e].page);
       const plainHeight = await plain.page.getByTestId("edition-header").evaluate((el) => el.getBoundingClientRect().height);
@@ -431,32 +405,11 @@ async function waitFor(url, tries = 150) {
       ({ page, ctx } = await cloudPage(e, 390));
       await visit(page, e, expect[e].page);
       ck(`${e}: narrow, the header has no switcher`, (await page.locator('[data-testid="edition-header"] [data-testid="workspace-switcher"]').count()) === 0);
-      if (e === "sre") {
-        const cell = page.getByTestId("cell-name");
-        await cell.waitFor();
-        ck("sre: the cell name carries a title with the full name", (await cell.getAttribute("title")) === long);
-        ck("sre: it is cut short at 390 wide", await cell.evaluate((el) => el.scrollWidth > el.clientWidth));
-        ck("sre: the edition name is whole", await page.getByTestId("edition-name").evaluate((el) => el.scrollWidth <= el.clientWidth && el.clientWidth > 40));
-      }
       await fits(page, `${e} cloud 390`);
       await page.getByTestId("menu-button").click();
       ck(`${e}: narrow, the switcher is at the top of the menu`, await page.locator('nav[aria-label="Main"] [data-testid="workspace-switcher"]').isVisible());
       ck(`${e}: and keeps no margin of its own`, await page.locator('nav[aria-label="Main"] .ws-wrap').evaluate((el) => getComputedStyle(el).marginBottom === "0px"));
       await shellWords(page, `${e} cloud drawer`);
-      if (e === "sre") await shot(page, "sre-390-long-name.png");
-      await ctx.close();
-    }
-
-    // 7. the platform edition keeps its sidebar
-    for (const w of [1440, 390]) {
-      const { page, ctx } = await open("platform", w);
-      await page.goto(`${base("platform")}/projects`, { waitUntil: "networkidle" });
-      if (w === 1440) {
-        await page.locator(".sidebar").waitFor();
-        ck("platform: the old sidebar is there with Sources", await page.getByRole("link", { name: "Sources", exact: true }).isVisible());
-      }
-      ck(`platform ${w}: no edition header`, (await page.getByTestId("edition-header").count()) === 0);
-      await shot(page, `platform-${w}.png`);
       await ctx.close();
     }
   } finally {

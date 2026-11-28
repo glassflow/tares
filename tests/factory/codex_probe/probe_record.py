@@ -263,7 +263,7 @@ class Cell:
         for k in ("TARES_DB", "TARES_CATALOG", "TARES_FACTORY_URL", "TARESD_URL", "FACTORY_STATION", "FACTORY_ROLE"):
             env.pop(k, None)
         self.log = open(os.path.join(self.dir, "cell.log"), "ab")
-        self.proc = subprocess.Popen([tares, "up", "--port", str(self.port), "--data-dir", self.dir, "--edition", "factory"],
+        self.proc = subprocess.Popen([tares, "up", "--port", str(self.port), "--data-dir", self.dir],
                                      stdin=subprocess.DEVNULL, stdout=self.log, stderr=self.log, env=env, cwd=self.dir)
         for _ in range(240):
             try:

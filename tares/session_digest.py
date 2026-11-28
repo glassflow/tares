@@ -479,15 +479,11 @@ def _split(store, sources, since=None, until=None, key=None, need_full: bool = T
     from . import session_events
     if sources is not None and not sources:
         return None
-    # before DuckDB is read for `_duck_sources`, once, ask which edition this is. After that the
-    # statement for the born sessions asks it, and finds none in another edition.
     if not session_events._duck_state(store)["loaded"]:
-        if not session_read._factory(store):
-            return None
         session_events._duck_sources(store)
     sweep(store)
     with store.sessions_db.consistent_read() as c:
-        born = session_events._born(store, c, sources, since, until, key, factory=True)
+        born = session_events._born(store, c, sources, since, until, key)
         if not born:
             return None
         plan = load(store, c, [b for b in born if b.lines_complete], need_full)
@@ -784,13 +780,13 @@ def warm(store, stop: threading.Event | None = None) -> dict | None:
 
 
 def start(store) -> threading.Thread:
-    """Warm the digest in a background thread, in the factory edition. Nothing waits for it.
+    """Warm the digest in a background thread. Nothing waits for it.
     `Store.close` stops it."""
     stop = store._digest_stop = threading.Event()
 
     def run():
         try:
-            if stop.is_set() or not session_read._factory(store):
+            if stop.is_set():
                 return
             done = warm(store, stop)
             if done and done["sessions"]:

@@ -362,10 +362,6 @@ async def main():
                e["tickets"] == [] and e["projects"] == [] and e["total"] == 0 and e["counts"]["total"] == 0, e)
             for uid in (px, py, pz):
                 store.set_project_kind(uid, "software_factory")
-            r = await cx.put("/api/settings/edition", json={"edition": "platform"})
-            ck("the edition switches to platform", r.status_code == 200, r.text)
-            ck("the route is served on a platform cell too", (await get("")).status_code == 200)
-            await cx.put("/api/settings/edition", json={"edition": "factory"})
 
             print("== auth ==")
             async with cx_("wrong-token") as bad_cx:

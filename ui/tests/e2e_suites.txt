@@ -6,7 +6,6 @@ brain-connect
 brain-decisions
 brain-folders
 brain-repos
-choose-edition
 component-gallery
 connect
 crew-people

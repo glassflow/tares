@@ -593,14 +593,6 @@ async def main():
                pe["lead"] is not None and pe["can_set_lead"] is False and pe["can_add"] is False,
                {k: pe[k] for k in ("can_set_lead", "can_add")})
 
-            print("== a platform cell still serves the page ==")
-            r = await cx.put("/api/settings/edition", json={"edition": "platform"})
-            ck("the edition switches to platform", r.status_code == 200, r.text)
-            r = await cx.get(f"/api/factory/projects/{px}")
-            ck("the route is served on a platform cell too", r.status_code == 200 and r.json()["id"] == px,
-               r.status_code)
-            await cx.put("/api/settings/edition", json={"edition": "factory"})
-
 
 stages()
 pull_requests()

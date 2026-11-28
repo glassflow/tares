@@ -1,4 +1,4 @@
-"""The M1 drain (P-TR-295, TR-1665): in the factory edition, the ONE reader of claude_code lines in
+"""The M1 drain (P-TR-295, TR-1665): the ONE reader of claude_code lines in
 DuckDB's `events` once the one-time move is complete (`session_move.events_done`). Milestone 2, which
 drops those lines from DuckDB, deletes this file, `session_ingest._drain_pass`,
 `session_ingest.mark_drain_todo` and the two mark names.
@@ -58,8 +58,8 @@ def marked(store, limit: int = BATCH) -> list[str]:
 
 
 def drain(store, limit: int = BATCH, stop: threading.Event | None = None) -> int:
-    """Repair up to `limit` marked sessions. Returns how many it took: 0 outside the factory
-    edition, before the move is complete, and when none is marked."""
+    """Repair up to `limit` marked sessions. Returns how many it took: 0 before the move is
+    complete, and when none is marked."""
     if not session_move.events_done(store):
         return 0
     sids = marked(store, limit)
