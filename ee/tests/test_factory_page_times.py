@@ -83,14 +83,7 @@ DB_PROBE_FLOOR = 0.010                                # seconds; below this a da
 # that brings it down). A route absent from here must meet TARGET.
 OVER = {
     "sqlite": {},
-    "postgres": {
-        "project": (0.418, "TR-1727"),
-        "project_tickets": (0.448, "TR-1727"),
-        "tickets": (0.527, "TR-1727"),
-        "tickets_list": (0.527, "TR-1727"),
-        "project_big": (0.424, "TR-1727"),
-        "projects_list": (0.318, "TR-1727"),
-    },
+    "postgres": {},     # TR-1819 brought the last ones (project, tickets, projects_list) under TARGET
 }
 
 # What each route is, where the console asks for it, and what its answer must hold for the time to
