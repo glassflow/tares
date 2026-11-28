@@ -103,5 +103,5 @@ store.create_ticket(u, "tares", "Write the plan")
 pm = project("project-<i>m</i>", "A project whose name carries markup.")
 in_review(pm, "Tidy the nav", 31, hours=1)
 
-store.con.close()
+store.close()
 print(json.dumps(ids))

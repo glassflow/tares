@@ -142,5 +142,5 @@ store.upsert_rule_proposal("example-org/docs-site", "missing tests", py, "projec
                            ["T1", "T2"], now - timedelta(days=2))
 store.upsert_rule_proposal("example-org/service-a", "markup", None, "all", "Never merge <i>on a red check</i>.",
                            ["T9"], now - timedelta(hours=6))
-store.con.close()
+store.close()
 print(json.dumps(ids))

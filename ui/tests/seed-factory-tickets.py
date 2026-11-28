@@ -110,5 +110,5 @@ ticket(pm, 'Fix <b>bold</b> <img src=x onerror="window.__pwned=1"> in the header
 
 project("project-w", "A project with no tickets yet.")
 
-store.con.close()
+store.close()
 print(json.dumps(ids))

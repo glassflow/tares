@@ -23,5 +23,5 @@ store.insert_api_key("k_sam", "sam", "nvf_sam", hashlib.sha256(SAM_KEY.encode())
                      ["admin", "read"], person_id=sam["id"])   # the key the crew runs on
 store.set_setting(waiting_slack.LAST_READ, now.isoformat())
 store.mark_waiting_told(sam["id"], [waiting_slack.SEEN], False, now)
-store.con.close()
+store.close()
 print(json.dumps({"sam_key": SAM_KEY, "sam": sam["id"]}))

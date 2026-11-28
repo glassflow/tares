@@ -247,7 +247,7 @@ queued(b, third, 3, level="L3-review", ci_state="success", outside=True, merged_
 queued(b, older[0], 4)     # no record: it counts at the time the queue last wrote on it, now
 ids["merged"] = [factory.label(store.get_ticket(uid, tid))
                  for uid, tid in ((b, older[0]), (a, second), (a, first), (b, third))]
-store.con.close()
+store.close()
 
 
 def open_offers():
@@ -261,7 +261,7 @@ store = Store(home)
 offer = next(o for o in offers if o["repo"] == REPO and o["kind"] == "missing test")
 store.decide_rule_proposal(offer["id"], "accepted", offer["text"], now)
 report.rebuild_all(store)
-store.con.close()
+store.close()
 
 ids["monday"] = monday.isoformat()
 ids["old_monday"] = (monday - timedelta(weeks=20)).isoformat()

@@ -135,5 +135,5 @@ for name, hours in (("project-b1", 0.05), ("project-b2", 2), ("project-w", 26), 
     with store.sessions_db.begin() as c:
         c.execute(update(usecases).where(usecases.c.id == ids[name]).values(updated_at=moved))
         c.execute(update(tickets_table).where(tickets_table.c.project == ids[name]).values(updated_at=moved))
-store.con.close()
+store.close()
 print(json.dumps(ids))

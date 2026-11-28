@@ -819,7 +819,7 @@ from tares.store import Store
 s = Store(sys.argv[1])
 s.create_person("Alex", "alex@example.com")
 s.create_person("Kim", "kim@example.com")
-s.con.close()
+s.close()
 `, home2], { cwd: REPO, encoding: "utf8", env: { ...env, TARES_HOME: home2 } });
       const cloudEnv = { ...env, TARES_HOME: home2, TARES_PORT: String(PORT2), TARES_MCP_PORT: String(PORT2 + 1),
                          TARES_WORKSPACE_API_URL: `http://127.0.0.1:${FAKE_PORT}/api/workspaces/demo` };

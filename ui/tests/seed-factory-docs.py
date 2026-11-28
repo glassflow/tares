@@ -114,5 +114,5 @@ for key, days, who in (("project-x-spec", 20, "crew-orchestrator"), ("project-x-
     with store.sessions_db.begin() as c:
         c.execute(update(docs_table).where(docs_table.c.id == ids[key]).values(
             updated_at=datetime.now(timezone.utc) - timedelta(days=days), updated_by=who))
-store.con.close()
+store.close()
 print(json.dumps(ids))

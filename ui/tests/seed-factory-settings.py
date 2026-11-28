@@ -37,7 +37,7 @@ store.upsert_github_credential("main", "ghp_example", "token", "", "example-org"
 sam = store.create_person("Sam", email="sam@example.com")
 store.insert_api_key("k_sam", "sam", "nvf_sam", hashlib.sha256(SAM_KEY.encode()).hexdigest(),
                      ["admin", "read"], person_id=sam["id"])
-store.con.close()
+store.close()
 
 
 def call(path, body=None, method=None):
