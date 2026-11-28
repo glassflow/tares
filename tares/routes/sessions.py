@@ -9,10 +9,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .. import factory as factory_mod
-from .. import (
-    factory_api,
-    session_ingest,
-)
+from .. import factory_api, session_ingest
 from .. import metrics as _metrics
 from ..deps import Deps
 from ..envelope import now_utc

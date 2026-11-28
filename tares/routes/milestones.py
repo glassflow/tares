@@ -9,10 +9,7 @@ from fastapi import APIRouter, Body, Request
 from .. import answers as answers_mod
 from .. import docs as docs_mod
 from .. import factory as factory_mod
-from .. import (
-    factory_api,
-    milestone_summary,
-)
+from .. import factory_api, milestone_summary
 from .. import github_tickets as _gh_tickets
 from .. import linear as _linear
 from ..deps import Deps

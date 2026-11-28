@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from _env import scrub_os_environ
+from _routes import flat_routes
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-boot-guard-")
@@ -178,7 +179,7 @@ async def case_routes():
         ck("make_app returns", False, f"{type(e).__name__}: {e}")
         return
     ck("make_app returns", True)
-    paths = [getattr(r, "path", "") for r in app.routes]
+    paths = [getattr(r, "path", "") for r in flat_routes(app.routes)]
     ck("the half registered route is gone", HALF not in paths, paths[-6:])
     ck("... the fallback and the console catch-all are still there, catch-all last",
        PING[1] in paths and paths[-1] == "/{path:path}", paths[-4:])

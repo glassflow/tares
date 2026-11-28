@@ -12,10 +12,7 @@ from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
-from .. import (
-    factory_api,
-    slack_verify,
-)
+from .. import factory_api, slack_verify
 from .. import slack as slack_mod
 from ..deps import Deps
 from ..slack import SETTING_KEY as SLACK_TOKEN_SETTING

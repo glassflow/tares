@@ -17,11 +17,7 @@ from pydantic import BaseModel
 from .. import linear as _linear
 from .. import providers as providers_mod
 from ..deps import Deps
-from ..providers import (
-    DEFAULT_API_BASE,
-    resolve_anthropic_headers,
-    resolve_api_base,
-)
+from ..providers import DEFAULT_API_BASE, resolve_anthropic_headers, resolve_api_base
 from . import tickets as _tickets
 
 

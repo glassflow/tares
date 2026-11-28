@@ -10,17 +10,11 @@ import uuid
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .. import (
-    factory_home,
-    licence,
-)
+from .. import factory_home, licence
 from .. import providers as providers_mod
 from .. import team as team_mod
 from ..deps import Deps
-from ..providers import (
-    resolve_api_base,
-    resolve_provider,
-)
+from ..providers import resolve_api_base, resolve_provider
 from ..slack import resolve_token as resolve_slack_token
 
 

@@ -8,17 +8,13 @@ from functools import partial
 
 from fastapi import APIRouter, Body
 
-from .. import (
-    factory_api,
-)
+from .. import factory_api
 from .. import providers as providers_mod
 from .. import standup as standup_mod
 from ..deps import Deps
 from ..envelope import now_utc
 from ..models import add_usage, empty_usage
-from ..providers import (
-    resolve_provider,
-)
+from ..providers import resolve_provider
 
 
 async def summarise(deps: Deps, report: dict, timeout: int | None = None) -> tuple[dict | None, str | None]:

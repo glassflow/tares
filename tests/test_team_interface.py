@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from _env import scrub_os_environ
+from _routes import flat_routes
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-team-")
@@ -317,7 +318,7 @@ async def routes_with_ee():
     team_mod._set_ee_for_tests(FakeEeTeam())
     team_mod.FALLBACKS[:] = [PING, GONE]
     app = make_app()
-    paths = [getattr(r, "path", "") for r in app.routes]
+    paths = [getattr(r, "path", "") for r in flat_routes(app.routes)]
     ping_at = paths.index("/api/ee-ping")
     gone_at = paths.index("/api/ee-gone")
     catch_at = paths.index("/{path:path}")

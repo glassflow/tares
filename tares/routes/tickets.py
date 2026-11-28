@@ -11,9 +11,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 from .. import docs as docs_mod
 from .. import factory as factory_mod
-from .. import (
-    factory_api,
-)
+from .. import factory_api
 from .. import github_tickets as _gh_tickets
 from .. import linear as _linear
 from .. import team as team_mod

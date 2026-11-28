@@ -7,10 +7,7 @@ from fastapi import APIRouter, Body, Request
 
 from .. import docs as docs_mod
 from .. import factory as factory_mod
-from .. import (
-    factory_api,
-    memory_route,
-)
+from .. import factory_api, memory_route
 from ..deps import Deps
 from ..integrations.builtin import memory_tares
 

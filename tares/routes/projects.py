@@ -9,11 +9,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from .. import factory as factory_mod
-from .. import (
-    factory_home,
-    request_memo,
-    timeline,
-)
+from .. import factory_home, request_memo, timeline
 from ..deps import Deps
 from ..factory_projects import ProjectError
 

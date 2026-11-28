@@ -5,10 +5,7 @@ import asyncio
 
 from fastapi import APIRouter, Request
 
-from .. import (
-    factory_home,
-    request_memo,
-)
+from .. import factory_home, request_memo
 from ..deps import Deps
 
 

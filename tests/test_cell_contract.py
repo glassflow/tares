@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from _env import clean_env, scrub_os_environ
+from _routes import flat_routes
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-cell-contract-")
@@ -120,16 +121,6 @@ RETIRED = [
 
 def _concrete(path: str) -> str:
     return path.replace("{x}", "contract-x")
-
-
-def flat_routes(routes):
-    """Every route of the app in matching order. A router the app includes is one entry of
-    app.routes in newer FastAPI (its routes stay on the router), and its routes copied in older."""
-    for r in routes:
-        if hasattr(r, "original_router"):
-            yield from flat_routes(r.original_router.routes)
-        else:
-            yield r
 
 
 def check_routes():
