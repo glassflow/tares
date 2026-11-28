@@ -405,7 +405,7 @@ async def create_project(name: str, goal: str = "") -> str:
     what it is for. Then write its docs with write_doc and its tickets (write_ticket; when they
     live in Linear or GitHub, link_tickets first).
     Returns the project's id and name."""
-    body = {"template": "custom", "kind": "software_factory", "name": name.strip(), "objects": [],
+    body = {"kind": "software_factory", "name": name.strip(),
             **({"goal": goal.strip()} if goal.strip() else {})}
     async with _cx(15) as cx:
         r = await cx.post(f"{TARESD}/api/projects", json=body)

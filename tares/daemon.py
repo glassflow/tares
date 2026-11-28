@@ -27,11 +27,10 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse,
                                Response)
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 from . import loop as loop_mod
 from .host import Host
-from .projects.icon import normalize_icon
 from .envelope import now_utc
 from .models import add_usage, empty_usage
 from .providers import (DEFAULT_API_BASE, resolve_anthropic_headers, resolve_api_base,
@@ -59,7 +58,7 @@ from . import slack_verify
 from . import timeline
 from .slack import SETTING_KEY as SLACK_TOKEN_SETTING, resolve_token as resolve_slack_token
 from .store import ReadExclude, Store, StoreUnavailable
-from .projects import Engine as ProjectEngine, ProjectError
+from .factory_projects import Projects, ProjectError
 
 SLACK_TEAM_SETTING = "slack_team"   # JSON {id, name}: the Slack team the bot token belongs to
 
@@ -108,12 +107,6 @@ LOGOUT_URL = os.getenv("TARES_LOGOUT_URL", "").strip()
 # resolve_slack_token(store): env TARES_SLACK_BOT_TOKEN wins over the console-stored value
 # (infrastructure wiring, not a metered credential — see the note on resolve_token).
 
-# Seed a project on first boot (additive, env-gated): the named template is created once, so a
-# hosted cell is born with its demo already running instead of an empty system. A settings
-# marker makes it one-shot — deleting the project never resurrects it. Meaningful for a
-# self-hoster building a golden image too; harmlessly unset otherwise.
-# TARES_SEED_USECASE is the old name, accepted until two releases after 1.14.
-SEED_PROJECT = (os.getenv("TARES_SEED_PROJECT", "") or os.getenv("TARES_SEED_USECASE", "")).strip()
 
 
 _STARTED_MONO = time.monotonic()
@@ -311,32 +304,19 @@ def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
 
 
 class ProjectIn(BaseModel):
-    template: str = ""
-    name: str = ""         # defaults to the template title
-    params: dict = {}
-    objects: list | None = None   # template "custom": the objects, each {kind, name}
-    goal: str | None = None       # one line, at most 200 characters; none = the template's GOAL
+    # `template`, `params` and `objects` are accepted and ignored: a project has no template
+    # since Tares 2.0 (TR-1812), and older clients still send them
+    name: str = ""
+    goal: str | None = None       # one line, at most 200 characters
     kind: str | None = None       # "software_factory" for a project a spec session makes
     icon: str | None = None       # one emoji shown beside the name; none = no icon
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_recipe(cls, data):
-        # `recipe` is the pre-1.14 name of the field; accepted until two releases after 1.14
-        if isinstance(data, dict) and not data.get("template") and data.get("recipe"):
-            data = {**data, "template": data["recipe"]}
-        return data
-
 
 class ProjectUpdate(BaseModel):
-    params: dict = {}
     name: str = ""         # blank = unchanged
-    objects: list | None = None   # template "custom": the new object list
-    # the project's goal; left out = unchanged, "" or null = cleared. A body that sets only the
-    # goal changes nothing else, and is the one edit the default project takes.
+    # the project's goal; left out = unchanged, "" or null = cleared
     goal: str | None = None
-    # the project's icon, one emoji; left out = unchanged, "" or null = removed. Like the goal, a
-    # body that sets only the icon changes nothing else.
+    # the project's icon, one emoji; left out = unchanged, "" or null = removed
     icon: str | None = None
 
 
@@ -410,38 +390,6 @@ class SlackTeamIn(BaseModel):
     team_name: str = ""
 
 
-def _seed_project(store, projects) -> None:
-    """Create TARES_SEED_PROJECT's project once, on the first boot that carries the var, and only
-    on a new cell: one with no project besides the default. A cell that already has projects (a
-    cell that already ran gets the var on its next upgrade) is not given the demo; it
-    records the skip, so it never seeds later. The `seeded_project` settings marker (`seeded_usecase` before 1.14) is the one-shot record: it is written after the attempt
-    (success or failure), so a user who deletes the seeded project never gets it back on a pod
-    restart. An unknown template key writes NO marker — a config typo stays fixable by fixing the
-    config. Never raises: a failed seed is a log line, not a dead cell."""
-    if not SEED_PROJECT:
-        return
-    if store.get_setting("seeded_project") or store.get_setting("seeded_usecase"):
-        return
-    from .projects.registry import list_templates
-    # a listed template, or custom: an empty project (the only seed that needs no parameters since
-    # the challenger workflow template went, TR-1810)
-    if SEED_PROJECT not in {r.key for r in list_templates()} | {"custom"}:
-        print(f"taresd: TARES_SEED_PROJECT names unknown template {SEED_PROJECT!r}; not seeded")
-        return
-    if any(u.get("recipe") != "default" for u in store.list_projects()):
-        print(f"taresd: not seeding project {SEED_PROJECT!r}: this cell already has projects")
-        store.set_setting("seeded_project", SEED_PROJECT)
-        return
-    try:
-        # a hand-assembled (custom) project needs a name; every other template names itself
-        inst = projects.create(SEED_PROJECT, params={},
-                               name="Seeded project" if SEED_PROJECT == "custom" else None)
-        print(f"taresd: seeded project {SEED_PROJECT!r} ({inst['id']})")
-    except Exception as e:
-        print(f"taresd: seeding project {SEED_PROJECT!r} failed: {type(e).__name__}: {e}")
-    store.set_setting("seeded_project", SEED_PROJECT)
-
-
 def make_app() -> FastAPI:
     try:
         # TARES_STATE_DSN (a cloud cell): the state lives in that Postgres database, the events
@@ -473,8 +421,7 @@ def make_app() -> FastAPI:
     # first trigger and page do not wait for it (TR-1695)
     session_digest.start(store)
 
-    projects = ProjectEngine(store)
-    _seed_project(store, projects)
+    projects = Projects(store)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -2101,29 +2048,13 @@ def make_app() -> FastAPI:
         thread_ts = (form.get("thread_ts") or "").strip() or None
         return slack_mod.build_error(slack_mod.ASK_GONE_NOTE, thread_ts)
 
-    # ── management API: projects (templates instantiated with params) ─────────
-    # A project creates and owns ordinary objects; those stay editable and deletable on their own
-    # pages. These routes are the instance's lifecycle and its combined view.
+    # ── management API: projects (tares/factory_projects.py) ─────────────────
     def _uc_err(e: Exception):
         if isinstance(e, KeyError):
             _err(e, 404)
         if isinstance(e, (ProjectError, ValueError)):
             _err(e, 400)
         raise e
-
-    @app.get("/api/projects/templates")
-    def project_templates():
-        return {"templates": projects.list_templates()}
-
-    # By key, hidden templates included (custom and default): the Edit page of a project still
-    # renders its form from it.
-    @app.get("/api/projects/templates/{key}")
-    def project_template(key: str):
-        from .projects.registry import get_template
-        try:
-            return get_template(key).describe()
-        except ProjectError:
-            _err(KeyError(f"unknown template {key!r}"), 404)
 
     def _project_card(uid: str) -> dict:
         """What a project key is told about its project: who it is and what it is made of, not
@@ -2170,23 +2101,14 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects", status_code=201)
     def create_project(body: ProjectIn, request: Request):
-        if body.kind not in (None, "", "software_factory"):
-            _err(ValueError(f"unknown project kind {body.kind!r}; the one there is: "
-                            "software_factory"))
-        try:
-            params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            out = projects.create(body.template, params, name=body.name or None, goal=body.goal,
-                                  icon=body.icon)
-        except Exception as e:
-            _uc_err(e)
         # the person who makes a project leads it; the system credential is no person, so a
         # project it makes has no lead until an admin claims it
         person = _current_person(request)
-        if person:
-            store.set_project_lead(out["id"], person["id"])
-        if body.kind:
-            store.set_project_kind(out["id"], body.kind)
-        return projects.get(out["id"])
+        try:
+            return projects.create(body.name, goal=body.goal, icon=body.icon, kind=body.kind,
+                                   lead_person_id=person["id"] if person else None)
+        except Exception as e:
+            _uc_err(e)
 
     @app.get("/api/projects/{uid}")
     def get_project(uid: str, request: Request):
@@ -2200,51 +2122,30 @@ def make_app() -> FastAPI:
 
     @app.put("/api/projects/{uid}")
     def update_project(uid: str, body: ProjectUpdate):
+        """Change the name, the goal or the icon; what the body leaves out stays as it is."""
         _project_or_404(uid)
         given = body.model_fields_set
+        kw = {k: getattr(body, k) for k in ("goal", "icon") if k in given}
         try:
-            if "icon" in given:     # before anything is written: a wrong icon changes nothing
-                normalize_icon(body.icon)
-            if {"goal", "icon"} & given and not ({"params", "objects"} & given) and not body.name.strip():
-                out = projects.set_goal(uid, body.goal) if "goal" in given else None
-                if "icon" in given:
-                    out = projects.set_icon(uid, body.icon)
-                    factory_home.clear_cache()   # Home keeps its answer for a few seconds
-                return out
-            params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            out = projects.update(uid, params)
-            if "goal" in given:
-                projects.set_goal(uid, body.goal)
-                out = {**projects.get(uid), "report": out["report"]}
-            if "icon" in given:
-                projects.set_icon(uid, body.icon)
-                factory_home.clear_cache()
-                out = {**projects.get(uid), "report": out["report"]}
-            if body.name.strip():
-                store.update_project(uid, name=body.name.strip())
-                factory_home.clear_cache()
-                out = {**projects.get(uid), "report": out["report"]}
-            return out
+            out = projects.update(uid, name=body.name, **kw)
         except Exception as e:
             _uc_err(e)
+        if body.name.strip() or "icon" in given:
+            factory_home.clear_cache()   # Home keeps its answer for a few seconds
+        return out
 
     @app.delete("/api/projects/{uid}")
-    def delete_project(uid: str, purge_events: bool = False, delete_sources: str = ""):
-        """Deletes the project. `purge_events` and `delete_sources` stay for old clients: a project
-        holds no sources since the catalog went, so `all` and `none` name nothing."""
+    def delete_project(uid: str):
         _project_or_404(uid)
-        chosen = [x.strip() for x in delete_sources.split(",")
-                  if x.strip() and x.strip() not in ("none", "all")]
         try:
-            out = projects.delete(uid, purge_events=purge_events, delete_sources=chosen)
+            out = projects.delete(uid)
         except Exception as e:
             _uc_err(e)
         factory_home.clear_cache()
         return out
 
     @app.post("/api/projects/{uid}/pause")
-    def pause_project(uid: str, body: dict | None = Body(default=None)):
-        """The project is marked paused (a body is accepted and ignored, for old clients)."""
+    def pause_project(uid: str):
         _project_or_404(uid)
         try:
             return projects.pause(uid)
@@ -3686,27 +3587,6 @@ def make_app() -> FastAPI:
         if len(name) > 64:
             _err(ValueError("name is at most 64 characters"))
         return _make_key(name, sorted(_PROJECT_SCOPES), uid)
-
-    # /api/usecases*: the pre-1.14 routes, same handlers, old response shape ({"usecases"},
-    # {"recipes"}, and `recipe` on an instance, which get() still emits). Not in the schema;
-    # removed two releases after 1.14.
-    async def legacy_recipes():
-        return {"recipes": projects.list_templates()}
-
-    async def legacy_list():
-        return {"usecases": projects.list()}
-
-    for _path, _fn, _methods, _status in (
-            ("/api/usecases/recipes", legacy_recipes, ["GET"], 200),
-            ("/api/usecases", legacy_list, ["GET"], 200),
-            ("/api/usecases", create_project, ["POST"], 201),
-            ("/api/usecases/{uid}", get_project, ["GET"], 200),
-            ("/api/usecases/{uid}", update_project, ["PUT"], 200),
-            ("/api/usecases/{uid}", delete_project, ["DELETE"], 200),
-            ("/api/usecases/{uid}/pause", pause_project, ["POST"], 200),
-            ("/api/usecases/{uid}/resume", resume_project, ["POST"], 200),
-            ("/api/usecases/{uid}/summary", project_summary, ["GET"], 200)):
-        app.add_api_route(_path, _fn, methods=_methods, status_code=_status, include_in_schema=False)
 
     # ── metering ──────────────────────────────────────────────────────────────
     @app.get("/api/usage")

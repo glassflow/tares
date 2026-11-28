@@ -132,6 +132,7 @@ test_factory_plan
 test_factory_pr_sync
 test_factory_project_github
 test_factory_project_page
+test_factory_projects
 test_factory_projects_page
 test_factory_repomap
 test_factory_repos
@@ -220,7 +221,6 @@ test_project_access_single
 test_project_icon
 test_project_keys
 test_project_later
-test_projects
 test_projects_activity
 test_recording_person
 test_recurring_reads
@@ -239,8 +239,6 @@ test_runtime_codex
 test_runtime_launch
 test_schema_compat
 test_schema_compat_guards
-test_seed
-test_seed_new_cell_only
 test_session_archive
 test_session_copy_start
 test_session_digest

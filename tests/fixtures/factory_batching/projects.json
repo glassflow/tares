@@ -26,13 +26,9 @@
     "total": 10
    },
    "ready_to_close": false,
-   "recipe": "custom",
-   "recipe_title": "From existing objects",
    "scope": "team",
-   "setup": null,
    "status": "active",
-   "template": "custom",
-   "template_title": "From existing objects"
+   "template": "custom"
   },
   {
    "default": false,
@@ -60,13 +56,9 @@
     "total": 30
    },
    "ready_to_close": false,
-   "recipe": "custom",
-   "recipe_title": "From existing objects",
    "scope": "team",
-   "setup": null,
    "status": "active",
-   "template": "custom",
-   "template_title": "From existing objects"
+   "template": "custom"
   },
   {
    "default": false,
@@ -94,13 +86,9 @@
     "total": 3
    },
    "ready_to_close": false,
-   "recipe": "custom",
-   "recipe_title": "From existing objects",
    "scope": "team",
-   "setup": null,
    "status": "active",
-   "template": "custom",
-   "template_title": "From existing objects"
+   "template": "custom"
   },
   {
    "default": false,
@@ -118,13 +106,9 @@
     "objects": []
    },
    "ready_to_close": false,
-   "recipe": "custom",
-   "recipe_title": "From existing objects",
    "scope": "team",
-   "setup": null,
    "status": "active",
-   "template": "custom",
-   "template_title": "From existing objects"
+   "template": "custom"
   }
  ]
 }

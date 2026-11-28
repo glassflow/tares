@@ -8,7 +8,7 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 - `tares/` the package: `daemon.py` (HTTP API + console), `cli.py` (`tares up`, `tares mcp`),
   `store.py` (DuckDB), `providers.py` and `models.py` (the model provider layer the
   standup, milestone and report summaries call), `mcp*.py` (the MCP proxy),
-  `projects/` (a project's row: custom projects and the cell's default project).
+  `factory_projects.py` (a project's row and its lifecycle).
 - `ui/` the console, a Vite + React app. The daemon serves `ui/dist` and the wheel bundles it.
 - `ee/` the enterprise code, the package `tares_ee`, under `ee/LICENSE`. It is loaded through the
   `tares.ee` entry point group and never imported by `tares/`.
@@ -149,7 +149,6 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507); default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
 | `TARES_EDITION` | the cell's edition on its first start: factory, sre or platform; after that the value saved in the cell wins and Settings, Edition changes it |
-| `TARES_SEED_PROJECT` | `custom` seeds an empty project on a brand-new cell, one with no projects yet; otherwise skipped (`TARES_SEED_USECASE` still read) |
 | `TARES_WEBHOOK_ALLOW_PRIVATE` | let an integration's URL point at an internal address (loopback, private, link-local); off by default |
 | `TARES_TRACING_ENABLED` | station telemetry on/off: where the crew stations' Claude Code sends its OTLP logs, traces and metrics (the monitoring choice saved on the cell wins over it) |
 | `TARES_TRACING_PROVIDER`, `TARES_TRACING_ENDPOINT` | the station telemetry backend: `rius` (endpoint preset) or `otlp` (any OTLP/HTTP endpoint) |
