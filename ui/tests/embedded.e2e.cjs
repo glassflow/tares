@@ -6,8 +6,8 @@
  * The mode lasts for the tab (sessionStorage), across moves inside the console and a reload.
  * A browser visit with no params is unchanged, and ?embed= with another value leaves the mode.
  *
- * Starts two scratch daemons with an empty cell each (TARES_EDITION factory, platform) on
- * TARES_E2E_PORT (default 8871) and +1, each with a fresh data directory, and stops only those.
+ * Starts one scratch daemon with an empty cell on
+ * TARES_E2E_PORT (default 8871), with a fresh data directory, and stops only that one.
  * Run:  npm run build && TARES_E2E_PORT=<free port> node tests/embedded.e2e.cjs
  * Set SHOTS_DIR to keep screenshots. TARES_E2E_CHROME points Playwright at another Chrome binary.
  */
@@ -23,7 +23,7 @@ const { chromium } = require("./browser.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8871);
 const SHOTS = process.env.SHOTS_DIR;
-const EDITIONS = ["factory", "platform"];
+const EDITIONS = ["factory"];   // the platform console went with TR-1813
 const base = (e) => `http://127.0.0.1:${PORT + EDITIONS.indexOf(e)}`;
 
 let pass = 0, fail = 0;
@@ -179,25 +179,6 @@ async function waitFor(url, tries = 150) {
       await page.getByTestId("edition-menu").waitFor();
       ck("embedded 390: the drawer opens with the pages", await page.getByTestId("edition-menu").getByTestId("menu-tickets").isVisible());
       await shot(page, "embedded-390.png");
-      await ctx.close();
-    }
-
-    // 5. the platform edition: its sidebar keeps the pages and loses brand, theme switch and Sign out
-    {
-      const { page, ctx } = await open(1440, "dark");
-      await go(page, "platform", "/projects");
-      await page.locator(".sidebar").waitFor();
-      ck("platform browser: brand, theme switch and Sign out are there",
-         (await page.locator(".sidebar .brand").count()) === 1
-         && (await page.locator('.sidebar [title="Toggle light / dark"]').count()) === 1 && (await signOuts(page)) === 1);
-      await go(page, "platform", "/projects?embed=desktop&theme=light");
-      await page.locator(".sidebar").waitFor();
-      ck("platform embedded: no brand, no theme switch, no Sign out",
-         (await page.locator(".sidebar .brand").count()) === 0
-         && (await page.locator('.sidebar [title="Toggle light / dark"]').count()) === 0 && (await signOuts(page)) === 0);
-      ck("platform embedded: the pages stay", await page.getByRole("link", { name: "Sources", exact: true }).isVisible());
-      ck("platform embedded: the desktop's theme is painted", (await attr(page, "data-theme")) === "light");
-      await shot(page, "platform-embedded-1440.png");
       await ctx.close();
     }
   } finally {

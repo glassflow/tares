@@ -2,9 +2,9 @@
  * Browser e2e for the licence line (TR-927). When the cell answers a team action with 402
  * `licence_required`, the console shows <LicenceNeeded> (a short line and a link to the enterprise
  * licence page) and never the raw answer.
- *  - Settings, People on a platform cell: Add person.
- *  - People on a factory cell: Add.
- *  - A licensed cell whose licence read fails: People and Settings Access say the cell did not answer, never that a
+ *  - Settings, People: Add person.
+ *  - People: Add.
+ *  - A licensed cell whose licence read fails: People and Settings, People say the cell did not answer, never that a
  *    licence is needed (#507 F1), at 1440 and 390, early and late.
  *  - Settings, Workspace on Tares Cloud: Invite. A cell with no licence shows the line in place of the invite
  *    form; a licensed one shows the form, and an invite the workspace refuses with 402 shows the line.
@@ -15,6 +15,7 @@
  *    shows the plain line and a self-hosted cell its words and link; with /health failing the words stay plain;
  *    a refusal answered before /health lands never says licence on a Tares Cloud cell. What request() carries out
  *    of a 402 before /health is checked without a browser in licence-words.e2e.cjs.
+ * A cell has no edition since TR-1813: every cell here is the one kind there is, self-hosted or on Tares Cloud.
  * The control plane is made up too: the cell's workspace address is on its own origin and page.route answers it.
  * The answers are made up with page.route, so the suite does not depend on which routes the daemon
  * has moved out of core.
@@ -41,9 +42,9 @@ const ck = (label, cond, detail = "") => {
 // Licensed daemons (tests/licensed.cjs): the add forms are the licence's, so they show only on a cell that has
 // one; the 402 here is the licence running out while the page is open.
 process.setMaxListeners(30);   // one exit listener per cell started
-async function startCell(port, edition, licence = "valid", cloud = false) {
+async function startCell(port, licence = "valid", cloud = false) {
   const env = cloud ? { TARES_WORKSPACE_API_URL: `http://127.0.0.1:${port}/api/ws` } : undefined;
-  const d = await startDaemon({ port, edition, licence, env });
+  const d = await startDaemon({ port, licence, env });
   process.on("exit", () => d.stop());
   return d;
 }
@@ -99,16 +100,6 @@ async function checkPlain(page, label, what) {
   const body = await page.locator("body").innerText();
   ck(`${label}: no licence words or raw answer in the page`, !/enterprise licence|needs a licence|licence_required|\{"code"/i.test(body), body.slice(0, 300));
 }
-async function checkPlainPage(page, label) {
-  const note = page.getByTestId("licence-needed");
-  await note.first().waitFor({ timeout: 15000 });
-  await page.waitForTimeout(1500);
-  const text = (await note.first().innerText()).trim();
-  ck(`${label}: the page note is plain`, text === "Teams are not available on this workspace right now.", text);
-  ck(`${label}: it names no licence, key or enterprise`, !BAD.test(text), text);
-  ck(`${label}: it has no link`, (await note.first().locator("a").count()) === 0);
-  ck(`${label}: no link to the enterprise page on the page`, (await page.locator('a[href*="docs.glassflow.ai/tares/enterprise"]').count()) === 0);
-}
 
 // a home with one grant to agree to, so Agree on a cell without the team's part shows what is missing
 const GRANT = { id: "grant-1", kind: "grant", label: "Grant", title: "Agree to merge to acme/web", detail: "Kim asks to merge.",
@@ -126,35 +117,29 @@ async function fakeHome(page) {
 }
 
 (async () => {
-  let platform, factory, cloudBare, cloudLicensed, selfFactoryNone, selfPlatNone, cloudExpired, cloudPlatNone, cloudPlatExpired, selfSreNone;
+  let factory, cloudBare, cloudLicensed, selfFactoryNone, cloudExpired;
   try {
-    platform = await startCell(PORT, "platform");
-    factory = await startCell(PORT + 2, "factory");   // each takes its port and the next (MCP)
-    cloudBare = await startCell(PORT + 4, "factory", "none", true);
-    cloudLicensed = await startCell(PORT + 6, "factory", "valid", true);
-    selfFactoryNone = await startCell(PORT + 8, "factory", "none");
-    selfPlatNone = await startCell(PORT + 10, "platform", "none");
-    cloudExpired = await startCell(PORT + 12, "factory", "expired", true);
-    cloudPlatNone = await startCell(PORT + 14, "platform", "none", true);
-    cloudPlatExpired = await startCell(PORT + 16, "platform", "expired", true);
-    selfSreNone = await startCell(PORT + 18, "sre", "none");
+    factory = await startCell(PORT);   // each takes its port and the next (MCP)
+    cloudBare = await startCell(PORT + 2, "none", true);
+    cloudLicensed = await startCell(PORT + 4, "valid", true);
+    selfFactoryNone = await startCell(PORT + 6, "none");
+    cloudExpired = await startCell(PORT + 8, "expired", true);
   } catch (e) { console.log("FAIL daemons did not start: " + e.message); process.exit(1); }
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
   try {
-    // platform: Settings, People, Add person
+    // Settings, People, Add person
     {
       const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
       await refuse(page, "POST", "**/api/people");
-      await page.goto(`${platform.base}/settings?tab=access`);
-      await page.getByRole("heading", { name: "People" }).waitFor({ timeout: 15000 });
-      await page.getByRole("button", { name: "Add person" }).first().click();
+      await page.goto(`${factory.base}/settings?tab=people`);
+      await page.getByRole("button", { name: "Add person" }).first().click({ timeout: 15000 });
       await page.getByRole("textbox", { name: "name", exact: true }).fill("Sam S");
       await page.getByRole("textbox", { name: "email", exact: true }).fill("sam@example.com");
       await page.getByRole("button", { name: "Add person" }).last().click();
       await checkLine(page, "settings people", "Adding people");
       await page.context().close();
     }
-    // factory: People, Add
+    // People, Add
     {
       const page = await (await browser.newContext({ viewport: { width: 390, height: 900 } })).newPage();
       await refuse(page, "POST", "**/api/factory/people");
@@ -210,17 +195,6 @@ async function fakeHome(page) {
       { const p = await page(); await fakeCloud(p, { status: 200, body: {} });
         await p.goto(`${cloudBare.base}/settings?tab=people`); await p.getByTestId("team-row").first().waitFor({ timeout: 15000 });
         await checkPlain(p, "cloud, no licence, Settings People", "Inviting people"); await p.context().close(); }
-      // a page for teams only (Areas), on a platform cell with no licence
-      { const p = await page(); await fakeCloud(p, { status: 200, body: {} });
-        await p.goto(`${cloudPlatNone.base}/settings?tab=areas`);
-        await checkPlainPage(p, "cloud, no licence, Areas page"); await p.context().close(); }
-      { const p = await page(390); await fakeCloud(p, { status: 200, body: {} });
-        await p.goto(`${cloudPlatNone.base}/settings?tab=areas`);
-        await checkPlainPage(p, "cloud, no licence, Areas page @390"); await p.context().close(); }
-      // Settings, Access on a platform cell with no licence
-      { const p = await page(); await fakeCloud(p, { status: 200, body: {} });
-        await p.goto(`${cloudPlatNone.base}/settings?tab=access`); await p.getByTestId("you-row").waitFor({ timeout: 15000 });
-        await checkPlain(p, "cloud platform, no licence, Settings Access", "Adding people"); await p.context().close(); }
       // an agree the cell cannot take (the team's part is not there): the row says so in plain words
       { const p = await page(); await fakeCloud(p, { status: 200, body: {} }); await fakeHome(p);
         await p.goto(`${cloudBare.base}/`, { waitUntil: "load" });
@@ -241,27 +215,11 @@ async function fakeHome(page) {
         await p.goto(`${cloudExpired.base}/settings?tab=people`); await p.locator("#ws-invite").waitFor({ timeout: 15000 });
         await p.locator("#ws-invite").fill("sam@example.com"); await p.locator("#ws-invite").press("Enter");
         await checkPlain(p, "cloud, ended licence, Workspace invite refused", "Inviting people"); await p.context().close(); }
-      // a licence that ended: an add the cell itself refuses (402 on POST /api/people), as the cell words it
-      { const p = await page(); await fakeCloud(p, { status: 200, body: {} }); await refuse(p, "POST", "**/api/people");
-        await p.goto(`${cloudPlatExpired.base}/settings?tab=access`);
-        await p.getByRole("button", { name: "Add person" }).first().click();
-        await p.getByRole("textbox", { name: "name", exact: true }).fill("Sam S");
-        await p.getByRole("textbox", { name: "email", exact: true }).fill("sam@example.com");
-        await p.getByRole("button", { name: "Add person" }).last().click();
-        await checkPlain(p, "cloud, ended licence, Settings Access add refused", "Adding people"); await p.context().close(); }
       // self-hosted, no licence: the words and the link stay
       { const p = await page(); await p.goto(`${selfFactoryNone.base}/people`); await p.getByTestId("people-list").waitFor({ timeout: 15000 });
         await checkLine(p, "self-hosted, no licence, People add slot", "Adding people"); await p.context().close(); }
-      { const p = await page(); await p.goto(`${selfPlatNone.base}/settings?tab=access`); await p.getByTestId("you-row").waitFor({ timeout: 15000 });
-        await checkLine(p, "self-hosted, no licence, Settings Access", "Adding people"); await p.context().close(); }
-      { const p = await page(); await p.goto(`${selfPlatNone.base}/settings?tab=areas`);
-        const note = p.getByTestId("licence-needed"); await note.first().waitFor({ timeout: 15000 });
-        await p.waitForFunction(() => /Teams need an enterprise licence/.test(document.querySelector('[data-testid="licence-needed"]')?.textContent || ""), null, { timeout: 5000 }).catch(() => undefined);
-        const text = (await note.first().innerText()).trim();
-        ck("self-hosted, no licence, Areas page: the words stay", /Teams need an enterprise licence/.test(text) && /This page is for cells with more than one person\./.test(text), text);
-        const a = note.first().locator("a");
-        ck("self-hosted, no licence, Areas page: the link stays", (await a.getAttribute("href")) === URL_ENTERPRISE && (await a.innerText()) === "About the enterprise licence");
-        await p.context().close(); }
+      { const p = await page(); await p.goto(`${selfFactoryNone.base}/settings?tab=people`); await p.getByTestId("you-row").waitFor({ timeout: 15000 });
+        await checkLine(p, "self-hosted, no licence, Settings People", "Adding people"); await p.context().close(); }
       { const p = await page(); await fakeHome(p);
         await p.goto(`${selfFactoryNone.base}/`, { waitUntil: "load" });
         await p.getByTestId("waiting-row").first().waitFor({ timeout: 15000 }); await p.waitForLoadState("networkidle");
@@ -275,7 +233,7 @@ async function fakeHome(page) {
     {
       const EE_CHUNK = /\/assets\/ee-[^/]*\.js(\?|$)/;
       for (const [label, base, route, what] of [
-        ["settings people", platform.base, "/settings?tab=access", "Adding people"],
+        ["settings people", factory.base, "/settings?tab=people", "Adding people"],
         ["factory people", factory.base, "/people", "Adding people"],
       ]) {
         const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
@@ -292,7 +250,7 @@ async function fakeHome(page) {
     // the licence read fails on a licensed cell: the add part says the cell did not answer, never "needs an enterprise licence"
     {
       for (const [label, base, route, what] of [
-        ["settings people", platform.base, "/settings?tab=access", "Adding people"],
+        ["settings people", factory.base, "/settings?tab=people", "Adding people"],
         ["factory people", factory.base, "/people", "Adding people"],
       ]) {
         for (const w of [1440, 390]) {
@@ -368,7 +326,6 @@ async function fakeHome(page) {
       for (const [label, base, route, ready] of [
         ["cloud, slow /health, People add slot", cloudBare.base, "/people", (p) => p.getByTestId("people-list")],
         ["cloud, slow /health, Settings People", cloudBare.base, "/settings?tab=people", null],   // the list itself waits for /health
-        ["cloud, slow /health, Areas page", cloudPlatNone.base, "/settings?tab=areas", null],
       ]) {
         const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
         await fakeCloud(p, { status: 200, body: {} }); const answer = await heldHealth(p);
@@ -383,7 +340,7 @@ async function fakeHome(page) {
       // a self-hosted cell, /health slow: no line while pending, then the words and the link
       for (const [label, base, route, ready, want] of [
         ["self-hosted, slow /health, People add slot", selfFactoryNone.base, "/people", (p) => p.getByTestId("people-list"), "Adding people needs an enterprise licence."],
-        ["self-hosted, slow /health, Settings Access", selfPlatNone.base, "/settings?tab=access", (p) => p.getByTestId("you-row"), "Adding people needs an enterprise licence."],
+        ["self-hosted, slow /health, Settings People", selfFactoryNone.base, "/settings?tab=people", (p) => p.getByTestId("you-row"), "Adding people needs an enterprise licence."],
       ]) {
         const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
         const answer = await heldHealth(p);
@@ -433,12 +390,11 @@ async function fakeHome(page) {
       // /health fails (#509 F5): not known to be self-hosted, so no licence tab, row, link or banner shows either
       // (a licence that ended on a cell /health never described must not put its words on any screen)
       for (const [label, base, route] of [
-        ["failing /health, ended licence, banner on Home", cloudPlatExpired.base, "/"],
-        ["failing /health, ended licence, Settings licence tab asked for", cloudPlatExpired.base, "/settings?tab=licence"],
-        ["failing /health, self-hosted platform cell, Settings Access", selfPlatNone.base, "/settings?tab=access"],
-        ["failing /health, self-hosted platform cell, licence tab asked for", selfPlatNone.base, "/settings?tab=licence"],
-        ["failing /health, self-hosted factory cell, Settings", selfFactoryNone.base, "/settings"],
-        ["failing /health, self-hosted sre cell, Settings", selfSreNone.base, "/settings"],
+        ["failing /health, ended licence, banner on Home", cloudExpired.base, "/"],
+        ["failing /health, ended licence, Settings licence tab asked for", cloudExpired.base, "/settings?tab=licence"],
+        ["failing /health, self-hosted cell, Settings People", selfFactoryNone.base, "/settings?tab=people"],
+        ["failing /health, self-hosted cell, licence tab asked for", selfFactoryNone.base, "/settings?tab=licence"],
+        ["failing /health, self-hosted cell, Settings", selfFactoryNone.base, "/settings"],
       ]) {
         const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
         await fakeCloud(p, { status: 200, body: {} });
@@ -455,29 +411,42 @@ async function fakeHome(page) {
         ck(`${label}: the page names no licence`, !SAY.test(await p.locator("body").innerText()));
         await p.context().close();
       }
-      // a refusal answered BEFORE /health lands (a licence that ended, Add person at once): nothing says licence at
-      // any moment on a Tares Cloud cell (the same case on a self-hosted cell is in licence-words.e2e.cjs)
+      // a refusal answered BEFORE /health lands (a licence that ended, Add on People at once, which the cell itself
+      // refuses while the workspace is not known yet): nothing says licence at any moment on a Tares Cloud cell (the
+      // same case on a self-hosted cell is in licence-words.e2e.cjs). Once /health says Tares Cloud the workspace's
+      // invite takes the add slot, so the refusal's line may go with the cell's form; if a line stays it is the plain one.
       {
         const addRefused = async (p, base) => {
-          await refuse(p, "POST", "**/api/people"); await slowHealth(p, 4000);
-          await p.goto(`${base}/settings?tab=access`, { waitUntil: "commit" });
-          await p.getByRole("button", { name: "Add person" }).first().click({ timeout: 15000 });
-          await p.getByRole("textbox", { name: "name", exact: true }).fill("Sam S");
-          await p.getByRole("textbox", { name: "email", exact: true }).fill("sam@example.com");
-          await p.getByRole("button", { name: "Add person" }).last().click();
+          await refuse(p, "POST", "**/api/factory/people"); const answer = await heldHealth(p);
+          await p.route("**/api/factory/people", async (route) => {
+            if (route.request().method() !== "GET") return route.fallback();
+            const res = await route.fetch();
+            await route.fulfill({ response: res, json: { ...(await res.json()), can_add: true } });
+          });
+          await p.goto(`${base}/people`, { waitUntil: "commit" });
+          await p.getByTestId("people-email").fill("sam@example.com", { timeout: 15000 });
+          await p.getByTestId("people-submit").click();
+          return answer;
         };
         const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
         await fakeCloud(p, { status: 200, body: {} });
-        await addRefused(p, cloudPlatExpired.base);
+        // the order the answers came in: the refused add has to come before /health
+        const order = [];
+        p.on("response", (r) => { if (HEALTH.test(r.url())) order.push("health");
+          else if (r.request().method() === "POST" && /\/api\/factory\/people(\?|$)/.test(r.url()) && r.status() === 402) order.push("refused"); });
+        const answer = await addRefused(p, cloudExpired.base);
         await samples(p, "cloud, refusal before /health", [300, 1500, 3000], pendingQuiet);
+        answer();
         await samples(p, "cloud, refusal before /health, after it landed", [6000], (s) => never(s)
-          || (s.lines.length === 1 && /^Adding people is not available on this workspace right now\.$/.test(s.lines[0].trim()) ? "" : "not the plain line: " + JSON.stringify(s.lines)));
+          || (s.lines.every((l) => /^Adding people is not available on this workspace right now\.$/.test(l.trim())) ? "" : "not the plain line: " + JSON.stringify(s.lines)));
+        ck("cloud, refusal before /health: the add was refused before /health answered",
+           order.includes("refused") && (!order.includes("health") || order.indexOf("refused") < order.indexOf("health")), JSON.stringify(order));
         await p.context().close();
       }
     }
   } finally {
     await browser.close();
-    for (const s of [platform, factory, cloudBare, cloudLicensed, selfFactoryNone, selfPlatNone, cloudExpired, cloudPlatNone, cloudPlatExpired]) if (s) s.stop();
+    for (const s of [factory, cloudBare, cloudLicensed, selfFactoryNone, cloudExpired]) if (s) s.stop();
   }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

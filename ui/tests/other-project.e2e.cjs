@@ -96,8 +96,8 @@ async function waitFor(url, tries = 100) {
          && (await T("factory-project").count()) === 0 && path_(page) === `/projects/${w}`, path_(page));
       ck("its name, and its status as a word with its tone", (await txt(T("other-name"))) === "project-w"
          && (await raw(T("other-status"))) === "On" && (await T("other-status").getAttribute("data-tone")) === "ready");
-      ck("it says what it is not, and which template made it", (await txt(T("other-what"))).startsWith("Not a software factory project: it has no tickets, crew or decisions.")
-         && (await txt(T("other-what"))).includes("made from the"), await txt(T("other-what")));
+      ck("it says what it is not (no template line: projects have none since TR-1812)", (await txt(T("other-what"))).startsWith("Not a software factory project: it has no tickets, crew or decisions.")
+         && !(await txt(T("other-what"))).includes("made from the"), await txt(T("other-what")));
       ck("it says when it was made, with the UTC stamp on hover (…Z)", /Made .*ago|Made just now/.test(await txt(T("other-what")))
          && /^\d{4}-\d\d-\d\d \d\d:\d\dZ$/.test((await T("other-what").locator("[title]").getAttribute("title")) ?? ""),
          `${await txt(T("other-what"))} | ${await T("other-what").locator("[title]").getAttribute("title")}`);
