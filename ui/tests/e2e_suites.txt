@@ -6,7 +6,6 @@ brain-connect
 brain-decisions
 brain-folders
 brain-repos
-capped-runs
 choose-edition
 component-gallery
 connect
@@ -16,7 +15,6 @@ edition-shell
 ee-chunk
 ee-project-access
 embedded
-explore
 factory-crew
 factory-docs
 factory-github
@@ -44,11 +42,8 @@ motion
 other-project
 project-idle
 projects-list
-raise-limit
-reads
 redirects
 report
-session-picker
 settings-people
 source-claude-code
 team-home
