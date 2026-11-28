@@ -17,6 +17,7 @@ test_boot_guard
 test_budget_period
 test_builder_flow
 test_catalog_sync
+test_cell_contract
 test_challenger_workflow
 test_changelog_collect
 test_check_changelog

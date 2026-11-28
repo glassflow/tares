@@ -76,9 +76,7 @@ the session locally and on Tares, and from then on:
   Claude until it fixes and amends (strict, the default) or come back as context (`challenger_mode`
   = `advise`). Errors, timeouts and inconclusive reviews never block. Consecutive failed rounds are
   capped at 8 and the fix loop at 5 turn ends;
-- every review lands on the session's timeline in Tares next to the transcript, and when the
-  session ends Tares's challenger project writes the session summary with memory proposals.
-  Accepted memory is handed to Claude at the next session start in that repo.
+- every review lands on the session's timeline in Tares next to the transcript.
 
 `/tares:challenger off` turns it off mid-session. `/tares:challenger-waive [n|all]` suppresses a
 disputed finding. `touch .git/tares-challenger-skip` disables the hooks for a repository. State and

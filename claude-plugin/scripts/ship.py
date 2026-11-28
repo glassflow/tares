@@ -214,42 +214,17 @@ def _ship_body(cfg: dict, body: bytes) -> bool:
     global _size_failure
     _size_failure = ""
     base, headers = cfg["base"], cfg["headers"]
-    marker = os.path.join(cfg["data_dir"], "ensured-" + hashlib.sha1(base.encode()).hexdigest()[:12])
     try:
+        # the cell provisions its claude_code intake on first ingest: nothing to create first
         _post(base + "/ingest/claude_code", body, headers)
         return True
     except urllib.error.HTTPError as e:
         if e.code == 413:
             _size_failure = "refused"
-        if e.code == 404:          # source went missing — recreate and retry once
-            try:
-                os.remove(marker)
-            except OSError:
-                pass
-            if ensure_source(base, headers):
-                open(marker, "w").write("1")
-                try:
-                    _post(base + "/ingest/claude_code", body, headers)
-                    return True
-                except Exception:
-                    return False
         return False
     except Exception as e:
         if _timed_out(e):
             _size_failure = "slow"
-        return False
-
-
-def ensure_source(base: str, headers: dict) -> bool:
-    """Create the push-mode claude_code source if it doesn't exist. 409 = already there = fine."""
-    body = json.dumps({"name": "claude_code", "connector": "claude_code",
-                       "poll": "10s", "config": {"push": True}}).encode()
-    try:
-        _post(base + "/api/sources", body, _auth_only(headers))
-        return True
-    except urllib.error.HTTPError as e:
-        return e.code == 409          # already exists
-    except Exception:
         return False
 
 
@@ -788,35 +763,6 @@ def drain_main(cfg: dict, hook: dict, transcript: str, flow: str) -> None:
         write_flow(cfg["data_dir"], sid, "")   # a flow call in the backlog must not revive the marker
 
 
-# ── SessionStart: hand accepted memory to Claude ─────────────────────────────
-
-def memory_context(cfg: dict, cwd: str) -> str:
-    """Accepted memory for this repo (decisions on the memory source keyed by the repo name, the
-    working directory's basename), as a short block Claude sees at session start. Empty on any
-    failure."""
-    repo = os.path.basename((cwd or "").rstrip("/")) or ""
-    if not repo:
-        return ""
-    try:
-        r = _get(f"{cfg['base']}/api/sources/agent_memory/events?limit=200",
-                 _auth_only(cfg["headers"]))
-        rows = json.loads(r.read().decode() or "[]")
-    except Exception:
-        return ""
-    lines = []
-    for row in rows if isinstance(rows, list) else []:
-        if row.get("key") == repo and row.get("event_type") == "decision" and row.get("text"):
-            lines.append(row["text"].strip())
-    if not lines:
-        return ""
-    seen, uniq = set(), []
-    for l in lines:
-        if l not in seen:
-            seen.add(l); uniq.append(l)
-    return ("Memory from earlier Tares sessions in this repo (accepted by the user):\n"
-            + "\n".join(f"- {l}" for l in uniq[:20]))
-
-
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -829,25 +775,15 @@ def main() -> None:
         return
 
     cfg = config()
-    base, headers, data_dir = cfg["base"], cfg["headers"], cfg["data_dir"]
-    marker = os.path.join(data_dir, "ensured-" + hashlib.sha1(base.encode()).hexdigest()[:12])
-
-    # ensure the source exists (once per Tares URL; cheap fast-path via a marker file)
-    if not os.path.exists(marker):
-        if ensure_source(base, headers):
-            open(marker, "w").write("1")
+    data_dir = cfg["data_dir"]
 
     event = hook.get("hook_event_name")
     session_id = str(hook.get("session_id") or "")
 
-    # SessionStart provisions the source and hands Claude the accepted memory; nothing to ship yet
-    # (the flow marker is left alone here: a resumed session keeps its mark, and SessionEnd
-    # removes it)
+    # SessionStart only announces the session; nothing to ship yet (the flow marker is left alone
+    # here: a resumed session keeps its mark, and SessionEnd removes it)
     if event == "SessionStart":
         announce(cfg, hook, read_flow(data_dir, session_id) if session_id else "")
-        ctx = memory_context(cfg, hook.get("cwd") or "")
-        if ctx:
-            print(ctx)
         return
 
     transcript = hook.get("transcript_path")

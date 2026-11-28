@@ -40,7 +40,11 @@ ck("it names the PR line the builder writes with the D<n>", 'Mock: "Mock: <scree
 
 plugin = json.load(open(os.path.join(ROOT, "claude-plugin/.claude-plugin/plugin.json")))
 ck("the plugin version is bumped past 0.6.1", tuple(int(x) for x in plugin["version"].split(".")) > (0, 6, 1), plugin["version"])
-ck("the changelog names the plugin version", f"Plugin {plugin['version']}" in open(os.path.join(ROOT, "CHANGELOG.md")).read(), plugin["version"])
+# the version is named in CHANGELOG.md, or in a changelog.d fragment until the release collects it
+_changes = open(os.path.join(ROOT, "CHANGELOG.md")).read() + "".join(
+    open(os.path.join(ROOT, "changelog.d", f)).read() for f in sorted(os.listdir(os.path.join(ROOT, "changelog.d")))
+    if f.endswith(".md") and f != "README.md")
+ck("the changelog names the plugin version", f"Plugin {plugin['version']}" in _changes, plugin["version"])
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
