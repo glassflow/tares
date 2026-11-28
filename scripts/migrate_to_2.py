@@ -137,12 +137,21 @@ LEDGERS = ("session_moves", "session_ingest_marks", "session_store_copies", "tar
 PROJECT_COLUMNS = ("id", "name", "status", "created_at", "updated_at", "goal", "linear",
                    "github_issues", "kind", "lead_person_id", "scope", "icon")
 FACTORY_RECIPES = ("custom", "default", "factory")
-# The tables that hold one project's own rows, cleared with --drop-non-factory: (table, column)
-PROJECT_OWNED = (("projects", "id"), ("project_docs", "project"), ("project_skills", "project"),
-                 ("project_log", "project"), ("project_members", "project"),
-                 ("project_integrations", "project_uid"), ("project_secrets", "project"),
-                 ("project_required_checks", "project"), ("project_merge_method", "project"),
-                 ("ticket_numbers", "project"), ("handovers", "project"))
+# --drop-non-factory: a table with one of these columns holds rows of a project, and the rows of a
+# dropped project are not copied (projects, usecase_log and usecase_objects are handled by name). In
+# PROJECT_NULLED the row stays and its project is emptied: a session and what it spent are the
+# session's own, as when 2.0 deletes a team project.
+PROJECT_KEYS = ("project", "project_uid", "project_id", "usecase_id")
+PROJECT_NULLED = ("session_usage", "session_stations")
+
+
+
+def project_column(table) -> str | None:
+    """The column naming the project a row of `table` belongs to, for --drop-non-factory."""
+    if table.name in PROJECT_NULLED or table.name in REBUILT:
+        return None
+    return next((c for c in PROJECT_KEYS if c in table.c), None)
+
 
 SESSION_SOURCE = "claude_code"                       # 2.0 stores every session line under it
 DEFAULT_RENDER = json.dumps({"include_thinking": False, "redact": True}, sort_keys=True)
@@ -239,6 +248,18 @@ def line_key(payload) -> str:
 
 def no_nul(v):
     return v.replace("\x00", "") if isinstance(v, str) else v
+
+
+def no_nul_deep(v):
+    """A parsed JSON value without NULs in any of its strings, keys included (Postgres takes none in
+    text; `json.dumps` writes a NUL as the escape \\u0000, so the text form hides it)."""
+    if isinstance(v, str):
+        return v.replace("\x00", "")
+    if isinstance(v, dict):
+        return {no_nul_deep(k): no_nul_deep(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [no_nul_deep(x) for x in v]
+    return v
 
 
 def md5_rows(rows) -> str:
@@ -690,6 +711,20 @@ def plan_tables(cell: Cell, plan: Plan, sources: dict, moves: dict, mk: dict, ar
     if rest:
         plan.dropped.append((f"DuckDB's other {len(rest)} tables", 0, "not read: platform tables, "
                              "and the copies 1.61.0 left there when it moved a table"))
+    if drop_ids:
+        gone, nulled = [], []
+        for name in sorted(cell.tables):
+            t = cell.t(name)
+            if name in ("usecases", "usecase_objects", "usecase_log") or name in TABLES_2:
+                col = "id" if name == "usecases" else ("project" if name in PROJECT_NULLED
+                                                      else project_column(t))
+                if col and col in t.c:
+                    k = cell.count(name, (lambda c: lambda tt: tt.c[c].in_(sorted(drop_ids)))(col))
+                    if k:
+                        (nulled if name in PROJECT_NULLED else gone).append(f"{name} {n(k)}")
+        plan.notes.append("--drop-non-factory leaves out the rows of " + ", ".join(sorted(drop_ids)) + ": "
+                          + (", ".join(gone) or "none")
+                          + ("; and empties the project of " + ", ".join(nulled) if nulled else ""))
     # notes
     for pid, pname, recipe, kind in non_factory_projects(cell):
         plan.notes.append(f"not a factory project: {pid} {pname!r} (recipe {recipe}, kind {kind}): "
@@ -718,12 +753,80 @@ def plan_tables(cell: Cell, plan: Plan, sources: dict, moves: dict, mk: dict, ar
     duck = duck_counts(cell, sources)
     repair = sessions_to_repair(cell, held, moves, duck)
     if repair:
+        archive = None
+        for sid in sorted(repair):
+            if not duck.get(sid) or not cell.count(
+                    "session_archive_parts", (lambda x: lambda t: t.c.session == x)(sid)):
+                continue
+            archive = archive or archive_of(cell)
+            have = held_lines(cell, sid, archive)
+            missing = missing_from_held(duck_lines(cell, sources, sid), have)
+            if missing:
+                plan.notes.append(
+                    f"session {sid} has archived parts: the {len(missing)} line(s) DuckDB alone holds "
+                    "are added after its last seq" + (", though older than its newest line (2.0 reads "
+                    "a session by time, so they show in place)" if appended_out_of_order(missing, have) else ""))
         why = Counter(repair.values())
         plan.notes.append(f"sessions whose lines are checked against DuckDB: {len(repair)} ("
                           + "; ".join(f"{v} {k}" for k, v in why.items()) + ")")
     if "sessions_caught_up" not in mk:
         plan.notes.append("the sessions table never caught up: coordination_calls is counted again "
-                          "from DuckDB")
+                          "from every line of each session")
+
+
+def duck_lines(cell: Cell, sources, sid: str) -> list[dict]:
+    """The session's DuckDB lines as rows of session_lines (no session, no seq), in time order,
+    the way 1.61.0's session move built them."""
+    marks_ = ", ".join("?" for _ in sources)
+    out = []
+    for etype, payload, labels, at in cell.duck_rows(
+            f"SELECT event_type, payload, labels, event_time FROM events WHERE source IN ({marks_}) "
+            "AND key_value = ? ORDER BY event_time, rowid", [*sorted(sources), sid]):
+        p, lab = _json(payload), _json(labels)
+        out.append({"line_key": line_key(p), "at": utc(at), "type": _text(etype),
+                    "labels": json.dumps(lab), "render": DEFAULT_RENDER, "payload": json.dumps(p)})
+    return out
+
+def held_lines(cell: Cell, sid: str, archive: Archive | None) -> list[dict]:
+    t = cell.t("session_lines")
+    out = [dict(r._mapping) for r in cell.rows(select(t).where(t.c.session == sid).order_by(t.c.seq))]
+    p = cell.t("session_archive_parts")
+    parts = [dict(r._mapping) for r in cell.rows(select(p).where(p.c.session == sid).order_by(p.c.part))]
+    if parts:
+        if archive is None:
+            raise Refused(f"session {sid} has archived parts and no archive is given (--archive-url)")
+        for part in parts:
+            for r in archive.read_part(part):
+                out.append({"session": sid, "seq": r["seq"], "line_key": r.get("line_key"),
+                            "at": utc(datetime.fromisoformat(r["at"])) if r.get("at") else None,
+                            "type": r.get("type"), "labels": r.get("labels"),
+                            "render": r.get("render"), "payload": r.get("payload")})
+        out.sort(key=lambda r: r["seq"])
+    return [{**r, "render": DEFAULT_RENDER} if "render" in r else r for r in out]
+
+
+
+def missing_from_held(dl: list[dict], have: list[dict]) -> list[dict]:
+    """The DuckDB lines `dl` the table and the archive (`have`) lack, matched by (line_key, at) as a
+    multiset, as 1.61.0's session move matched them."""
+    seen = Counter((r["line_key"], stamp(r["at"])) for r in have)
+    used: Counter = Counter()
+    missing = []
+    for r in dl:
+        k = (r["line_key"], stamp(r["at"]))
+        if used[k] < seen[k]:
+            used[k] += 1
+        else:
+            missing.append(r)
+    return missing
+
+
+def appended_out_of_order(missing: list[dict], have: list[dict]) -> bool:
+    """Lines added after the last seq of an archived session are older than a line it holds: their
+    seq is out of time order. 2.0 reads a session by (at, seq) (session_read), so they show in time
+    order; the plan says which sessions have such lines."""
+    newest = max((utc(r["at"]) for r in have if r["at"] is not None), default=None)
+    return newest is not None and any(r["at"] is not None and utc(r["at"]) < newest for r in missing)
 
 
 def default_project_ids(cell: Cell) -> list[str]:
@@ -801,6 +904,8 @@ class Out:
     # SQLite: OUT.migrating until the store is stamped
     def prepare(self) -> None:
         if self.dialect == "sqlite":
+            if os.path.exists(self.final) and not os.path.isdir(self.final):
+                raise Refused(f"{self.final} is a file: the output must be a new folder")
             if os.path.exists(self.final) and os.listdir(self.final):
                 raise Refused(f"{self.final} exists and is not empty: the output must be a new folder")
             self.dir = self.final + ".migrating"
@@ -958,12 +1063,18 @@ class Copier:
         cell = self.cell
         plain = [t for t in TABLES_2 if t in cell.tables and t not in RENAMED and t not in REBUILT
                  and t not in ("sessions", "session_lines", "settings", "shared_skills") + FACT_TABLES]
+        drop = sorted(self.drop_ids)
         for name in plain:
-            where = None
-            col = dict(PROJECT_OWNED).get(name)
-            if col and self.drop_ids:
-                where = (lambda c: lambda t: t.c[c].not_in(sorted(self.drop_ids)))(col)
-            self.expected[name] = self.copy(name, where=where)
+            where = fix = None
+            col = project_column(cell.t(name))
+            if col and drop:
+                where = (lambda c: lambda t: t.c[c].is_(None) | t.c[c].not_in(drop))(col)
+            if name in PROJECT_NULLED and drop:
+                def fix(r):
+                    if r.get("project") in self.drop_ids:
+                        r["project"] = None
+                    return r
+            self.expected[name] = self.copy(name, where=where, fix=fix)
         full = [f"{t} {n(self.expected[t])}" for t in plain if self.expected[t]]
         empty = [t for t in plain if not self.expected[t]]
         say(f"  copied {len(plain)} tables: " + ", ".join(full))
@@ -1116,15 +1227,7 @@ class Copier:
             h = held.get(sid, 0)
             dl = self.duck_lines(sid) if duck.get(sid) else []
             have = self.held_lines(sid, archive)
-            seen = Counter((r["line_key"], stamp(r["at"])) for r in have)
-            used: Counter = Counter()
-            missing = []
-            for r in dl:
-                k = (r["line_key"], stamp(r["at"]))
-                if used[k] < seen[k]:
-                    used[k] += 1
-                else:
-                    missing.append(r)
+            missing = missing_from_held(dl, have)
             with self.out.engine.begin() as conn:
                 if not missing:
                     if h >= count:
@@ -1147,6 +1250,10 @@ class Copier:
                     written = len(have) + len(new)
                     self.expected["session_lines"] += len(new)
                     how = f"{len(new)} DuckDB lines added after seq {top} (archived parts kept)"
+                    if appended_out_of_order(missing, have):
+                        self.report.append(
+                            f"session {sid}: {len(new)} line(s) DuckDB alone held are older than its "
+                            f"newest line and take seq {top + 1} on; 2.0 reads by time, so they show in place")
                 else:
                     # every line again, numbered from 1: DuckDB's first, then the ones only the
                     # table held
@@ -1176,34 +1283,10 @@ class Copier:
         self.report.append("sessions checked against DuckDB: " + ", ".join(f"{v} {k}" for k, v in fixed.items()))
 
     def duck_lines(self, sid: str) -> list[dict]:
-        """The session's DuckDB lines as rows of session_lines (no session, no seq), in time order,
-        the way 1.61.0's session move built them."""
-        marks_ = ", ".join("?" for _ in self.sources)
-        out = []
-        for etype, payload, labels, at in self.cell.duck_rows(
-                f"SELECT event_type, payload, labels, event_time FROM events WHERE source IN ({marks_}) "
-                "AND key_value = ? ORDER BY event_time, rowid", [*sorted(self.sources), sid]):
-            p, lab = _json(payload), _json(labels)
-            out.append({"line_key": line_key(p), "at": utc(at), "type": _text(etype),
-                        "labels": json.dumps(lab), "render": DEFAULT_RENDER, "payload": json.dumps(p)})
-        return out
+        return duck_lines(self.cell, self.sources, sid)
 
     def held_lines(self, sid: str, archive: Archive | None) -> list[dict]:
-        t = self.cell.t("session_lines")
-        out = [dict(r._mapping) for r in self.cell.rows(select(t).where(t.c.session == sid).order_by(t.c.seq))]
-        p = self.cell.t("session_archive_parts")
-        parts = [dict(r._mapping) for r in self.cell.rows(select(p).where(p.c.session == sid).order_by(p.c.part))]
-        if parts:
-            if archive is None:
-                raise Refused(f"session {sid} has archived parts and no archive is given (--archive-url)")
-            for part in parts:
-                for r in archive.read_part(part):
-                    out.append({"session": sid, "seq": r["seq"], "line_key": r.get("line_key"),
-                                "at": utc(datetime.fromisoformat(r["at"])) if r.get("at") else None,
-                                "type": r.get("type"), "labels": r.get("labels"),
-                                "render": r.get("render"), "payload": r.get("payload")})
-            out.sort(key=lambda r: r["seq"])
-        return [{**r, "render": DEFAULT_RENDER} if "render" in r else r for r in out]
+        return held_lines(self.cell, sid, archive)
 
     # ── what DuckDB holds and the store does not ──
     def fills(self) -> None:
@@ -1276,23 +1359,35 @@ class Copier:
         self.usage_added = [(r["session"], r["message"]) for r in new]
         if new:
             self.report.append(f"model replies added from DuckDB: {len(new)} (priced by the rebuild step)")
-        # coordination_calls, when 1.61.0's sessions table never caught up (its readers scanned)
-        if "sessions_caught_up" not in marks(cell):
-            self.coordination_counts = self.coordination_scan()
-        else:
-            self.coordination_counts = None
+        # coordination_calls, when 1.61.0's sessions table never caught up (its readers scanned
+        # DuckDB): counted again by the rebuild step, from every line the output holds
+        self.coordination_recount = "sessions_caught_up" not in marks(cell)
 
-    def coordination_scan(self) -> dict[str, list]:
-        """{session: [(text, payload)]} of the tool_use lines that may coordinate, for the rebuild
-        step to count (1.61.0's _coordination_calls_scan)."""
-        srcs = sorted(self.sources)
-        out = defaultdict(list)
-        for sid, text, payload in self.cell.duck_rows(
-                f"SELECT key_value, text, CAST(payload AS VARCHAR) FROM events WHERE source IN "
-                f"({', '.join('?' * len(srcs))}) AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' "
-                "OR text LIKE '%→ SendMessage(%' OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' "
-                "OR text LIKE '%→ Cron%')", srcs):
-            out[sid].append((text, payload))
+    def coordination_counts(self, is_coordination) -> Counter:
+        """{session: coordination calls} over every tool_use line of the output: its table rows and
+        its archived parts (all of a session's lines, now that the repairs are done). A call counts
+        when its tool only coordinates the crew (2.0's factory.is_coordination)."""
+        def calls(payload) -> int:
+            o = _obj(payload)
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            return sum(1 for b in msg.get("content") or []
+                       if isinstance(b, dict) and b.get("type") == "tool_use" and is_coordination(b.get("name")))
+        out: Counter = Counter()
+        lt, pt = self.out.t("session_lines"), self.out.t("session_archive_parts")
+        with self.out.engine.connect() as c:
+            res = c.execution_options(stream_results=True, yield_per=5000).execute(
+                select(lt.c.session, lt.c.payload).where(lt.c.type == "tool_use"))
+            for sid, payload in res:
+                out[sid] += calls(payload)
+            parts = [dict(r._mapping) for r in c.execute(select(pt))]
+        if parts:
+            archive = archive_of(self.cell)
+            if archive is None:
+                raise Refused("archived parts exist and no archive is given (--archive-url)")
+            for part in parts:
+                for r in archive.read_part(part):
+                    if r.get("type") == "tool_use":
+                        out[part["session"]] += calls(r.get("payload"))
         return out
 
     # ── the rebuild step: 2.0's own code, on the output ──
@@ -1313,8 +1408,8 @@ class Copier:
                 lines = [(SESSION_SOURCE, sid, utc(at), et, text, _json(p), _json(lab))
                          for et, text, p, lab, at in rows]
                 if self.pg_out:
-                    lines = [(a, b, c, d, no_nul(e), json.loads(no_nul(json.dumps(f))),
-                              json.loads(no_nul(json.dumps(g)))) for a, b, c, d, e, f, g in lines]
+                    lines = [(a, b, c, d, no_nul(e), no_nul_deep(f), no_nul_deep(g))
+                             for a, b, c, d, e, f, g in lines]
                 with sdb.begin() as conn:
                     session_ingest._write_facts(conn, sdb, session_ingest.facts_of([x[:6] for x in lines]))
                     session_ingest._write_turns(conn, sdb, session_ingest.turns_of(lines))
@@ -1322,15 +1417,17 @@ class Copier:
                 for name in FACT_TABLES:
                     self.expected[name] = self.out.count(name)
                 say(f"  rebuilt the facts and turns of {len(self.facts_from_duck)} session(s) from DuckDB")
-            # coordination calls, counted the way 2.0 counts them as a line is stored
-            if self.coordination_counts is not None:
+            # coordination calls, counted from every line of each session
+            if self.coordination_recount:
+                from tares.factory import is_coordination
                 s = self.out.t("sessions")
-                counts = {sid: sum(session_ingest.coordination_in(text, payload) for text, payload in lst)
-                          for sid, lst in self.coordination_counts.items()}
+                counts = self.coordination_counts(is_coordination)
                 with self.out.engine.begin() as conn:
-                    for sid, k in counts.items():
-                        conn.execute(s.update().where(s.c.session == sid).values(coordination_calls=k))
-                say(f"  counted coordination_calls of {len(counts)} session(s) from DuckDB")
+                    sids = [r[0] for r in conn.execute(select(s.c.session))]
+                    for sid in sids:
+                        conn.execute(s.update().where(s.c.session == sid).values(
+                            coordination_calls=counts.get(sid, 0)))
+                say(f"  counted coordination_calls of {len(sids)} session(s) from all their lines")
             # the price of the replies added from DuckDB
             u = self.out.t("session_usage")
             priced = 0
@@ -1430,12 +1527,8 @@ def verify(cell: Cell, out: Out, args, expected: dict | None, rebuilt: set) -> l
             src = RENAMED.get(name, name)
             if src in cell.tables and name not in ("session_lines", "challenges", "session_usage",
                                                    "settings", "shared_skills") + FACT_TABLES:
-                col = dict(PROJECT_OWNED).get(name)
-                if name == "projects":
-                    col = "id"
-                elif name == "project_log":
-                    col = "usecase_id"
-                w = (lambda c: lambda t: t.c[c].not_in(drop))(col) if col and drop else None
+                col = "id" if name == "projects" else project_column(cell.t(src))
+                w = (lambda c: lambda t: t.c[c].is_(None) | t.c[c].not_in(drop))(col) if col and drop else None
                 expected[name] = cell.count(src, w)
     for name in sorted(expected):
         got = out.count(name)
@@ -1445,7 +1538,8 @@ def verify(cell: Cell, out: Out, args, expected: dict | None, rebuilt: set) -> l
     nul = out.dialect == "postgresql" and cell.dialect == "sqlite"
     for name, keys, ts in CHECKSUMS:
         src = RENAMED.get(name, name)
-        w_in = (lambda t: t.c.id.not_in(drop)) if (name == "projects" and drop) else None
+        col = "id" if name == "projects" else project_column(cell.t(src))
+        w_in = (lambda c: lambda t: t.c[c].is_(None) | t.c[c].not_in(drop))(col) if (col and drop) else None
         a = checksum(cell.engine, cell.dialect, cell.t(src), keys, ts, w_in)
         b = checksum(out.engine, out.dialect, out.t(name), keys, ts)
         if a != b:
@@ -1540,7 +1634,11 @@ def main(argv=None) -> int:
             say(f"Refused: {e}")
             return 2
         try:
-            plan = inspect_cell(cell, args)
+            try:
+                plan = inspect_cell(cell, args)
+            except Refused as e:
+                say(f"Refused: {e}")
+                return 2
             print_plan(cell, plan)
             if plan.refusals:
                 say("Nothing was written." if args.check else "Refused: nothing was written.")
