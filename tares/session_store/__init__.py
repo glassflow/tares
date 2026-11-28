@@ -57,10 +57,14 @@ class SessionStore:
         so it does not queue behind a writer and no writer queues behind it (WAL gives it the last
         committed state, the same one from its first query to its end). On Postgres it is a plain
         transaction like `begin()`, each statement seeing what had committed when it ran; a read
-        whose queries must agree uses `consistent_read()`."""
+        whose queries must agree uses `consistent_read()`. That is what each statement sees on its
+        own too, so on Postgres the read runs its statements without a BEGIN and a COMMIT around
+        them: two round trips fewer per read, which a page of many reads feels (TR-1819)."""
         with self._turns or contextlib.nullcontext():
             with self.engine.connect() as conn:
                 conn = conn.execution_options(deferred=True)
+                if self.dialect == "postgresql":
+                    conn = conn.execution_options(isolation_level="AUTOCOMMIT")
                 with conn.begin():
                     yield conn
 
