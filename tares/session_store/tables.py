@@ -1,22 +1,22 @@
-"""The session store's tables, as SQLAlchemy Core declares them (P-TR-295).
+"""The session store's tables, as SQLAlchemy Core declares them (P-TR-295, Tares 2.0).
 
-These are the five session tables, `settings`, the accounts (`people`, `api_keys`, `project_members`),
-the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skills`,
-`shared_skills`, `github_credentials`, `model_usage`), the tickets (`tickets`,
+Every table of the cell: the session tables, `settings`, the accounts (`people`, `api_keys`,
+`project_members`), the projects (`projects`, `project_docs`, `project_skills`, `project_log`,
+`docs`, `shared_skills`, `github_credentials`, `model_usage`), the tickets (`tickets`,
 `ticket_history`, `ticket_numbers`), the milestones, checks and reviews (`milestones`,
 `milestone_check_results`, `milestone_acceptances`, `ticket_checks`, `challenges`, `reviews`,
 `review_findings`, `rule_proposals`) and the decisions, questions and crew tables (`assumptions`,
 `desk_items`, `decisions`, `handovers`, `grants`, `pending_memory`, `crews`, `spec_questions`,
 `signoffs`, `handover_overrides`, `answers`, `waiting_told`) and the merge queue, integration,
 secret and guardrail tables (`merge_queue`, `project_merge_method`, `project_required_checks`,
-`integration_choices`, `integration_connections`, `project_integrations`, `pending_writeback`,
-`project_secrets`, `guardrail_rules`, `guardrail_pairs`) and the repo map and brain tables
-(`repo_maps`, `repo_map_history`, `brain_repos`, `brain_repo_folders`, `brain_repo_updates`,
-`brain_calls`), as the old DDL made them in the state Postgres: same names, same columns, same
-primary keys, and the column types it gave them on Postgres (TEXT, BIGINT, DOUBLE PRECISION,
-TIMESTAMPTZ). JSON that callers read as text is `Text`.
-A table made by the old DDL and a table made from these declarations are the same table, which is
-how revision 0002 can take over a Postgres database that already has them.
+`integration_choices`, `integration_connections`, `integration_keys`, `project_integrations`,
+`pending_writeback`, `pr_events`, `project_secrets`, `guardrail_rules`, `guardrail_pairs`) and the
+repo map and brain tables (`repo_maps`, `repo_map_history`, `brain_repos`, `brain_repo_folders`,
+`brain_repo_updates`, `brain_calls`). The column types are TEXT, BIGINT, DOUBLE PRECISION and
+TIMESTAMPTZ on Postgres; JSON that callers read as text is `Text`.
+
+The revision 0001_baseline makes these tables, column for column and index for index;
+tests/test_baseline.py fails when the two differ.
 
 The Store's session methods (store.py, factory_store.py, claude_usage_store.py) read and write
 these tables, and nothing else does outside the tests' own seeding, report.py, which
@@ -407,21 +407,16 @@ project_members = Table(
     Column("reason", Text),
 )
 
-# Projects (store.py create_project, TR-1610). The tables and columns predate the rename (use case,
-# recipe): a row here is a project, `recipe` its template. `params`, `setup`, `linear` and
-# `github_issues` are JSON the Store parses, so they are `JSONText`.
-usecases = Table(
-    "usecases", metadata,
+# Projects (store.py create_project, TR-1610). `linear` and `github_issues` are JSON the Store
+# parses, so they are `JSONText`. `kind` is `software_factory` for a project the factory works in.
+projects = Table(
+    "projects", metadata,
     Column("id", Text, primary_key=True),
-    Column("recipe", Text),
     Column("name", Text),
-    Column("params", JSONText),
     Column("status", Text),
     Column("created_at", UTCDateTime),
     Column("updated_at", UTCDateTime),
-    Column("last_error", Text),
     Column("goal", Text),
-    Column("setup", JSONText),
     Column("linear", JSONText),
     Column("github_issues", JSONText),
     Column("kind", Text),
@@ -430,28 +425,37 @@ usecases = Table(
     Column("icon", Text),
 )
 
-# The parts a project uses: kind source, trigger, agent, mcp_server, skill or doc, and the plan key
-# of a template project.
-usecase_objects = Table(
-    "usecase_objects", metadata,
-    Column("usecase_id", Text, primary_key=True),
-    Column("kind", Text, primary_key=True),
-    Column("key", Text, primary_key=True),
-    Column("name", Text),
-    Column("customized", Boolean),
+# The docs a project includes (store.py use_doc, remove_doc): a doc of the cell (`docs.id`) can be
+# in several projects.
+project_docs = Table(
+    "project_docs", metadata,
+    Column("project", Text, primary_key=True),
+    Column("doc", Text, primary_key=True),
     Column("created_at", UTCDateTime),
 )
+Index("project_docs_doc", project_docs.c.doc)
 
-# What happened to a project (create, update, repair), newest first when read
-usecase_log = Table(
-    "usecase_log", metadata,
-    Column("usecase_id", Text),
+# The skills a project uses (store.py use_skill, delete_skill): a skill of the cell
+# (`shared_skills.name`) can be used by several projects.
+project_skills = Table(
+    "project_skills", metadata,
+    Column("project", Text, primary_key=True),
+    Column("skill", Text, primary_key=True),
+    Column("created_at", UTCDateTime),
+)
+Index("project_skills_skill", project_skills.c.skill)
+
+# What happened to a project (created, updated, paused, resumed), newest first when read
+project_log = Table(
+    "project_log", metadata,
+    Column("project", Text),
     Column("logged_at", UTCDateTime),
     Column("action", Text),
     Column("detail", Text),
 )
+Index("project_log_project", project_log.c.project, project_log.c.logged_at)
 
-# Markdown that belongs to the cell, included by projects through usecase_objects (kind doc)
+# Markdown that belongs to the cell, included by projects through project_docs
 docs = Table(
     "docs", metadata,
     Column("id", Text, primary_key=True),
@@ -465,19 +469,7 @@ docs = Table(
     Column("owner", Text),
 )
 
-# The per-project skills from before skills were shared: nothing reads it any more, it moves with
-# the rest so no table is left behind
-skills = Table(
-    "skills", metadata,
-    Column("project", Text, primary_key=True),
-    Column("name", Text, primary_key=True),
-    Column("description", Text),
-    Column("body", Text),
-    Column("created_at", UTCDateTime),
-    Column("updated_at", UTCDateTime),
-)
-
-# Skills that belong to the cell, used by projects through usecase_objects (kind skill)
+# Skills that belong to the cell, used by projects through project_skills
 shared_skills = Table(
     "shared_skills", metadata,
     Column("name", Text, primary_key=True),
