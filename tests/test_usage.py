@@ -117,6 +117,7 @@ async def main():
                u["agent_runs"] == 0 and u["dispatch_deliveries"] == 0, str(u))
 
             # ── cost must not grow with the event count (counter read, not a scan) ──
+            await asyncio.sleep(FRESH)            # both reads measure the store afresh
             t0 = time.perf_counter(); await cx.get(f"{B}/api/usage"); small = time.perf_counter() - t0
             for k in range(5):
                 await ingest(cx, B, lines(f"big{k}", 1000, size=300), timeout=120)
@@ -153,7 +154,8 @@ async def main():
         proc.terminate(); proc.wait(timeout=10)
 
     # ── limit configured + auth on; a limit with room lets ingest resume ──
-    proc = _boot(TARES_AUTH_TOKEN=AUTH, TARES_MAX_DB_SIZE="1Gi")
+    roomy = (100 << 30) if ON_PG else (1 << 30)   # a shared Postgres database is far bigger than one cell
+    proc = _boot(TARES_AUTH_TOKEN=AUTH, TARES_MAX_DB_SIZE=str(roomy))
     try:
         if not await _wait(f"{B}/health"):
             ck("daemon up (auth)", False); return
@@ -167,8 +169,8 @@ async def main():
             r = await cx.get(f"{B}/api/usage", headers=H(read_key))
             ck("read key -> 200", r.status_code == 200, r.text)
             u = r.json()
-            ck("max_bytes from TARES_MAX_DB_SIZE", u["max_bytes"] == 1 << 30, str(u["max_bytes"]))
-            expect = round(100 * (u["db_bytes"] + u["wal_bytes"] + u["archive_bytes"]) / (1 << 30), 2)
+            ck("max_bytes from TARES_MAX_DB_SIZE", u["max_bytes"] == roomy, str(u["max_bytes"]))
+            expect = round(100 * (u["db_bytes"] + u["wal_bytes"] + u["archive_bytes"]) / roomy, 2)
             ck("pct_used = (db+wal+archive)/max as a percentage", u["pct_used"] == expect and u["pct_used"] > 0,
                f"{u['pct_used']} vs {expect}")
             ck("counts survived the restart", u["events"] == 5025, str(u["events"]))

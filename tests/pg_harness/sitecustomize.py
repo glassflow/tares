@@ -9,9 +9,12 @@ import uuid
 
 DSN = os.environ.get("TARES_TEST_PG")
 if DSN:
-    import psycopg
-    import tares.store as _s
-
+    try:
+        import psycopg
+        import tares.store as _s
+    except ImportError:      # a Python that has no Tares (a test's fake tool on another interpreter)
+        DSN = None
+if DSN:
     NOTE = ".pgschema"
     _orig = _s.Store.__init__
 

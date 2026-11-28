@@ -22,9 +22,9 @@ In each state:
   - the owner, who is not on P, sees only the hidden card and not P's session.
 
 It uses no route that moves to ee (people, areas, project access), so it passes in the `mit`
-suite where tares_ee is deleted. The database is written with the daemon stopped (DuckDB has one
-writer), the way a team cell would have left it. It is DuckDB-only: Store(DB, state_dsn="") keeps
-it out of the Postgres run's state, because the daemon it starts gets no TARES_* variables.
+suite where tares_ee is deleted. The store is written with the daemon stopped, the way a team cell
+would have left it. It is SQLite only: Store(DB, state_dsn="") keeps it out of the Postgres run's
+state, because the daemon it starts gets no TARES_* variables.
 
 Run: .venv/bin/python tests/test_private_any_licence.py
 """

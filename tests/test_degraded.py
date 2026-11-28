@@ -89,7 +89,8 @@ async def main():
     ck("seeded a store to break", os.path.exists(os.path.join(BAD_DB, "tares.sqlite")))
     os.chmod(BAD_DB, 0o000)
 
-    proc = _boot(BAD_DB, PORT)
+    # on SQLite: a cell on Postgres keeps nothing in its data directory to fail on
+    proc = _boot(BAD_DB, PORT, TARES_TEST_PG="")
     try:
         h = await _health(PORT)
         ck("daemon STARTS with an unopenable db (no ERR_CONNECTION_REFUSED)", h is not None)
