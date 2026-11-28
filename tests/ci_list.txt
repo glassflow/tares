@@ -186,6 +186,7 @@ test_incidents
 test_include_payload
 test_ingest_bypass_cooldown
 test_ingest_key
+test_ingest_runtime_slot
 test_integration_connections
 test_integrations_api
 test_integrations_carry
@@ -252,7 +253,6 @@ test_project_timeline
 test_projects
 test_projects_activity
 test_projects_unit_upgrade
-test_push_wins
 test_rca_callback_anchor
 test_recording_person
 test_recurring_reads

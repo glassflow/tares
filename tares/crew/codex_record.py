@@ -2,7 +2,7 @@
 
 A Claude Code station is recorded by the plugin's hooks, which post its transcript lines. A Codex station has
 none of that, and nothing stays connected to it. So once a watch round `step` looks at every Codex station of
-the crew and posts what is new to /ingest/codex, where `tares.connectors.codex` turns it into the session
+the crew and posts what is new to /ingest/codex, where `tares.session_codex` turns it into the session
 lines the cell already keeps. What is read, and from where:
 
   a command's start    the guard's record (`tares.crew.codex_guard`): the hook writes a line before every

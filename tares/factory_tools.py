@@ -110,16 +110,8 @@ def slack(store) -> dict:
 def claude_code(store, now) -> dict:
     row = {"key": "claude_code", "name": "Claude Code", "href": "/sources/claude-code", "short": None,
            "covers": None}
-    names = {c.get("name") for c in _safe(store.list_catalog_sources, []) or []
-             if c.get("connector") == "claude_code"}
-    if not names:
-        return {**row, "connected": False,
-                "detail": f"Not connected. Nothing has reported in {REPORTING_DAYS} days."}
-    last = None
-    for s in _safe(store.event_stats, []) or []:
-        t = _dt(s.get("last_ingest"))
-        if s.get("source") in names and t and (last is None or t > last):
-            last = t
+    # the newest session line the cell holds (TR-1804): no source catalog, no event counters
+    last = _dt(_safe(store.newest_session_line_at, None))
     fresh = last is not None and (now - last).total_seconds() <= REPORTING_DAYS * 86400
     if fresh:
         ago = plain_ago(last, now)

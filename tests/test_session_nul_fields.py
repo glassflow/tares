@@ -28,6 +28,7 @@ from sqlalchemy import delete, event, select  # noqa: E402
 
 from tares import session_drain, session_ingest, session_move  # noqa: E402
 from tares.connectors import claude_code  # noqa: E402
+from tares import session_map  # noqa: E402
 from tares.session_store.tables import (challenges, crews, metadata,  # noqa: E402
                                         project_sessions, session_archive_parts,
                                         session_commands, session_files, session_ingest_marks,
@@ -336,12 +337,12 @@ def old_lines():
 def hold_in_duckdb(s):
     """The lines above as a version before TR-1707 mapped them, in DuckDB alone: how a cell holds
     them after a write of its sessions tables failed. `s` is a platform store."""
-    real = claude_code._without_nul
-    claude_code._without_nul = lambda o: o
+    real = session_map._without_nul
+    session_map._without_nul = lambda o: o
     try:
         envs = connector(None).map_payload(old_lines())      # no store: nothing else is recorded
     finally:
-        claude_code._without_nul = real
+        session_map._without_nul = real
     assert any(Z in (e.text or "") for e in envs) and any(Z in e.labels.get("branch", "")
                                                           for e in envs), "the lines lost their NULs"
     record, keep = session_ingest.record, s._keep_challenges
