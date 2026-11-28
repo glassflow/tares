@@ -29,7 +29,18 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from . import tracing as _tracing
+import contextlib
+
+
+class _NoSpan:
+    """What a model call reported to agent tracing, now nothing: Tares 2.0 removes agent tracing
+    (TR-1808, TR-1810). The `tracer` argument the calls take is ignored until the agents go."""
+    def __getattr__(self, _name):
+        return lambda *a, **k: None
+
+
+def _no_span():
+    return contextlib.nullcontext(_NoSpan())
 
 USAGE_FIELDS = ("input_tokens", "output_tokens",
                 "cache_creation_input_tokens", "cache_read_input_tokens")
@@ -210,8 +221,7 @@ class AnthropicProvider(Provider):
     async def complete(self, *, model, system, tools, messages, max_tokens,
                        tools_allowed=True, tracer=None, tool_choice=None) -> ModelReply:
         body = self._body(model, system, tools, messages, max_tokens, tools_allowed, tool_choice)
-        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
-                                 provider=self.kind, tools=tools) as gen:
+        with _no_span() as gen:
             async with httpx.AsyncClient(timeout=self.timeout) as cx:
                 r = await cx.post(f"{self.base_url}/v1/messages", headers=self.headers, json=body)
             if r.status_code >= 400:
@@ -232,8 +242,7 @@ class AnthropicProvider(Provider):
                                    "(pip install tares[agent])")
         client = anthropic.AsyncAnthropic(base_url=self.base_url, default_headers=self.headers)
         wire = self.render(messages)
-        with _tracing.generation(tracer, model, wire, {"max_tokens": max_tokens},
-                                 provider=self.kind, tools=tools) as gen:
+        with _no_span() as gen:
             async with client.messages.stream(model=model, max_tokens=max_tokens, system=system,
                                               tools=tools, messages=wire) as stream:
                 async for event in stream:
@@ -367,26 +376,17 @@ class OpenAIProvider(Provider):
             body["stream_options"] = {"include_usage": True}
         return body
 
-    def _trace_output(self, reply: ModelReply) -> list:
-        # the tracer reads content blocks in the Anthropic shape (tracing._part)
-        blocks: list = [{"type": "text", "text": reply.text}] if reply.text else []
-        blocks += [{"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.arguments}
-                   for tc in reply.tool_calls]
-        return blocks
-
     async def complete(self, *, model, system, tools, messages, max_tokens,
                        tools_allowed=True, tracer=None, tool_choice=None) -> ModelReply:
         body = self._body(model, system, tools, messages, max_tokens, tools_allowed, False,
                           tool_choice)
-        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
-                                 provider=self.kind, tools=tools) as gen:
+        with _no_span() as gen:
             async with httpx.AsyncClient(timeout=self.timeout) as cx:
                 r = await cx.post(f"{self.base_url}/chat/completions", headers=self.headers,
                                   json=body)
             if r.status_code >= 400:
                 raise ModelError(f"{self.label} {r.status_code}: {r.text[:300]}")
             reply = self.parse(r.json(), r.headers.get("x-litellm-response-cost"))
-            gen.set_output(self._trace_output(reply))
             gen.set_usage(reply.usage)
             gen.set_response_model(reply.model)
             gen.set_finish_reason(reply.stop_reason)
@@ -394,8 +394,7 @@ class OpenAIProvider(Provider):
 
     async def stream(self, *, model, system, tools, messages, max_tokens, tracer=None):
         body = self._body(model, system, tools, messages, max_tokens, True, True)
-        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
-                                 provider=self.kind, tools=tools) as gen:
+        with _no_span() as gen:
             text_parts: list[str] = []
             calls: dict[int, dict] = {}       # index -> {id, name, arguments (str so far)}
             finish = resp_model = None
@@ -448,7 +447,6 @@ class OpenAIProvider(Provider):
                 **({"tool_calls": tool_calls} if tool_calls else {})}}],
                 "usage": usage_block, "model": resp_model}
             reply = self.parse(assembled, cost_header)
-            gen.set_output(self._trace_output(reply))
             gen.set_usage(reply.usage)
             gen.set_response_model(reply.model)
             gen.set_finish_reason(reply.stop_reason)

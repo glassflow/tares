@@ -29,7 +29,7 @@ import httpx
 
 from ..monitoring import Monitoring
 from ..types import Field
-from ... import tracing
+from ... import station_telemetry as tracing   # the settings only (TR-1808)
 
 HELPER_COMMAND = "tares hook otel-headers"
 # the labels a station's telemetry carries; a ticket is left out: a station works many of them

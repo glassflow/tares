@@ -2889,7 +2889,7 @@ class FactoryStore:
         tracing is on."""
         self._integration_slot(slot)
         if slot == "monitoring":
-            from . import tracing
+            from . import station_telemetry as tracing
             from .integrations.builtin import monitoring_tares as mon
             cfg = tracing.resolve(self)
             if not cfg.active or cfg.provider not in tracing.PROVIDERS:

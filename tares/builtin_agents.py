@@ -50,12 +50,10 @@ def _clock() -> datetime:
     return datetime.now(timezone.utc)
 
 
-MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
 # The model choices the console offers per agent. The instance default (TARES_AGENT_MODEL) is
 # always first; an agent stores "" to mean "follow the instance default", so changing the
-# instance default moves every agent that never chose one.
-AGENT_MODELS = list(dict.fromkeys(
-    [MODEL, "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]))
+# instance default moves every agent that never chose one. Defined in providers.py (TR-1808).
+from .providers import AGENT_MODELS, MODEL  # noqa: E402,F401
 # Model-call rounds per run. The default is sized for read timeline + a read or two + a finding;
 # an agent that also reaches external MCP servers (a diff, a file, a write) needs more, so its
 # default is higher. Either can be overridden per agent (`max_rounds`, 1..24). One extra tools-off
