@@ -30,7 +30,7 @@ import httpx
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
-from session_helpers import seed_usage
+from session_helpers import seed_usage, wait_usage_ready
 from tares import claude_usage, factory_home, words
 from tares.screens import factory_crew as fc
 
@@ -442,12 +442,12 @@ async def private_shares():
         # 1000 spent this week: 800 on the private project, 200 on what everybody sees
         spent = {"secret": 800, "a": 60, "b": 34, "c": 26, "d": 22, "e": 18, "f": 14, "g": 12,
                  "h": 8, "i": 0.6}
+        wait_usage_ready(store)   # a seed written while the start-up fill runs is missed by it
         for n, cost in spent.items():
             store.create_project(f"uc_{n}", "custom", f"project-{n}", {}, goal="A project with a cost")
             store.set_project_kind(f"uc_{n}", "software_factory")
             seed_usage(store, f"s-{n}", f"m-{n}", project=f"uc_{n}", replied_at=an_hour_ago, cost_usd=cost)
         seed_usage(store, "s-own", "m-own", replied_at=an_hour_ago, cost_usd=5.4)   # "Other sessions"
-        claude_usage.clear_week_by_project()   # a start-up task may have read the week mid-seed (TR-1627)
         store.set_project_scope("uc_secret", "private")
         mia = store.create_person("Mia", "mia@example.com")["id"]
         bo = store.create_person("Bo", "bo@example.com")["id"]
