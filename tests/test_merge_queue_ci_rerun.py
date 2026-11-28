@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-merge-queue-rerun-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-merge-queue-rerun"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -179,7 +179,7 @@ async def main():
     store.upsert_github_credential("main", "tok-main")
     store.set_choice("ci", "github", {"no_ci": False}, "test")     # the factory's CI is GitHub
     person = store.create_person("Priya", email="priya@example.com")
-    print(f"state: {type(store.sc).__module__}.{type(store.sc).__name__}")
+    print(f"state: {store.sessions_db.dialect}")
 
     class Case:
         """A project with one ticket in review and its pull request, reviewed and with a green

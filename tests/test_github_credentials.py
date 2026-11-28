@@ -11,7 +11,7 @@ import asyncio
 import os
 from _env import remove_db
 
-os.environ["TARES_DB"] = "/tmp/tares-ghcred-test.duckdb"
+os.environ["TARES_HOME"] = "/tmp/tares-ghcred-test"
 
 import httpx
 
@@ -82,7 +82,7 @@ API = "http://api.github.test"
 
 
 async def main():
-    remove_db(os.environ["TARES_DB"])
+    remove_db(os.environ["TARES_HOME"])
     from tares.daemon import make_app
     app = make_app()
     async with app.router.lifespan_context(app):

@@ -260,7 +260,7 @@ class Cell:
         self.token = "" if self.keep else "probe-" + secrets.token_urlsafe(18)
         tares = os.path.join(os.path.dirname(sys.executable), "tares")
         env = {**os.environ, "TARES_OTLP_GRPC_PORT": "off", "TARES_HOME": self.dir, "TARES_AUTH_TOKEN": self.token}
-        for k in ("TARES_DB", "TARES_CATALOG", "TARES_FACTORY_URL", "TARESD_URL", "FACTORY_STATION", "FACTORY_ROLE"):
+        for k in ("TARES_CATALOG", "TARES_FACTORY_URL", "TARESD_URL", "FACTORY_STATION", "FACTORY_ROLE"):
             env.pop(k, None)
         self.log = open(os.path.join(self.dir, "cell.log"), "ab")
         self.proc = subprocess.Popen([tares, "up", "--port", str(self.port), "--data-dir", self.dir],

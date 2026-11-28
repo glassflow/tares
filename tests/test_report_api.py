@@ -35,7 +35,7 @@ scrub_os_environ()
 ROOT = "root-token-report-api"
 # The daemon reads its database, catalog and token when it is imported.
 HOME = tempfile.mkdtemp(prefix="tares-test-report-api-")
-os.environ.update({"TARES_DB": os.path.join(HOME, "import.duckdb"),
+os.environ.update({"TARES_HOME": os.path.join(HOME, "import"),
                    "TARES_CATALOG": os.path.join(HOME, "catalog.yaml"),
                    "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": ROOT,
                    "TARES_EDITION": "factory",
@@ -82,7 +82,7 @@ def bearer(secret: str) -> dict:
 @contextlib.asynccontextmanager
 async def cell():
     """A factory cell with auth on and a database of its own: (store, root client, bare client)."""
-    daemon.DB_PATH = os.path.join(tempfile.mkdtemp(dir=HOME), "api.duckdb")
+    daemon.DATA_DIR = os.path.join(tempfile.mkdtemp(dir=HOME), "api")
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)

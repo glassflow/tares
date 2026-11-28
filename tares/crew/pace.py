@@ -38,7 +38,7 @@ Differences from bash
   * The pace is told to a station through the same restart bash uses (`lifecycle.restart`, in the same
     conversation), with the same prompts.
 
-Standard library plus the crew modules (no duckdb, fastapi or daemon).
+Standard library plus the crew modules (no fastapi or daemon).
 """
 from __future__ import annotations
 

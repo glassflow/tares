@@ -20,7 +20,7 @@ licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-brain-repos-")
 ROOT = "root-token-" + "brain-repos"
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 AUTH_OFF = "--auth-off" in sys.argv   # the second run, started by the first: auth is read at import
@@ -67,9 +67,9 @@ def day(month, of=1):
 
 
 def unit():
-    print("== the store: the same on DuckDB and Postgres ==")
+    print("== the store: the same on SQLite and Postgres ==")
     from tares.store import Store
-    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit.duckdb"))   # its own folder: the session store is one file per data folder
+    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit"))   # its own folder: the session store is one file per data folder
     who = s.create_person("Kiran", "kiran@x.dev")
     ck("a new cell has no brain repos", s.list_brain_repos() == [])
     ck("add a repo", s.add_brain_repo("acme/web", "src-1", who["id"], day(1, 1)))
@@ -444,7 +444,7 @@ async def main():
 
 async def auth_off():
     """No TARES_AUTH_TOKEN: everyone is the admin, as on the other ee routes."""
-    os.environ["TARES_DB"] = os.path.join(TMP, "off.duckdb")
+    os.environ["TARES_HOME"] = os.path.join(TMP, "off")
     os.environ["TARES_LICENSE"] = licensed.test_licence()
     from tares.daemon import make_app
     lore = fake_lore.FakeLore()

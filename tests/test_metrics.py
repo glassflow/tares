@@ -13,9 +13,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _env import remove_db
 
-DB = "/tmp/metrics_test.duckdb"
+DB = "/tmp/metrics_test"
 remove_db(DB)
-os.environ["TARES_DB"] = DB
+os.environ["TARES_HOME"] = DB
 os.environ["TARES_AUTH_TOKEN"] = "metrics-test-token"
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "TARES_CATALOG"):
@@ -82,21 +82,26 @@ async def main():
             ck("no trigger or agent counters (TR-1810)", "tares_trigger_" not in body and "tares_agent_run" not in body)
             ck("stored events gauge", sample(body, "tares_events_stored") is not None)
 
-            # a scrape reads only the disk and the DuckDB file, never the state database (Postgres
-            # on a cloud cell): an idle cell must not open a connection on every scrape
-            state_reads = []
+            # a scrape measures the store at most every few seconds (Store.SIZE_FOR): a fleet
+            # that scrapes often does not ask the database each time
+            from tares import store as store_mod
+            reads = []
+            real_read = store.sessions_db.read
 
-            class _NoState:   # render() swallows probe errors, so record the read instead of raising
-                def execute(self, sql, *a, **k):
-                    state_reads.append(sql)
-                    raise RuntimeError("the scrape read the state database")
-            real_sc, store.sc = store.sc, _NoState()
+            def counted():
+                reads.append(1)
+                return real_read()
+            store._size = None
+            store.sessions_db.read = counted
             try:
-                r = await cx.get("/metrics")
+                r1 = await cx.get("/metrics")
+                first = len(reads)
+                r2 = await cx.get("/metrics")
             finally:
-                store.sc = real_sc
-            ck("a scrape leaves the state database alone", r.status_code == 200 and not state_reads,
-               str(state_reads))
+                store.sessions_db.read = real_read
+            ck("a scrape right after another does not measure the store again",
+               r1.status_code == r2.status_code == 200 and first >= 1 and len(reads) == first
+               and store_mod.SIZE_FOR > 0, (first, len(reads)))
 
             print("== model usage ==")
             store.record_model_usage("agent", "sre", "run_1", "gpt-4.1", 2, 1000, 100, cost_usd=0.0028, provider="openai")
@@ -172,12 +177,8 @@ async def main():
            and "# HELP tares_" in r.text, str(r.status_code))
         r = await cx.get("/health")
         ck("/health stays public", r.status_code == 200, str(r.status_code))
-    # the app's own threads (the session reconcile) may still be on the DuckDB connection: stop them, then close
-    # it under the store's lock, which they take for each call, or DuckDB refuses ("connection is busy")
-    store = tapp.state.store
-    store.close()
-    with store._lock:
-        store.con.close()
+    # the app's own threads (the ten minute pass) stop, and the store lets go of its connections
+    tapp.state.store.close()
 
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0

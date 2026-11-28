@@ -71,7 +71,7 @@ def reply(s, session, message, at, project=None, model="claude-opus-5-5", i=10, 
 def build():
     """A store with sessions of every kind: a builder with a project, a crew station, a session linked
     to a project, one with nothing, replies across hours, unpriced replies, a reply with no time."""
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     print("  on " + s.sessions_db.dialect)
     seed_station(s, "s1", "builder-1", role="builder", project="p1", crew_id="crew")
     seed_station(s, "s2", "builder-1", role="builder", project="p1", crew_id="crew")
@@ -176,7 +176,7 @@ def writers_keep_the_totals():
         conn.execute(session_usage.update().where(session_usage.c.session == "s3").values(cost_usd=None))
     hourly_ok, _ = hourly.check(s)
     ck("a change made behind the writers shows in the check", not hourly_ok)
-    s._claude_usage_fill()
+    s._claude_usage_reprice()
     agree("the start-up fill's deletes and pricing are in the totals")
     ok, why = hourly.check(s)
     ck("the totals match the rows at the end", ok, why)
@@ -401,7 +401,7 @@ def a_write_between_the_last_chunk_and_the_end():
 def the_cursor_is_read_in_the_databases_order():
     """Ids whose order differs between Python and a language collation. CI's Postgres sorts by
     bytes, so the three id columns get an ICU collation here, as a cell with en_US.UTF-8 has."""
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     sdb = s.sessions_db
     if sdb.dialect == "postgresql":
         with sdb.begin() as conn:
@@ -487,7 +487,7 @@ def the_locks_are_taken_once_and_in_order():
             seen.append(("write", q.split()[0]))
     event.listen(s.sessions_db.engine, "before_cursor_execute", watch)
     try:
-        calls = locked_by(s._claude_usage_fill)
+        calls = locked_by(s._claude_usage_reprice)
     finally:
         event.remove(s.sessions_db.engine, "before_cursor_execute", watch)
     ck("one call locks every session the start-up fill changes", calls == [unpriced + synthetic], calls)
@@ -511,7 +511,7 @@ def the_locks_are_taken_once_and_in_order():
         if chunks:
             hourly.fill(t, chunk=2, stop_after=chunks)
         prices_and_synthetic(t, ["s1", "s5"], ["s2", "s6"])
-        calls = locked_by(t._claude_usage_fill)
+        calls = locked_by(t._claude_usage_reprice)
         ck(f"after {chunks} chunk(s) it locks {want}", calls == [want], calls)
         err = filled(t)
         a, b = scan(answers, t, [None]), answers(t, [None])
@@ -540,7 +540,7 @@ def a_large_write_holds_few_locks():
         held.append(conn.execute(text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
                                       "AND pid = pg_backend_pid()")).scalar_one())
     with mock.patch.object(hourly, "after_write", counted):
-        s._claude_usage_fill()
+        s._claude_usage_reprice()
         s._usage_forget_project("gone")
     ck("1500 sessions, at most one lock per stripe, at start and at a project's deletion",
        len(held) == 2 and all(0 < n <= getattr(hourly, "STRIPES", 256) for n in held), held)
@@ -550,8 +550,8 @@ def a_large_write_holds_few_locks():
 
 
 def nothing_to_fill():
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
-    ck("the start-up fill of an empty store locks nothing", locked_by(s._claude_usage_fill) == [[]])
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
+    ck("the start-up pass of an empty store locks nothing", locked_by(s._claude_usage_reprice) in ([], [[]]))
     s._usage_forget_project("nobody")
     reply(s, "s1", "first", T0)
     with s.sessions_db.begin() as conn:                # no state row yet: nothing is covered

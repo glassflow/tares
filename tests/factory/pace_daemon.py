@@ -24,7 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
 TMP = tempfile.mkdtemp(prefix="tares-pace-daemon-")
-os.environ["TARES_DB"] = os.path.join(TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-pace"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"

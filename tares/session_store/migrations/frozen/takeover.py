@@ -1,4 +1,4 @@
-"""`takeover` as revisions 0014, 0017 and 0018 call it: a frozen copy of session_store/takeover.py.
+"""`takeover` as revisions 0012, 0014, 0017 and 0018 call it: a frozen copy of the takeover code of TR-1480.
 
 `takeover(conn, table)` makes the table when it is missing. For a table that exists, a column the
 definition has and the database lacks is added, a column the database has and the definition lacks

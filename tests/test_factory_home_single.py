@@ -25,7 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-home-single-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-home-single"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -104,7 +104,7 @@ async def one_person():
 async def team_database():
     from tares import daemon
     # two people on the cell before it starts; no licence anywhere
-    ann_row, bob_row = _people.seed(daemon.DB_PATH, [("Ann", "ann@example.com"),
+    ann_row, bob_row = _people.seed(daemon.DATA_DIR, [("Ann", "ann@example.com"),
                                                       ("Bob", "bob@example.com")])
     app = daemon.make_app()
     store = app.state.store
@@ -196,7 +196,7 @@ async def main():
     await one_person()
     # the daemon reads its database path once, at import: point it at a second file for the team cell
     from tares import daemon
-    daemon.DB_PATH = os.path.join(_TMP, "team.duckdb")
+    daemon.DATA_DIR = os.path.join(_TMP, "team")
     await team_database()
 
 

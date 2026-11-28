@@ -6,7 +6,6 @@ MCP tools. Nothing is enforced yet: this is what the project says.
 Run: .venv/bin/python ee/tests/test_project_access.py
 """
 import asyncio, json, logging, os, shutil, socket, subprocess, sys, tempfile
-import duckdb
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -49,14 +48,13 @@ def H(tok):
 
 
 def _db(name):
-    """A DuckDB path in a folder of its own: the people live in tares.sqlite beside the file, and
-    databases that share a folder share them."""
-    return os.path.join(tempfile.mkdtemp(dir=TMP), name + ".duckdb")
+    """A data directory of its own: two cells that shared one would share their people."""
+    return os.path.join(tempfile.mkdtemp(dir=TMP), name)
 
 
 def start(name, auth):
     db, port = _db(name), free_port()
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_LICENSE": licensed.test_licence()}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
@@ -316,20 +314,21 @@ def unit():
     """Rows from before: no lead, no scope. And the member functions of the store."""
     print("== projects from before ==")
     from tares.store import Store
+    from sqlalchemy import insert
+    from tares.envelope import now_utc
+    from tares.session_store.tables import usecases
     path = _db("old")
-    con = duckdb.connect(path)
-    con.execute("CREATE TABLE usecases (id TEXT PRIMARY KEY, recipe TEXT, name TEXT, params JSON, "
-                "status TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, last_error TEXT)")
-    con.execute("INSERT INTO usecases VALUES ('uc_old', 'custom', 'Old', '{}', 'active', now(), now(), NULL)")
-    con.close()
     s = Store(path)
+    with s.sessions_db.begin() as c:    # a row as a version before leads and scopes wrote it
+        c.execute(insert(usecases).values(id="uc_old", recipe="custom", name="Old", params={},
+                                          status="active", created_at=now_utc(), updated_at=now_utc()))
     old = s.get_project("uc_old")
     ck("an old project reads scope team and no lead", old["scope"] == "team" and old["lead_person_id"] is None,
        str(old))
     ck("... list_projects too", [(p["scope"], p["lead_person_id"]) for p in s.list_projects()]
        == [("team", None)])
     s.set_project_scope("uc_old", "private")
-    s.con.close()
+    s.close()
     s = Store(path)
     ck("reopening keeps what was set", s.get_project("uc_old")["scope"] == "private")
 
@@ -352,7 +351,7 @@ def unit():
     s.delete_project("uc_old")
     ck("delete_project deletes its members", s.list_project_members("uc_old") == []
        and s.get_project("uc_old") is None)
-    s.con.close()
+    s.close()
 
 
 async def main():

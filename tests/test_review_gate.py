@@ -76,7 +76,7 @@ ok, msg = run(TaresReview().check_connection({}))
 ck("check_connection says built in, even with no store", ok is True and msg == "Built in", (ok, msg))
 
 tmp = tempfile.mkdtemp(prefix="tares-review-gate-")
-s = Store(os.path.join(tmp, "t.duckdb"))
+s = Store(os.path.join(tmp, "t"))
 s.create_project("p1", "blank", "One", {})
 s.create_project("p2", "blank", "Two", {})
 gate = TaresReview(s)

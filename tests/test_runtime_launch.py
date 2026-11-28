@@ -51,7 +51,7 @@ os.environ.update(
     PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring",
     ANTHROPIC_API_KEY=FAKE_MODEL_KEY, TARES_HOME=str(SCRATCH / "tares-home"),
     FACTORY_PAUSE="0", FACTORY_NO_WATCH="1",
-    TARES_DB=str(SCRATCH / "cell.duckdb"), TARES_CATALOG=str(SCRATCH / "none.yaml"),
+    TARES_CATALOG=str(SCRATCH / "none.yaml"),
     TARES_OTLP_GRPC_PORT="off", TARES_AUTH_TOKEN="root-token-runtime-launch",   # auth on, for the route
 )
 (SCRATCH / "home").mkdir()

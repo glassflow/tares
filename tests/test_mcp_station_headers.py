@@ -94,7 +94,7 @@ async def main():
                                       stderr=subprocess.STDOUT))
 
     spawn("from tares.cli import run_daemon; run_daemon()",
-          {"TARES_DB": os.path.join(tmp, "tares.duckdb"), "TARES_CATALOG": os.path.join(tmp, "none.yaml"),
+          {"TARES_HOME": os.path.join(tmp, "tares"), "TARES_CATALOG": os.path.join(tmp, "none.yaml"),
            "TARES_HOST": "127.0.0.1", "TARES_PORT": dport, "TARES_AUTH_TOKEN": ROOT}, "taresd.log")
     mcp_env = {"TARES_MCP_TRANSPORT": "streamable-http", "TARES_MCP_HOST": "127.0.0.1",
                "TARESD_URL": daemon_url}

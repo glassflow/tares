@@ -94,7 +94,7 @@ function waitFor(url, tries = 100) {
   const py = fs.existsSync(path.join(REPO, ".venv/bin/python3"))
     ? path.join(REPO, ".venv/bin/python3") : "python3";
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-e2e-"));
-  const db = path.join(tmp, "handoff.duckdb");
+  const db = path.join(tmp, "handoff");
   const seed = path.join(tmp, "seed.yaml");
   fs.writeFileSync(seed, "sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n    config: {}\n");
 
@@ -102,7 +102,7 @@ function waitFor(url, tries = 100) {
   // A clean environment: only what the shell needs, so no inherited TARES_*, model or Slack keys leak in.
   const base0 = {};
   for (const k of ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "VIRTUAL_ENV"]) if (process.env[k]) base0[k] = process.env[k];
-  const env = { ...base0, TARES_DB: db, TARES_CATALOG: seed, TARES_PORT: String(DAEMON_PORT),
+  const env = { ...base0, TARES_HOME: db, TARES_CATALOG: seed, TARES_PORT: String(DAEMON_PORT),
                 TARES_MCP_PORT: String(DAEMON_PORT + 2), TARES_OTLP_GRPC_PORT: "off",
                 TARES_AUTH_TOKEN: ROOT_TOKEN, TARES_LOGIN_URL: LOGIN_URL,
                 TARES_UI_DIST: path.join(UI_DIR, "dist"), PYTHONPATH: REPO };

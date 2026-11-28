@@ -31,7 +31,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-recurring-reads-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-recurring"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -101,42 +101,12 @@ def _hit(statement):
         c[0] += 1
 
 
-class CountingCon:
-    """Stands in for the DuckDB connection: counts execute and executemany (as the query-budget test
-    does), hands everything else to the real one."""
-
-    def __init__(self, real):
-        self._real = real
-
-    def execute(self, *a, **kw):
-        _hit(a[0] if a else "")
-        return self._real.execute(*a, **kw)
-
-    def executemany(self, *a, **kw):
-        _hit(a[0] if a else "")
-        return self._real.executemany(*a, **kw)
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
-
-
 def install_counters(store):
-    """Hook the session store's engine, where recurring_findings() reads now, and the old connections."""
+    """Hook the session store's engine, where every read and write goes."""
     event.listen(store.sessions_db.engine, "before_cursor_execute",
                  lambda conn, cursor, statement, *a: _hit(statement))
-    shared = store.sc is store.con
-    store.con = CountingCon(store.con)
-    if shared:
-        store.sc = store.con
-        return "duckdb"
-    for name in ("execute", "executemany"):
-        real = getattr(store.sc, name)
+    return store.sessions_db.dialect
 
-        def counted(*a, _real=real, **kw):
-            _hit(a[0] if a else "")
-            return _real(*a, **kw)
-        setattr(store.sc, name, counted)
-    return "postgres"
 
 
 def seed(store):

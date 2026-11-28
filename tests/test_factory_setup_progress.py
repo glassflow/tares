@@ -4,7 +4,7 @@ the terminal steps without building the home (TR-1634), and answer what the home
 For each state of a cell's first run this asserts the exact `progress`, `onboarding` and `terminal`
 of both setup routes and the exact `start` and `onboarding` blocks of GET /api/home, for each kind
 of caller: the root token, a person's admin key, an admin key with no person, and auth off (a second
-process). The states run with the sessions table caught up and with it not caught up.
+process).
 
 Run: .venv/bin/python tests/test_factory_setup_progress.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness:. .venv/bin/python tests/test_factory_setup_progress.py
@@ -29,7 +29,7 @@ os.environ["TZ"] = "UTC"      # DuckDB answers times in the machine's zone
 time.tzset() if hasattr(time, "tzset") else None
 
 _TMP = tempfile.mkdtemp(prefix="tares-setup-progress-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 TOKEN = "root-token-setup-progress"
 if AUTH_OFF:
@@ -46,13 +46,7 @@ import httpx
 
 from tares import crew_onboarding as co
 from tares import factory_home as fh
-from tares import session_ingest
 from tares.envelope import Envelope
-from tares.store import Store  # noqa: E402
-
-# The "sessions table behind" states read the events, and a cell that has not caught up writes every
-# line there too. So the lines go to both stores here, as they did before the write gate opened.
-Store._lines_skip_duckdb = lambda self: False
 
 P = F = 0
 
@@ -155,39 +149,32 @@ async def state(label, cx, want_o, setup_text="", projects=0):
     progress = {"set": n, "total": TOTAL, "text": f"{n} of {TOTAL} done"}
     done = sum(1 for s in want if s["done"])
     start = {"steps": want, "done": done, "total": 4, "show": done < 4, "hidden": False}
-    real_caught = session_ingest.caught_up
-    for caught in (True, False):
-        if not caught:
-            session_ingest.caught_up = lambda store: False
-        tag = f"{label}{'' if caught else ' (sessions table behind)'}"
-        try:
-            fh.clear_cache()
-            BUILDS[0] = 0
-            rp = await cx.get("/api/factory/setup/progress")
-            rs = await cx.get("/api/factory/setup")
-            SETUP_BUILDS[0] += BUILDS[0]
-            SETUP_READS[0] += 2
-            fh.clear_cache()
-            rh = await cx.get("/api/home")
-        finally:
-            session_ingest.caught_up = real_caught
-        if (rp.status_code, rs.status_code, rh.status_code) != (200, 200, 200):
-            ck(f"{tag}: the three routes answer 200", False,
-               [(r.status_code, r.text[:200]) for r in (rp, rs, rh)])
-            continue
-        p, s, h = rp.json(), rs.json(), rh.json()
-        ck(f"{tag}: progress", p == {**progress, "projects": projects}, p)
-        ck(f"{tag}: setup's progress", s["progress"] == progress, s["progress"])
-        ck(f"{tag}: setup's onboarding", s["onboarding"] == want_o, _diff(s["onboarding"], want_o))
-        ck(f"{tag}: setup's terminal", s["terminal"] == terminal, _diff(s["terminal"], terminal))
-        ck(f"{tag}: setup's other fields", sorted(s) == ["edition", "exit_label", "licence", "onboarding",
-           "progress", "steps", "terminal", "title", "tools"]
-           and (s["title"], s["exit_label"]) == ("Set up your factory", "Exit setup")
-           and s["licence"] == {"state": "none", "ended_on": None, "text": "This cell has no licence."}
-           and sum(1 for st in s["steps"] if st["set"]) == BASE
-           and s["tools"]["github"]["connected"] == want_o["github"]["connected"], sorted(s))
-        ck(f"{tag}: home's onboarding", h["onboarding"] == want_o, _diff(h["onboarding"], want_o))
-        ck(f"{tag}: home's start", h["start"] == start, _diff(h["start"], start))
+    tag = label
+    fh.clear_cache()
+    BUILDS[0] = 0
+    rp = await cx.get("/api/factory/setup/progress")
+    rs = await cx.get("/api/factory/setup")
+    SETUP_BUILDS[0] += BUILDS[0]
+    SETUP_READS[0] += 2
+    fh.clear_cache()
+    rh = await cx.get("/api/home")
+    if (rp.status_code, rs.status_code, rh.status_code) != (200, 200, 200):
+        ck(f"{tag}: the three routes answer 200", False,
+           [(r.status_code, r.text[:200]) for r in (rp, rs, rh)])
+        return
+    p, s, h = rp.json(), rs.json(), rh.json()
+    ck(f"{tag}: progress", p == {**progress, "projects": projects}, p)
+    ck(f"{tag}: setup's progress", s["progress"] == progress, s["progress"])
+    ck(f"{tag}: setup's onboarding", s["onboarding"] == want_o, _diff(s["onboarding"], want_o))
+    ck(f"{tag}: setup's terminal", s["terminal"] == terminal, _diff(s["terminal"], terminal))
+    ck(f"{tag}: setup's other fields", sorted(s) == ["edition", "exit_label", "licence", "onboarding",
+       "progress", "steps", "terminal", "title", "tools"]
+       and (s["title"], s["exit_label"]) == ("Set up your factory", "Exit setup")
+       and s["licence"] == {"state": "none", "ended_on": None, "text": "This cell has no licence."}
+       and sum(1 for st in s["steps"] if st["set"]) == BASE
+       and s["tools"]["github"]["connected"] == want_o["github"]["connected"], sorted(s))
+    ck(f"{tag}: home's onboarding", h["onboarding"] == want_o, _diff(h["onboarding"], want_o))
+    ck(f"{tag}: home's start", h["start"] == start, _diff(h["start"], start))
 
 
 def _diff(got, want) -> str:
@@ -414,7 +401,7 @@ def finish():
 def run_again(*args) -> None:
     """One part in a process of its own: its own database, and the auth setting it needs."""
     global P, F
-    env = {k: v for k, v in os.environ.items() if k not in ("TARES_DB", "TARES_AUTH_TOKEN")}
+    env = {k: v for k, v in os.environ.items() if k not in ("TARES_AUTH_TOKEN")}
     r = subprocess.run([sys.executable, os.path.abspath(__file__), *args], env=env,
                        capture_output=True, text=True, timeout=600)
     print(r.stdout, end="")

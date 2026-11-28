@@ -17,8 +17,7 @@ For Ann and the two keys, each of the four reads leaves those sessions out:
                 them shows no session id, lines, start, context window or Claude Code version.
 
 Kim, Lee, Mo and the cell's own credential read everything ([same]), `usage` stays what TR-1696 made
-it, and the two writes on a station keep working. Every read is checked on a cell whose sessions
-table has caught up and on the events scan.
+it, and the two writes on a station keep working.
 
 Run: .venv/bin/python ee/tests/test_private_station_reads.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_private_station_reads.py
@@ -39,10 +38,10 @@ licensed.install_test_root()
 ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
 
-os.environ["TZ"] = "UTC"      # the events scan answers times in the machine's zone, the table in UTC
+os.environ["TZ"] = "UTC"
 time.tzset()
 _TMP = tempfile.mkdtemp(prefix="tares-private-station-reads-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-private-station-reads"
@@ -414,58 +413,26 @@ async def check_writes(app, world):
        and ended.json()["claude_version"] is None, ended.text)
 
 
-def keep_held(store):
-    """A caught-up factory cell holds new lines in the session store alone (TR-1647); one that has
-    not caught up writes them to DuckDB too and reads them there. Call before the seed. The function
-    it returns writes the held lines to DuckDB, which the events scan needs and a caught-up read is
-    not changed by."""
-    held, real = [], store._append_session_first
-
-    def remember(*args):
-        got = real(*args)
-        held.extend(got)
-        return got
-
-    store._append_session_first = remember
-
-    def to_duckdb():
-        store._append_events(held)
-        held.clear()
-
-    return to_duckdb
-
-
 async def main():
-    from tares import session_ingest
     from tares.daemon import make_app
     app = make_app()
     store = app.state.store
     async with app.router.lifespan_context(app):
-        to_duckdb = keep_held(store)
         world = await seed(app)
-        ck("same", "the sessions table has caught up", session_ingest.caught_up(store))
         every = [sid for ss in PLAN.values() for sid, _ in ss]
         tied = {s for s, ps in store.projects_by_session(every).items() if world["vault"] in ps}
         tied |= store.sessions_counting_for(every, {world["vault"]})
         ck("same", "the sessions tied to the vault are the ones the plan says", tied == set(HIDDEN),
            (sorted(tied ^ set(HIDDEN))))
-
-        real = session_ingest.caught_up
-        for path_name, caught in (("caught up", real), ("events scan", lambda s: False)):
-            if path_name == "events scan":
-                to_duckdb()
-            session_ingest.caught_up = caught
-            try:
-                for who in ("ann", "bot"):
-                    await check_outsider(app, world, who, path_name)
-                for who in ("kim", "lee", "mo", "root"):
-                    await check_insider(app, world, who, path_name)
-                r = await get(app, world, "atlaskey", f"/api/projects/{world['atlas']}/crew")
-                ck("list", f"Atlas's key, {path_name}: nothing of a hidden session in the project's crew",
-                   r.status_code == 200 and r.json()["stations"] and not leaked(r.json()),
-                   (r.status_code, r.text[:200]))
-            finally:
-                session_ingest.caught_up = real
+        path_name = "the sessions table"
+        for who in ("ann", "bot"):
+            await check_outsider(app, world, who, path_name)
+        for who in ("kim", "lee", "mo", "root"):
+            await check_insider(app, world, who, path_name)
+        r = await get(app, world, "atlaskey", f"/api/projects/{world['atlas']}/crew")
+        ck("list", f"Atlas's key, {path_name}: nothing of a hidden session in the project's crew",
+           r.status_code == 200 and r.json()["stations"] and not leaked(r.json()),
+           (r.status_code, r.text[:200]))
         await check_writes(app, world)
 
     for read in READS:

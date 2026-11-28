@@ -38,11 +38,11 @@ if AVAILABLE:
                           ["provider", "surface"])
     MODEL_UNPRICED = Counter("tares_model_unpriced_calls_total", "Model calls on a model with no "
                              "price, per provider", ["provider"])
-    DB_BYTES = Gauge("tares_db_bytes", "Database plus WAL size in bytes")
+    DB_BYTES = Gauge("tares_db_bytes", "Session store plus WAL plus archive size in bytes")
     DB_MAX_BYTES = Gauge("tares_db_max_bytes", "The storage limit ingest is measured against (0 when unknown)")
-    STORAGE_PCT = Gauge("tares_storage_pct", "Database size as a percentage of the limit (0 to 100; 0 when unknown)")
+    STORAGE_PCT = Gauge("tares_storage_pct", "Session store plus archive size as a percentage of the limit (0 to 100; 0 when unknown)")
     INGEST_PAUSED = Gauge("tares_ingest_paused", "1 while ingest is refused for storage")
-    EVENTS_STORED = Gauge("tares_events_stored", "Events in the database")
+    EVENTS_STORED = Gauge("tares_events_stored", "Session lines stored (the line counts of the sessions)")
     LOOP_LAG = Gauge("tares_event_loop_lag_seconds", "How late the event loop ran its last one-second timer")
     LOOP_STALLS = Counter("tares_event_loop_stalls_total", "Timer ticks that ran more than half a second late")
     LICENCE_VALID = Gauge("tares_licence_valid", "1 while the cell holds a valid licence key")
@@ -66,15 +66,11 @@ if AVAILABLE:
                                        "the sessions table",
                                        buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 5))
     SESSION_INGEST_FAILURES = Counter("tares_session_ingest_failures_total",
-                                      "Batches of claude_code lines the sessions table could not "
-                                      "take (the lines are stored; the next start catches the "
-                                      "table up)")
+                                      "Batches of claude_code lines the session store could not "
+                                      "take in full (refused, or a session's lines not kept)")
     CHALLENGES_LOST = Counter("tares_challenges_lost_total",
                               "Challenger lines a factory cell could not write to the sessions "
                               "database: they are sent once, so they are lost")
-    SESSION_LINES_TO_DUCKDB = Counter("tares_session_lines_to_duckdb_total",
-                                      "claude_code lines written to the DuckDB events table (stays 0 "
-                                      "on a factory cell with an archive)")
     SESSION_LINES_ROWS = Gauge("tares_session_lines_rows",
                                "Rows in the session_lines table (every claude_code line stored "
                                "since it was added), read every ten minutes")
@@ -90,15 +86,6 @@ if AVAILABLE:
     ARCHIVE_FAILURES = Counter("tares_archive_failures_total",
                                "Sessions the hourly archive could not move (the rows stay in "
                                "session_lines; the next pass tries again)")
-    SESSION_MOVE_SESSIONS = Gauge("tares_session_move_sessions",
-                                  "Sessions in the one-time move of older lines out of DuckDB, by "
-                                  "state (pending, verified, failed)",
-                                  ["state"])
-    SESSION_MOVE_LINES = Counter("tares_session_move_lines_total",
-                                 "Lines the one-time move wrote, into session_lines or the archive, "
-                                 "for sessions it verified")
-    for _state in ("pending", "verified", "failed"):
-        SESSION_MOVE_SESSIONS.labels(state=_state)
 
 _storage_probe = None
 _licence_probe = None
@@ -113,11 +100,6 @@ def events_ingested(source: str, n: int) -> None:
 def challenges_lost(n: int) -> None:
     if AVAILABLE and n:
         CHALLENGES_LOST.inc(n)
-
-
-def session_lines_to_duckdb(n: int) -> None:
-    if AVAILABLE and n:
-        SESSION_LINES_TO_DUCKDB.inc(n)
 
 
 def model_usage(provider: str | None, surface: str, calls: int, input_tokens: int,
@@ -154,20 +136,6 @@ def session_archived(nbytes: int) -> None:
     if AVAILABLE:
         ARCHIVE_SESSIONS.inc()
         ARCHIVE_BYTES.inc(nbytes)
-
-
-def session_move_sessions(counts: dict) -> None:
-    """The sessions of the one-time move by state, {state: n} (TR-1609); a state missing reads 0."""
-    if AVAILABLE:
-        for state in ("pending", "verified", "failed"):
-            SESSION_MOVE_SESSIONS.labels(state=state).set(int(counts.get(state, 0)))
-
-
-def session_move_lines(n: int) -> None:
-    """Lines written into session_lines or the archive for one verified session of the move
-    (TR-1609, TR-1611)."""
-    if AVAILABLE and n:
-        SESSION_MOVE_LINES.inc(n)
 
 
 def archive_failed() -> None:
@@ -298,7 +266,8 @@ def prime(sources=(), providers=()) -> None:
 
 
 def set_storage_probe(fn) -> None:
-    """`fn()` returns {db_bytes, max_bytes, pct_used, paused, events}; read on every scrape, so the
+    """`fn()` returns {db_bytes, wal_bytes, archive_bytes, max_bytes, pct_used, paused, events};
+    read on every scrape, so the
     gauges cost nothing between scrapes."""
     global _storage_probe
     _storage_probe = fn
@@ -316,8 +285,8 @@ def set_info(version: str | None) -> None:
 
 
 async def watch_event_loop(stop: asyncio.Event | None = None, interval: float = 1.0) -> None:
-    """Measure how late a one-second timer runs: anything blocking the loop (a long DuckDB
-    scan, a synchronous connector) shows up as lag. A cheap, always-on stall detector."""
+    """Measure how late a one-second timer runs: anything blocking the loop (a long database
+    read, a synchronous call) shows up as lag. A cheap, always-on stall detector."""
     while not (stop and stop.is_set()):
         t0 = time.monotonic()
         await asyncio.sleep(interval)
@@ -335,7 +304,7 @@ def render() -> tuple[bytes, str]:
     if _storage_probe is not None:
         try:
             st = _storage_probe() or {}
-            DB_BYTES.set(float(st.get("db_bytes") or 0))
+            DB_BYTES.set(float(sum(st.get(k) or 0 for k in ("db_bytes", "wal_bytes", "archive_bytes"))))
             DB_MAX_BYTES.set(float(st.get("max_bytes") or 0))
             STORAGE_PCT.set(float(st.get("pct_used") or 0))
             INGEST_PAUSED.set(1 if st.get("paused") else 0)

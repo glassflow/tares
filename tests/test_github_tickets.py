@@ -26,7 +26,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _TMP = tempfile.mkdtemp(prefix="tares-gh-api-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-github"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -199,7 +199,7 @@ async def sync(store, uid):
 
 def fresh(name="Edge", label=LABEL):
     """A new store with one linked project, for the checks that need a known starting point."""
-    store = Store(os.path.join(tempfile.mkdtemp(prefix="tares-gh-edge-"), "t.duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(prefix="tares-gh-edge-"), "t"))
     store.upsert_github_credential("cred-a", "tok-a")
     uid = "uc_edge"
     store.create_project(uid, "custom", name, {"objects": []})
@@ -427,7 +427,7 @@ async def edges():
 
 async def main():
     reset()
-    store = Store(os.path.join(tempfile.mkdtemp(prefix="tares-gh-tickets-"), "t.duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(prefix="tares-gh-tickets-"), "t"))
     store.upsert_github_credential("cred-a", "tok-a")
     uid = "uc_gh"
     store.create_project(uid, "custom", "Invoices", {"objects": []})
@@ -708,9 +708,6 @@ async def api():
            and lk["credential"] == "cred-a" and lk["synced_at"] and lk["error"] is None and lk["issues"] == 4, lk)
         ck("(A) linking makes no source: the sync runner keeps the tickets in step (TR-1806)",
            not hasattr(app.state, "runtime"))
-        with store._lock:
-            n = store.con.execute("SELECT count(*) FROM events WHERE source = 'github_issues'").fetchone()[0]
-        ck("(A) the sync's change events are not stored", n == 0, n)
         r = await cx.get(f"/api/projects/{uid}/tickets")
         ck("(A) GET tickets shows the github link, and no linear one", r.json()["github"]["repo"] == "acme/app"
            and r.json()["github"]["issue_label"] == "tares:p" and r.json()["linear"] is None

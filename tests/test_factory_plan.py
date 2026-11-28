@@ -17,7 +17,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _TMP = tempfile.mkdtemp(prefix="tares-factory-plan-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-plan"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -271,7 +271,7 @@ async def upgrade():
     """Tickets from before numbers get them on the next start, in plan order."""
     print("== numbering survives an upgrade ==")
     from tares.store import Store
-    path = os.path.join(_TMP, "old.duckdb")
+    path = os.path.join(_TMP, "old")
     s = Store(path)
     a = s.create_ticket("p", "tares", "A", position=2)
     b = s.create_ticket("p", "tares", "B", position=1)
@@ -279,13 +279,13 @@ async def upgrade():
     from tares.session_store.tables import tickets as tickets_t
     with s.sessions_db.begin() as conn:
         conn.execute(update(tickets_t).values(number=None))
-    s.con.close()
+    s.close()
     s = Store(path)
     nums = {t["title"]: t["number"] for t in s.list_tickets("p")}
     ck("old tickets get numbers in plan order", nums == {"B": 1, "A": 2}, nums)
     c = s.create_ticket("p", "tares", "C")
     ck("the next ticket follows", s.get_ticket("p", "T3")["title"] == "C")
-    s.con.close()
+    s.close()
 
 
 unit()

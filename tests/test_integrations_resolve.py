@@ -92,7 +92,7 @@ licensed = False
 licence.ee_allowed = lambda feature="enterprise": licensed
 
 tmp = tempfile.mkdtemp(prefix="tares-integrations-resolve-")
-s = Store(os.path.join(tmp, "t.duckdb"))
+s = Store(os.path.join(tmp, "t"))
 
 
 def eff(slot, uid=None):

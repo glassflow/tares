@@ -45,7 +45,7 @@ def ago(**kw):
 
 
 def new_store() -> Store:
-    return Store(os.path.join(tempfile.mkdtemp(prefix="tares-standup-batch-"), "s.duckdb"))
+    return Store(os.path.join(tempfile.mkdtemp(prefix="tares-standup-batch-"), "s"))
 
 
 def batch(store, hide=()):

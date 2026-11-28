@@ -27,18 +27,17 @@ scrub_os_environ()
 
 ROOT = "root-token-deleted-private"
 HOME = tempfile.mkdtemp(prefix="tares-deleted-private-")
-os.environ.update({"TARES_DB": os.path.join(HOME, "import.duckdb"),
+os.environ.update({"TARES_HOME": os.path.join(HOME, "import"),
                    "TARES_CATALOG": os.path.join(HOME, "catalog.yaml"),
                    "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": ROOT,
                    "TARES_EDITION": "factory"})
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from session_helpers import set_cols
 from tares import claude_usage as cu
-from tares import daemon, factory_home, report, session_ingest
-from tares.session_store.tables import session_ingest_marks as marks
+from tares import daemon, factory_home, report
 from tares.session_store.tables import session_usage as su
 
 P = F = 0
@@ -87,7 +86,7 @@ def reported(sid, mid, ago, project):
 
 @contextlib.asynccontextmanager
 async def cell(db: str):
-    daemon.DB_PATH = db
+    daemon.DATA_DIR = db
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
@@ -153,16 +152,8 @@ def total(rows) -> float:
 
 
 async def main():
-    db = os.path.join(HOME, "cell.duckdb")
+    db = os.path.join(HOME, "cell")
     async with cell(db) as (store, cx):
-        held, append = [], store._append_session_first
-
-        def remember(*args):     # the lines the session store alone holds (TR-1647)
-            got = append(*args)
-            held.extend(got)
-            return got
-
-        store._append_session_first = remember
         for uid, name in ((SECRET, "project-secret"), (OPEN, "project-open"), (OTHER, "project-other")):
             store.create_project(uid, "custom", name, {}, goal="A project with a cost")
             store.set_project_kind(uid, "software_factory")
@@ -271,23 +262,8 @@ async def main():
         ck("a Codex station's late lines are counted for the project they were stamped with",
            [tuple(r) for r in codex] == [("m-codex-id", SECRET), ("m-codex-name", SECRET)], codex)
         await after("late replies", cx, store)
-        # two of the stamped ones lose their usage row: the next start counts them again from the
-        # events, where the stamp still names the project (by name, and by id). A factory cell reads
-        # the events once, on the first start after an upgrade (TR-1613), when every line is there:
-        # so write the held ones to them and take back the record of that read.
-        store._append_events(held)
-        with store.sessions_db.begin() as conn:
-            conn.execute(delete(marks).where(marks.c.name == session_ingest.USAGE_FILLED))
-        again = su.c.message.in_(["m-open-stamp", "m-open-old"])
-        with store.sessions_db.begin() as conn:
-            conn.execute(delete(su).where(again))
-
     async with cell(db) as (store, cx):
         print("== after a restart ==")
-        with store.sessions_db.begin() as conn:
-            back = sorted(conn.execute(select(su.c.message, su.c.project).where(again)).all())
-        ck("the start counts the two again, for the project they were stamped with",
-           [tuple(r) for r in back] == [("m-open-old", SECRET), ("m-open-stamp", SECRET)], back)
         await after("restarted", cx, store)
 
         print("== a deleted public project ==")

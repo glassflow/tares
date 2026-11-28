@@ -81,7 +81,7 @@ const until = async (fn, tries = 40) => {
 
   const env = { ...process.env, TARES_EDITION: "factory", TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
                 TARES_UI_DIST: dist, TARES_OTLP_GRPC_PORT: "off", TARES_AUTH_TOKEN: TOKEN, PYTHONPATH: REPO };   // the venv installs the main checkout; this runs the code under test
-  for (const k of ["TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TARES_WORKSPACE_URL"]) delete env[k];
+  for (const k of ["TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TARES_WORKSPACE_URL"]) delete env[k];
   const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env });
   let browser;
   try {
@@ -816,10 +816,10 @@ const until = async (fn, tries = 40) => {
 import sys, os
 sys.path.insert(0, os.getcwd())
 from tares.store import Store
-s = Store(os.path.join(sys.argv[1], "tares.duckdb"))
+s = Store(sys.argv[1])
 s.create_person("Alex", "alex@example.com")
 s.create_person("Kim", "kim@example.com")
-s.con.close()
+s.close()
 `, home2], { cwd: REPO, encoding: "utf8", env: { ...env, TARES_HOME: home2 } });
       const cloudEnv = { ...env, TARES_HOME: home2, TARES_PORT: String(PORT2), TARES_MCP_PORT: String(PORT2 + 1),
                          TARES_WORKSPACE_API_URL: `http://127.0.0.1:${FAKE_PORT}/api/workspaces/demo` };

@@ -34,7 +34,7 @@ from _env import scrub_os_environ
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-factory-projects-crud-")
-os.environ["TARES_DB"] = os.path.join(TMP, "projects.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "projects")
 os.environ.pop("TARES_AUTH_TOKEN", None)
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 

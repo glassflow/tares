@@ -19,7 +19,7 @@ Revises: 0011_session_station_runtime
 import sqlalchemy as sa
 from alembic import op
 
-from tares.session_store.takeover import takeover
+from tares.session_store.migrations.frozen.takeover import takeover
 
 revision = "0012_core_settings"
 down_revision = "0011_session_station_runtime"

@@ -28,7 +28,7 @@ def ck(name, ok, detail=""):
 
 
 tmp = tempfile.mkdtemp()
-store = Store(os.path.join(tmp, "t.duckdb"))
+store = Store(os.path.join(tmp, "t"))
 now = now_utc()
 
 

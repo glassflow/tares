@@ -1,4 +1,4 @@
-"""The session store (TR-1493, TR-1497): SQLite beside the DuckDB file, or the state Postgres, with Alembic.
+"""The session store (TR-1493, TR-1497): SQLite in the data directory, or the state Postgres, with Alembic.
 
 Plain:                python tests/test_session_store.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -17,21 +17,18 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from alembic import command  # noqa: E402
-from sqlalchemy import Column, Integer, MetaData, Table, inspect, select, text  # noqa: E402
+from sqlalchemy import Column, Integer, MetaData, Table, inspect, text  # noqa: E402
 
 import tares.store as store_mod  # noqa: E402
-from tares import state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store import tables as declared_tables  # noqa: E402
-from tares.session_store.copy import CopyMismatch, copy_from_duckdb  # noqa: E402
 from tares.session_store.engine import make_engine  # noqa: E402
 from tares.session_store.types import UTCDateTime  # noqa: E402
-from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0026_drop_catalog_sources"                       # the newest revision: tests that count revisions move with it
-REVISIONS = 26
+HEAD = "0027_drop_move_bookkeeping"                       # the newest revision: tests that count revisions move with it
+REVISIONS = 27
 FAILS = []
 
 
@@ -82,16 +79,16 @@ def upgrade_lines(records):
 def fresh_start():
     print("== a fresh start ==")
     d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
+    path = os.path.join(d, "t")
     with capture_logs("alembic.runtime.migration") as recs:
         s = Store(path)
     ck("a first start runs every revision", len(upgrade_lines(recs)) == REVISIONS, [r.getMessage() for r in recs])
     ck(f"the revision table holds {HEAD}", versions(s.sessions_db) == [HEAD], versions(s.sessions_db))
     if s.state_dsn:
         ck("with a state DSN the store is Postgres", s.sessions_db.dialect == "postgresql")
-        ck("and no tares.sqlite is made", not os.path.exists(os.path.join(d, "tares.sqlite")))
+        ck("and no tares.sqlite is made", not os.path.exists(os.path.join(path, "tares.sqlite")))
     else:
-        ck("tares.sqlite is made next to the DuckDB file", os.path.exists(os.path.join(d, "tares.sqlite")))
+        ck("tares.sqlite is made in the data directory", os.path.exists(os.path.join(path, "tares.sqlite")))
         ck("the dialect is sqlite", s.sessions_db.dialect == "sqlite")
         with s.sessions_db.begin() as c:
             mode = c.execute(text("PRAGMA journal_mode")).scalar()
@@ -229,7 +226,7 @@ def upgrade_failure():
 
     store_mod.SessionStore.upgrade = boom
     try:
-        Store(os.path.join(d, "t.duckdb"), state_dsn="" if PG else None)
+        Store(os.path.join(d, "t"), state_dsn="" if PG else None)
         ck("Store raises", False, "no error")
     except StoreUnavailable as e:
         ck("Store raises StoreUnavailable", "session store down" in str(e), str(e))
@@ -241,7 +238,7 @@ def upgrade_failure():
 
 SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "session_stations", "session_usage"]
 ACCOUNT_TABLES = ["people", "api_keys", "project_members"]      # TR-1608, with settings: taken over
-# TR-1610: taken over like the accounts, and not in DuckDB here (the Store no longer makes them there)
+# TR-1610: taken over like the accounts
 PROJECT_TABLES = ["usecases", "usecase_objects", "usecase_log", "docs", "skills", "shared_skills",
                   "github_credentials", "model_usage"]     # catalog_sources went in TR-1811 (0026)
 TICKET_TABLES = ["tickets", "ticket_history", "ticket_numbers"]                  # TR-1612, the same
@@ -256,9 +253,10 @@ BRAIN_TABLES = ["repo_maps", "repo_map_history", "brain_repos", "brain_repo_fold
                 "brain_calls"]    # TR-1618
 ACCOUNT_TABLES = (ACCOUNT_TABLES + PROJECT_TABLES + TICKET_TABLES + REVIEW_TABLES + CREW_TABLES
                   + INTEGRATION_TABLES + BRAIN_TABLES)
-ALL_TABLES = SESSION_TABLES + ["settings"] + ACCOUNT_TABLES + ["session_store_copies", "session_ingest_marks", "sessions",
+# session_store_copies, session_ingest_marks and session_moves went with the old event store (0027)
+ALL_TABLES = SESSION_TABLES + ["settings"] + ACCOUNT_TABLES + ["sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
-                               "session_files", "session_lines", "session_archive_parts", "session_moves",
+                               "session_files", "session_lines", "session_archive_parts",
                                "session_usage_hourly", "session_rollup_state",     # TR-1632
                                "report_weeks", "report_texts", "merge_records",
                                "integration_keys", "pr_events"]                     # TR-1807
@@ -323,13 +321,12 @@ def session_tables():
     d = tempfile.mkdtemp()
     sdb = SessionStore(d)
     sdb.upgrade()
-    ck("the five tables and the copy ledger exist", sorted(inspect(sdb.engine).get_table_names()
+    ck("every declared table exists", sorted(inspect(sdb.engine).get_table_names()
        ) == sorted(ALL_TABLES + ["session_store_version"]), inspect(sdb.engine).get_table_names())
     ck("each table has the columns, types and primary key tables.py declares",
        shape(sdb.engine) == declared(sdb.engine), (shape(sdb.engine), declared(sdb.engine)))
     ck("project_sessions has an index on session",
        index_columns(sdb.engine, "project_sessions", "project_sessions_session") == ["session"])
-    ck("the copy ledger is empty", _count(sdb, "session_store_copies") == 0)
     step_down(sdb, "0001_base")
     ck("a downgrade puts the version back to the base", versions(sdb) == ["0001_base"], versions(sdb))
     ck("and removes the tables the store made, but not settings and the accounts (a downgrade never "
@@ -349,304 +346,29 @@ def _count(sdb, table):
         return c.execute(text(f"SELECT count(*) FROM {table}")).scalar()
 
 
-# columns added to a session table after the session store left DuckDB: DuckDB's copy has none of them, and a row
-# copied from it has them empty (TR-1600)
-SINCE_DUCKDB = {"session_stations": ("runtime", "model")}
+# columns added to session_stations after the old DDL made it: a table it made has them empty (TR-1600)
+SINCE_OLD_DDL = {"session_stations": ("runtime", "model")}
 
-
-def _old_cols(table):
-    """The columns of `table` that DuckDB's copy has, in declared order."""
-    return [c for c in declared_tables.metadata.tables[table].columns if c.name not in SINCE_DUCKDB.get(table, ())]
-
-
-def _duck_rows(store, table):
-    cols = [c.name for c in _old_cols(table)]
-    with store._lock:
-        return cols, store.con.execute(f"SELECT {', '.join(cols)} FROM {table} ORDER BY 1, 2").fetchall()
-
-
-def _norm(v):
-    return v.astimezone(timezone.utc) if isinstance(v, datetime) and v.tzinfo else v
-
-
-def _seed_duckdb(s, full=True):
-    """Rows in DuckDB's five session tables, as a version before the session store left them.
-    Written to DuckDB directly: nothing else writes there now. `full` False leaves session_meters
-    empty."""
-    t1 = datetime(2026, 11, 19, 9, 30, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
-    t2 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=timezone.utc)
-    rows = {
-        "session_stations": [("s1", "crew-builder", "builder", "crew-orch", "p1", t1, "crew1"),
-                             ("s2", "crew-reviewer", "", "", None, t2, None)],     # empty and null values
-        "session_states": [("s1", "working", "building", t1), ("s2", "idle", None, t2)],
-        "project_sessions": [("p1", "s1", "glassflow/tares", t1), ("p1", "s2", None, t2)],
-        "session_usage": [("s1", "m1", t1, "claude-sonnet-5-5", "p1", None, 120, 40, 30, 900, 0.000805, 0),
-                          ("s1", "m2", t2, None, None, "sub1", 0, 0, 0, 0, None, 0)],   # no model, zero tokens
-        "session_meters": ([("s1", '{"plan": "max", "n": 3}', t1, '{"used": 12}', t2, None, "person1"),
-                            ("s2", None, None, None, None, t2, None)] if full else []),  # a row of mostly nulls
-    }
-    with s._lock:
-        for stmt in _old_ddl(SESSION_TABLES):      # a Store no longer makes them in DuckDB
-            s.con.execute(stmt)
-        for table, data in rows.items():
-            for r in data:
-                s.con.execute(f"INSERT INTO {table} VALUES ({', '.join('?' * len(r))})", list(r))
-
-
-def _forget_copy(s):
-    """Empty the session store and its ledger: the state of a cell that has not copied yet."""
-    with s.sessions_db.begin() as c:
-        for t in SESSION_TABLES + ["session_store_copies"]:
-            c.execute(text(f"DELETE FROM {t}"))
-
-
-def _seeded_store(full=True):
-    """A DuckDB-only Store (its session store is SQLite) whose DuckDB holds rows in the session
-    tables and whose session store holds none, so the copy has something to do."""
-    d = tempfile.mkdtemp()
-    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if PG else None)
-    _seed_duckdb(s, full)
-    _forget_copy(s)
-    return s
-
-
-def copy_at_start():
-    print("== the copy at start, on SQLite ==")
-    d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
-    s = Store(path, state_dsn="" if PG else None)
-    ck("a new cell copies nothing, and the ledger names every moved table",
-       _count(s.sessions_db, "session_store_copies") == len(declared_tables.MOVED_TABLES))
-    _seed_duckdb(s)
-    before = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
-    s.con.execute("CHECKPOINT")
-    s.con.close()
-    s.close()
-    for f in os.listdir(d):                  # a cell from before the session store: no tares.sqlite
-        if f.startswith("tares.sqlite"):
-            os.remove(os.path.join(d, f))
-    seen = {}
-    orig = Store._upgrade
-
-    def spy(self):
-        seen.update({t: _count(self.sessions_db, t) for t in SESSION_TABLES})
-        return orig(self)
-    Store._upgrade = spy
-    try:
-        s = Store(path, state_dsn="" if PG else None)
-    finally:
-        Store._upgrade = orig
-    ck("the data upgrades start after the copy: every table already holds its rows",
-       seen == {t: len(before[t]) for t in SESSION_TABLES}, seen)
-    for t in SESSION_TABLES:
-        got = [tuple(_norm(v) for v in r) for r in _session_rows(s, t)]
-        want = [tuple(_norm(v) for v in r) for r in before[t]]
-        if t == "session_stations":
-            # the data upgrade gives a session with no crew the cell's crew, in the copied table
-            ck("the upgrade's fill landed in the copy: a station with no crew has one, DuckDB's row does not",
-               got[1][-1] and want[1][-1] is None, (got, want))
-            got, want = [r[:-1] for r in got], [r[:-1] for r in want]
-        ck(f"{t} arrived, row for row", got == want, (got, want))
-    ck("DuckDB's copies are untouched", {t: _duck_rows(s, t)[1] for t in SESSION_TABLES} == before)
-    s.close()
-    s2 = Store(path, state_dsn="" if PG else None)
-    ck("a second start copies nothing more", {t: _count(s2.sessions_db, t) for t in SESSION_TABLES}
-       == {t: len(before[t]) for t in SESSION_TABLES})
-    s2.set_session_state("s1", "ended", None, datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc))
-    ck("a write after the copy stays in the session store only",
-       _duck_rows(s2, "session_states")[1] == before["session_states"]
-       and s2.session_state("s1")["state"] == "ended")
-    s2.close()
-
-
-def _session_rows(s, t):
-    tbl = declared_tables.metadata.tables[t]
-    with s.sessions_db.begin() as c:
-        return c.execute(select(*_old_cols(t)).order_by(*list(tbl.columns)[:2])).all()
-
-
-def _new_cols_empty(s, t):
-    """The columns DuckDB's copy did not have hold nothing in any copied row."""
-    tbl = declared_tables.metadata.tables[t]
-    new = [tbl.c[n] for n in SINCE_DUCKDB.get(t, ())]
-    if not new:
-        return True
-    with s.sessions_db.begin() as c:
-        return all(v is None for r in c.execute(select(*new)).all() for v in r)
-
-
-def copy_sqlite():
-    print("== copy_from_duckdb on SQLite ==")
-    s = _seeded_store()
-    before = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
-    ck("every session table has rows to copy", all(before[t] for t in SESSION_TABLES),
-       {t: len(r) for t, r in before.items()})
-    ck("nothing is in the session store yet", all(_count(s.sessions_db, t) == 0 for t in SESSION_TABLES))
-    got = copy_from_duckdb(s, s.sessions_db)
-    ck("the first call reports the rows it copied (settings and the accounts are not in DuckDB here: zero)",
-       got == {**{t: len(before[t]) for t in SESSION_TABLES}, "settings": 0,
-               **{t: 0 for t in ACCOUNT_TABLES}}, got)
-    for t in SESSION_TABLES:
-        rows = _session_rows(s, t)   # through the declared table, so times come back as UTC
-        ck(f"{t}: every row arrived, values and times the same",
-           [tuple(_norm(v) for v in r) for r in rows] == [tuple(_norm(v) for v in r) for r in before[t]]
-           and _new_cols_empty(s, t), (rows, before[t]))
-    with s.sessions_db.begin() as c:
-        ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
-    ck("the ledger holds each table and its count", ledger == {**{t: len(before[t]) for t in SESSION_TABLES},
-                                                              "settings": 0, **{t: 0 for t in ACCOUNT_TABLES}},
-       ledger)
-    ck("DuckDB is unchanged", {t: _duck_rows(s, t)[1] for t in SESSION_TABLES} == before)
-    again = copy_from_duckdb(s, s.sessions_db)
-    ck("a second call copies nothing", again == {}, again)
-    ck("and adds no row", {t: _count(s.sessions_db, t) for t in SESSION_TABLES}
-       == {t: len(before[t]) for t in SESSION_TABLES})
-    with s._lock:
-        s.con.execute("INSERT INTO session_usage (session, message, replied_at, model) VALUES "
-                      "('s1', 'm3', now(), 'x')")
-    ck("a row written to DuckDB after the copy stays out", copy_from_duckdb(s, s.sessions_db) == {}
-       and _count(s.sessions_db, "session_usage") == len(before["session_usage"]))
-    s.close()
-
-    # an empty table is copied too: zero rows, and the ledger says so
-    e = _seeded_store(full=False)
-    got = copy_from_duckdb(e, e.sessions_db)
-    with e.sessions_db.begin() as c:
-        zero = c.execute(text("SELECT rows FROM session_store_copies WHERE table_name = 'session_meters'")).all()
-    ck("an empty table copies zero rows and is recorded", got.get("session_meters") == 0 and zero == [(0,)],
-       (got, zero))
-    e.close()
-
-    # a mismatch raises with the table and both numbers, and leaves that table out of the ledger
-    m = _seeded_store()
-    with m.sessions_db.begin() as c:
-        c.execute(text("CREATE TRIGGER drop_states BEFORE INSERT ON session_states "
-                       "BEGIN SELECT RAISE(IGNORE); END"))
-    try:
-        copy_from_duckdb(m, m.sessions_db)
-        ck("a table that loses rows raises", False, "no error")
-    except CopyMismatch as err:
-        msg = str(err)
-        ck("a table that loses rows raises with its name and both counts",
-           "session_states" in msg and "read 2" in msg and "inserted 0" in msg, msg)
-    with m.sessions_db.begin() as c:
-        ledger = [r[0] for r in c.execute(text("SELECT table_name FROM session_store_copies")).all()]
-    ck("the table before it is in the ledger and the failing one is not",
-       ledger == ["session_stations"] and _count(m.sessions_db, "session_states") == 0, ledger)
-    ck("the tables after it were not touched", _count(m.sessions_db, "session_usage") == 0)
-    with m.sessions_db.begin() as c:
-        c.execute(text("DROP TRIGGER drop_states"))
-    got = copy_from_duckdb(m, m.sessions_db)
-    ck("after the cause is gone, the next call copies the rest and not the first",
-       sorted(got) == sorted(["project_sessions", "session_meters", "session_states", "session_usage", "settings"]
-                             + ACCOUNT_TABLES), got)
-    m.close()
-
-
-def copy_on_postgres():
-    print("== copy_from_duckdb with the state in Postgres ==")
-    if not PG:
-        print("  skip  TARES_TEST_PG is not set")
-        return
-    import psycopg
-    d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
-    s = Store(path, state_dsn="")                          # an older cell: its state, and these tables, in DuckDB
-    _seed_duckdb(s)
-    before = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
-    s.con.execute("CHECKPOINT")
-    s.con.close()
-    s.close()
-    _drop_local_file(d)        # an older cell has no tares.sqlite: its rows are only in DuckDB
-    sch = "ss_" + uuid.uuid4().hex[:12]
-    with psycopg.connect(PG, autocommit=True) as c:
-        c.execute(f"CREATE SCHEMA {sch}")
-    try:
-        s = Store(path, state_dsn=f"{PG}?options=-csearch_path%3D{sch}")   # its first start with a state database
-        if s.sessions_db.dialect != "postgresql":
-            print("  skip  the Store did not take the state database")
-            s.close()
-            return
-        ck("the session store is Postgres", True)
-        ck("the ledger names the five tables, with their row counts",
-           sorted(_ledger5(s)) == sorted((t, len(before[t])) for t in SESSION_TABLES), _ledger(s))
-        for t in SESSION_TABLES:
-            got = [tuple(_norm(v) for v in r) for r in _session_rows(s, t)]
-            want = [tuple(_norm(v) for v in r) for r in before[t]]
-            if t == "session_stations":                    # the data upgrade fills the crew after the copy
-                got, want = [r[:-1] for r in got], [r[:-1] for r in want]
-            ck(f"{t} arrived in Postgres, row for row", got == want, (got, want))
-        ck("DuckDB's copies are untouched", {t: _duck_rows(s, t)[1] for t in SESSION_TABLES} == before)
-        s.link_session("p1", "s3")
-        ck("nothing is copied afterwards: the rows are already there", copy_from_duckdb(s, s.sessions_db) == {})
-        ck("and the ledger is as it was",
-           sorted(_ledger5(s)) == sorted((t, len(before[t])) for t in SESSION_TABLES))
-        s.close()
-        s = Store(path, state_dsn=f"{PG}?options=-csearch_path%3D{sch}")
-        ck("a second start copies nothing more", _count(s.sessions_db, "project_sessions") == 3)
-        s.close()
-    finally:
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"DROP SCHEMA IF EXISTS {sch} CASCADE")
-
-
-def _drop_local_file(d):
-    for f in os.listdir(d):
-        if f.startswith("tares.sqlite"):
-            os.remove(os.path.join(d, f))
-
-
-def local_then_postgres():
-    print("== a cell that ran on SQLite moves to Postgres (the rows since the copy come along) ==")
-    if not PG:
-        print("  skip  TARES_TEST_PG is not set")
-        return
-    import psycopg
-    d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
-    s = Store(path, state_dsn="")
-    _seed_duckdb(s)                                        # what a version before the session store left in DuckDB
-    _forget_copy(s)
-    s.close()
-    s = Store(path, state_dsn="")                          # the local start: DuckDB's rows are copied to tares.sqlite
-    ck("the local start copied DuckDB's rows", _count(s.sessions_db, "project_sessions") == 2)
-    s.link_session("p1", "s-local")                        # written after the copy, to tares.sqlite only
-    s.set_session_state("s-local", "working", "after the copy", datetime(2026, 11, 20, tzinfo=timezone.utc))
-    with s.sessions_db.begin() as c:                       # and a row DuckDB still has that tares.sqlite lost
-        c.execute(text("DELETE FROM project_sessions WHERE session = 's2'"))
-    local = {t: [tuple(_norm(v) for v in r) for r in _session_rows(s, t)] for t in SESSION_TABLES}
-    duck = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
-    s.con.execute("CHECKPOINT")
-    s.con.close()
-    s.close()
-    sch = "ss_" + uuid.uuid4().hex[:12]
-    with psycopg.connect(PG, autocommit=True) as c:
-        c.execute(f"CREATE SCHEMA {sch}")
-    try:
-        s = Store(path, state_dsn=f"{PG}?options=-csearch_path%3D{sch}")   # the first start with a state database
-        if s.sessions_db.dialect != "postgresql":
-            print("  skip  the Store did not take the state database")
-            s.close()
-            return
-        ck("a link written after the local copy is in Postgres",
-           sorted(s.sessions_of_projects(["p1"])) == ["s-local", "s1"], s.sessions_of_projects(["p1"]))
-        ck("so is the state written after it", (s.session_state("s-local") or {}).get("state") == "working")
-        ck("a row only DuckDB still holds is not brought back (the move leaves the five tables alone)",
-           _count(s.sessions_db, "project_sessions") == 2)
-        for t in SESSION_TABLES:
-            got = sorted((tuple(_norm(v) for v in r) for r in _session_rows(s, t)), key=repr)
-            want = sorted(local[t], key=repr)             # Postgres and SQLite order '-' differently
-            if t == "session_stations":                    # the data upgrade fills the crew after the copy
-                got, want = [r[:-1] for r in got], [r[:-1] for r in want]
-            ck(f"{t} is what tares.sqlite held", got == want, (got, want))
-        ck("the ledger names the five tables, with the local counts",
-           sorted(_ledger5(s)) == sorted((t, len(local[t])) for t in SESSION_TABLES), _ledger(s))
-        ck("DuckDB's copies are untouched", {t: _duck_rows(s, t)[1] for t in SESSION_TABLES} == duck)
-        s.close()
-        ck("tares.sqlite was left as it was", os.path.exists(os.path.join(d, "tares.sqlite")))
-    finally:
-        with psycopg.connect(PG, autocommit=True) as c:
-            c.execute(f"DROP SCHEMA IF EXISTS {sch} CASCADE")
+# The five session tables as the old DDL made them on Postgres, before the session store (TR-1480):
+# what revision 0002 takes over in place.
+OLD_SESSION_DDL = {
+    "project_sessions": ["CREATE TABLE project_sessions (project TEXT, session TEXT, repo TEXT, "
+                         "linked_at TIMESTAMPTZ, PRIMARY KEY (project, session))"],
+    "session_states": ["CREATE TABLE session_states (session TEXT PRIMARY KEY, state TEXT, reason TEXT, "
+                       "state_at TIMESTAMPTZ)"],
+    "session_stations": ["CREATE TABLE session_stations (session TEXT PRIMARY KEY, station TEXT, role TEXT, "
+                         "parent TEXT, project TEXT, seen_at TIMESTAMPTZ)",
+                         "ALTER TABLE session_stations ADD COLUMN crew_id TEXT"],
+    "session_usage": ["CREATE TABLE session_usage (session TEXT, message TEXT, replied_at TIMESTAMPTZ, "
+                      "model TEXT, project TEXT, subagent TEXT, input_tokens BIGINT, output_tokens BIGINT, "
+                      "cache_write_tokens BIGINT, cache_read_tokens BIGINT, cost_usd DOUBLE PRECISION, "
+                      "PRIMARY KEY (session, message))",
+                      "ALTER TABLE session_usage ADD COLUMN cache_write_1h_tokens BIGINT"],
+    "session_meters": ["CREATE TABLE session_meters (session TEXT PRIMARY KEY, status TEXT, "
+                       "status_at TIMESTAMPTZ, context TEXT, context_at TIMESTAMPTZ, "
+                       "context_asked_at TIMESTAMPTZ)",
+                       "ALTER TABLE session_meters ADD COLUMN status_person TEXT"],
+}
 
 
 def greatest_null():
@@ -668,24 +390,6 @@ def greatest_null():
         pg.close()
 
 
-def _ledger(s):
-    with s.sessions_db.begin() as c:
-        return [tuple(r) for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()]
-
-
-def _ledger5(s):
-    """The ledger's rows for the five session tables (settings has its own tests)."""
-    return [r for r in _ledger(s) if r[0] in SESSION_TABLES]
-
-
-def _old_ddl(names):
-    """The statements the cell ran before the tables moved (tests/old_ddl.py), for the named
-    tables only."""
-    import re
-    pat = re.compile(r"\b(" + "|".join(names) + r")\b")
-    return [x for x in OLD_DDL if pat.search(x)]
-
-
 def takeover():
     print("== Postgres: tables the old DDL made are taken over ==")
     if not PG:
@@ -700,14 +404,16 @@ def takeover():
         dsn = f"{PG}?options=-csearch_path%3D{sch}"
         with psycopg.connect(PG, autocommit=True) as c:
             c.execute(f"CREATE SCHEMA {sch}")
-        pg = state_db.PgState(dsn)
-        for stmt in _old_ddl(names):
-            pg.execute(stmt)
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"SET search_path = {sch}")
+            for name in names:
+                for stmt in OLD_SESSION_DDL[name]:
+                    c.execute(stmt)
         return sch, dsn
 
     def snapshot(sch, new=False):
         """Every row of the five tables, and every column's type, as Postgres holds them: the columns the old
-        DDL made, or with `new` only the ones added since (SINCE_DUCKDB, TR-1600)."""
+        DDL made, or with `new` only the ones added since (SINCE_OLD_DDL, TR-1600)."""
         with psycopg.connect(PG, autocommit=True) as c:
             c.execute(f"SET search_path = {sch}")
             out = {}
@@ -717,7 +423,7 @@ def takeover():
                 cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
                                  "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
                                  [sch, t]).fetchall()
-                cols = [x for x in cols if (x[0] in SINCE_DUCKDB.get(t, ())) == new]
+                cols = [x for x in cols if (x[0] in SINCE_OLD_DDL.get(t, ())) == new]
                 if not cols:
                     out[t] = ([], [])
                     continue
@@ -753,13 +459,12 @@ def takeover():
            [t for t in SESSION_TABLES if after[t] != before[t]])
         added = snapshot(sch, new=True)["session_stations"]
         ck("the columns added since are there, and empty in every row (TR-1600)",
-           sorted(x[0] for x in added[0]) == sorted(SINCE_DUCKDB["session_stations"])
+           sorted(x[0] for x in added[0]) == sorted(SINCE_OLD_DDL["session_stations"])
            and all(v == "None" for r in added[1] for v in r) and len(added[1]) == 2, added)
         ck("each table's columns, types and primary key are what tables.py declares",
            shape(sdb.engine) == declared(sdb.engine), (shape(sdb.engine), declared(sdb.engine)))
         ck("project_sessions has its index on session",
            index_columns(sdb.engine, "project_sessions", "project_sessions_session") == ["session"])
-        ck("the copy ledger is made", _count(sdb, "session_store_copies") == 0)
         with capture_logs("alembic.runtime.migration") as recs:
             sdb.upgrade()
         ck("a second upgrade runs nothing", upgrade_lines(recs) == [])
@@ -776,8 +481,6 @@ def takeover():
         # a downgrade leaves the live tables and their rows
         step_down(sdb, "0001_base")
         ck("a downgrade keeps the five tables and their rows", snapshot(sch) == before)
-        names = inspect(sdb.engine).get_table_names()
-        ck("and drops the ledger", "session_store_copies" not in names, names)
         ck("and the index", index_columns(sdb.engine, "project_sessions", "project_sessions_session") is None)
         sdb.upgrade()
         ck("an upgrade after it takes them over again", versions(sdb) == [HEAD] and snapshot(sch) == before)
@@ -920,10 +623,6 @@ if __name__ == "__main__":
     upgrade_failure()
     session_tables()
     runtime_backfill()
-    copy_sqlite()
-    copy_at_start()
-    copy_on_postgres()
-    local_then_postgres()
     greatest_null()
     takeover()
     postgres()

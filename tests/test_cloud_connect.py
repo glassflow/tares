@@ -16,7 +16,7 @@ import asyncio
 import os
 from _env import remove_db
 
-os.environ["TARES_DB"] = "/tmp/tares-cloud-connect-test.duckdb"
+os.environ["TARES_HOME"] = "/tmp/tares-cloud-connect-test"
 os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
 os.environ["TARES_AUTH_TOKEN"] = "root-secret"
 for _k in ("TARES_SLACK_CONNECT_URL", "TARES_WORKSPACES_URL", "TARES_GITHUB_CONNECT_URL",
@@ -43,7 +43,7 @@ BROKER = {"name": "cloud", "kind": "app_broker", "token_url": f"{CP}/api/github/
 
 
 async def main():
-    remove_db(os.environ["TARES_DB"])
+    remove_db(os.environ["TARES_HOME"])
     from tares import daemon
     app = daemon.make_app()
     root = {"Authorization": "Bearer root-secret"}

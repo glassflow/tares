@@ -34,7 +34,7 @@ from session_helpers import seed_link
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-batch-reads-")
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 

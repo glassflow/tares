@@ -25,7 +25,7 @@ scrub_os_environ()
 TMP = tempfile.mkdtemp(prefix="tares-cell-contract-")
 AUTH = "root-token-contract"
 PORT = "8893"
-os.environ.update({"TARES_DB": os.path.join(TMP, "contract.duckdb"),
+os.environ.update({"TARES_HOME": os.path.join(TMP, "contract"),
                    "TARES_CATALOG": os.path.join(TMP, "none.yaml"),
                    "TARES_AUTH_TOKEN": AUTH, "TARES_OTLP_GRPC_PORT": "off",
                    "TARES_EDITION": "factory"})
@@ -158,7 +158,7 @@ async def _wait(url):
 
 async def check_shapes():
     data = tempfile.mkdtemp(prefix="tares-cell-contract-d-")
-    env = clean_env(TARES_DB=os.path.join(data, "d.duckdb"), TARES_CATALOG=os.path.join(data, "n.yaml"),
+    env = clean_env(TARES_HOME=os.path.join(data, "d"), TARES_CATALOG=os.path.join(data, "n.yaml"),
                     TARES_PORT=PORT, TARES_OTLP_GRPC_PORT="off", TARES_AUTH_TOKEN=AUTH,
                     TARES_EDITION="factory")
     log = open(os.path.join(data, "daemon.log"), "w")

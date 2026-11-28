@@ -16,9 +16,9 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _TMP = tempfile.mkdtemp(prefix="tares-docs-")
-DB = os.path.join(_TMP, "api.duckdb")
+DB = os.path.join(_TMP, "api")
 TOKEN = "root-token-docs"
-os.environ["TARES_DB"] = DB
+os.environ["TARES_HOME"] = DB
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -257,23 +257,23 @@ def upgrade():
     from tares.store import Store
     # a folder of its own: the session store (tares.sqlite) sits beside the DuckDB file, and this is another cell
     os.makedirs(os.path.join(_TMP, "upgrade"))
-    path = os.path.join(_TMP, "upgrade", "upgrade.duckdb")
+    path = os.path.join(_TMP, "upgrade", "upgrade")
     s = Store(path)
     s.create_project("uc_spec", "custom", "Spec made", {"objects": []})
     s.create_project("uc_plain", "custom", "Plain", {"objects": []})
     s.create_doc("uc_spec", "spec", "Spec", "x")
     s.create_ticket("uc_spec", "tares", "First")
     s.set_setting("factory_kind_filled", None)
-    s.con.close()
+    s.close()
     s = Store(path)
     ck("the spec-made project is a software factory project",
        s.get_project("uc_spec")["kind"] == "software_factory")
     ck("the plain one is not", s.get_project("uc_plain")["kind"] is None)
     s.set_project_kind("uc_spec", None)
-    s.con.close()
+    s.close()
     s = Store(path)
     ck("it runs once: a kind cleared later stays cleared", s.get_project("uc_spec")["kind"] is None)
-    s.con.close()
+    s.close()
 
 
 def main():

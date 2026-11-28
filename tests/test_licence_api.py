@@ -27,12 +27,11 @@ TMP = tempfile.mkdtemp(prefix="tares-licence-api-")
 
 
 def cell_db(name):
-    """A folder of its own for each cell: the settings live in tares.sqlite beside the database."""
-    os.makedirs(os.path.join(TMP, name), exist_ok=True)
-    return os.path.join(TMP, name, name + ".duckdb")
+    """A data directory of its own for each cell."""
+    return os.path.join(TMP, name)
 
 
-os.environ["TARES_DB"] = cell_db("inproc")
+os.environ["TARES_HOME"] = cell_db("inproc")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
@@ -86,7 +85,7 @@ def H(tok):
 def start(name, **env):
     port = free_port()
     log = open(os.path.join(TMP, name + ".log"), "w")
-    e = {**clean_env(), "TARES_DB": cell_db(name), "TARES_PORT": port,
+    e = {**clean_env(), "TARES_HOME": cell_db(name), "TARES_PORT": port,
          "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": AUTH,
          "TARES_CATALOG": os.path.join(TMP, "none.yaml")}
     e.update(env)

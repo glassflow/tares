@@ -22,7 +22,7 @@ from tares.session_store.tables import merge_queue as merge_queue_table  # noqa:
 from tares.store import Store, now_utc  # noqa: E402
 
 home = sys.argv[1]
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 ids = {}
 API, WEB = "example-org/api", "example-org/web"
 lee = store.create_person("Lee Okafor", email="lee@example.com")

@@ -2,7 +2,7 @@
 (TR-1614).
 
 `pr` (JSON text) stays the record; the two columns are what a lookup by pull request reads. This
-module is the one place that says what they hold for a `pr`, so the writes, the copy from DuckDB,
+module is the one place that says what they hold for a `pr`, so the writes,
 the repair at start and the lookup cannot disagree. Revision 0019 does not call it: it has its own
 copy, as it was then (migrations/frozen/pr_columns.py).
 

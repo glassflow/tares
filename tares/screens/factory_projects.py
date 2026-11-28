@@ -34,7 +34,7 @@ _EPOCH = datetime.fromtimestamp(0, timezone.utc)
 
 def plain_date(ts, now) -> str:
     """"20 Oct", and the year after it for a day in another year; "" without a time. The day is the
-    UTC day: DuckDB hands a time back in the machine's own zone."""
+    UTC day: a time can come back in the machine's own zone."""
     t, n = _dt(ts), _dt(now)
     if t is None:
         return ""

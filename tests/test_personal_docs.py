@@ -44,7 +44,7 @@ def start(db, port, auth, people=()):
     db = os.path.join(tempfile.mkdtemp(prefix="personal-docs-"), os.path.basename(db))
     if people:
         _people.seed(db, list(people))
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
@@ -53,7 +53,7 @@ def start(db, port, auth, people=()):
 
 async def auth_on():
     port = "8875"
-    proc = start("/tmp/personal_docs_on.duckdb", port, True,
+    proc = start("/tmp/personal_docs_on", port, True,
                  people=[("Person A", "person-a@example.test"), ("Person B", "person-b@example.test"),
                          ("Person C", "person-c@example.test")])
     B = f"http://127.0.0.1:{port}"
@@ -250,7 +250,7 @@ async def auth_on():
 
 async def auth_off():
     port = "8876"
-    proc = start("/tmp/personal_docs_off.duckdb", port, False)
+    proc = start("/tmp/personal_docs_off", port, False)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):
@@ -275,7 +275,7 @@ async def auth_on_solo():
     """Only `local` exists: a key with no person is `local`. Its admin scope changes the cell's
     default; a key without the admin scope does not."""
     port = "8877"
-    proc = start("/tmp/personal_docs_solo.duckdb", port, True)
+    proc = start("/tmp/personal_docs_solo", port, True)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):

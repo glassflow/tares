@@ -26,7 +26,7 @@ def ck(l, c, d=""):
 
 AUTH = "root-token"
 TMP = tempfile.mkdtemp(prefix="private-writes-")
-DB = os.path.join(TMP, "cell.duckdb")
+DB = os.path.join(TMP, "cell")
 
 
 def free_port() -> str:
@@ -40,7 +40,7 @@ def H(tok):
 
 
 def spawn(port):
-    env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_HOME": DB, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
     return subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -101,7 +101,7 @@ def seed(ids):
                                                     "project", "Rule A", ["Secret T1"], now)["id"]
     ids["rule_open"] = store.upsert_rule_proposal("example-org/repo-b", "open-kind", team,
                                                   "project", "Rule B", ["Open T1"], now)["id"]
-    store.con.close()
+    store.close()
 
 
 def shape(text, name):

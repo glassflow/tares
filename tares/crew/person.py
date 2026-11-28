@@ -17,7 +17,7 @@ has_commit).
 claude_code source. Neither makes a model call; hooks and the status line are off for them.
 
 Where bash and this port differ, bash is right. The one thing bash does not have is `projects --json`, a contract document (schemas/projects.json).
-Standard library plus the Tares client (httpx). Nothing here imports the daemon or DuckDB.
+Standard library plus the Tares client (httpx). Nothing here imports the daemon or the store.
 """
 from __future__ import annotations
 

@@ -67,7 +67,7 @@ const started = [];
 function startDaemon(port, extra, people = [], licensed = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-team-home-e2e-"));
   if (people.length) {   // people on the cell before it starts: adding a second person over HTTP needs a licence
-    const made = spawnSync(PY, [path.join(REPO, "tests", "_people.py"), path.join(home, "tares.duckdb"), ...people],
+    const made = spawnSync(PY, [path.join(REPO, "tests", "_people.py"), home, ...people],
       { cwd: REPO, env: { ...process.env, PYTHONPATH: REPO }, encoding: "utf8" });
     if (made.status !== 0) { console.log("FAIL could not seed people: " + (made.stderr || made.stdout)); process.exit(1); }
   }
@@ -79,7 +79,7 @@ function startDaemon(port, extra, people = [], licensed = false) {
   const daemon = licensed
     ? spawn(fs.existsSync(venvPy) ? venvPy : PY, [path.join(REPO, "ee", "tests", "licensed.py"), "daemon", "--seats", "50"],
         { cwd: REPO, stdio: "ignore", detached: true,
-          env: { ...env, TARES_DB: path.join(home, "tares.duckdb"), TARES_HOST: "127.0.0.1", TARES_CATALOG: path.join(home, "none.yaml") } })
+          env: { ...env, TARES_HOME: home, TARES_HOST: "127.0.0.1", TARES_CATALOG: path.join(home, "none.yaml") } })
     : spawn(tares, ["up", "--port", String(port), "--data-dir", home], { cwd: REPO, stdio: "ignore", env, detached: true });
   started.push({ daemon, home });
   console.log(`  daemon: pid ${daemon.pid}, port ${port}`);

@@ -31,7 +31,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "claude-plugin", "scripts"))
 
 _TMP = tempfile.mkdtemp(prefix="tares-crews-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-crews"
@@ -300,10 +300,10 @@ async def main():
 
         print("== sessions from before crews ==")
         from tares.store import Store
-        path = os.path.join(tempfile.mkdtemp(dir=_TMP), "old.duckdb")   # its own folder: the session store sits beside the file
+        path = os.path.join(tempfile.mkdtemp(dir=_TMP), "old")   # its own folder: the session store sits beside the file
         s0 = Store(path)
         seed_station(s0, "old-1", "crew-reviewer", "reviewer")
-        s0.con.close()
+        s0.close()
         s0.close()
         s1 = Store(path)
         rows = s1.station_sessions("claude_code")
@@ -311,11 +311,11 @@ async def main():
         ck("a session recorded before crews joins crew `crew` of local on start",
            len(rows) == 1 and rows[0]["crew_id"] == crews[0]["id"] and len(crews) == 1
            and (crews[0]["name"], crews[0]["person_id"], crews[0]["machine"]) == ("crew", "local", ""), (rows, crews))
-        s1.con.close()
+        s1.close()
         s2 = Store(path)
         ck("starting again changes nothing", len(s2.list_crews()) == 1
            and s2.station_sessions("claude_code")[0]["crew_id"] == crews[0]["id"])
-        s2.con.close()
+        s2.close()
 
 
 if __name__ == "__main__":

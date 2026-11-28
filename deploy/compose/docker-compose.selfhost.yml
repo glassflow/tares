@@ -7,8 +7,8 @@
 #
 # The console + MCP + ingest all require TARES_AUTH_TOKEN (humans log in with it; agents send it as
 # a bearer token). Give producers their own scoped ingest API keys from the console (Security → API
-# keys) rather than the root token. DuckDB is single-writer, so this is exactly ONE taresd + one
-# volume — do not scale to replicas.
+# keys) rather than the root token. The SQLite store is local to the volume, so this is exactly ONE
+# taresd + one volume: do not scale to replicas.
 name: tares
 
 services:
@@ -18,7 +18,7 @@ services:
     environment:
       TARES_AUTH_TOKEN: "${TARES_AUTH_TOKEN:?set TARES_AUTH_TOKEN (e.g. openssl rand -hex 24)}"
     volumes:
-      - tares-data:/data                              # back this up: it holds tares.duckdb
+      - tares-data:/data                              # back this up: it holds tares.sqlite and the archive
     expose: ["8787"]
     restart: unless-stopped
 

@@ -26,7 +26,7 @@ licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-brain-sync-")
 ROOT = "root-token-" + "brain-sync"
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
@@ -135,7 +135,7 @@ def unit():
 
     print("== the row and its two new fields ==")
     from tares.store import Store
-    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit.duckdb"))   # its own folder: the session store is one file per data folder
+    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit"))   # its own folder: the session store is one file per data folder
     s.add_brain_repo("acme/web", "src-1", None, day(1))
     r = s.get_brain_repo("acme/web")
     ck("a new row has no sync failures and no sync error", (r["sync_failures"], r["sync_error"]) == (0, None), str(r))

@@ -6,7 +6,7 @@ function. The old bash crew (`claude-plugin/bin/factory`) was removed in TR-975;
 usage.py and its exit codes are kept: help exits 0, an unknown command prints the help and exits 1, and a
 `crew` subcommand that does not exist says which ones there are on stderr and exits 1.
 
-Standard library only (no duckdb, fastapi, tares.daemon or tares.store), so `tares factory roster`
+Standard library only (no fastapi, tares.daemon or tares.store), so `tares factory roster`
 stays quick: each command's module is imported when the command runs.
 """
 from __future__ import annotations

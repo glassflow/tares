@@ -32,7 +32,7 @@ import licensed   # scrubs the machine's TARES_* settings and puts the repo and 
 licensed.install_test_root()
 
 _TMP = tempfile.mkdtemp(prefix="tares-project-self-join-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-project-self-join"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -69,7 +69,7 @@ def own_folder(name):
     """A database path in a folder of its own: the session store is a file beside it, so two cells in
     one folder would share their people, keys and members."""
     os.makedirs(os.path.join(_TMP, name))
-    return os.path.join(_TMP, name, "api.duckdb")
+    return os.path.join(_TMP, name, "api")
 
 
 async def licensed_cell():
@@ -132,19 +132,6 @@ async def licensed_cell():
                 return [tuple(r) for r in conn.execute(select(members_t.c.person_id, members_t.c.reason)
                         .where(members_t.c.project == uid).order_by(members_t.c.person_id))]
 
-        stale = (team, ids["reader"], "manual")
-        if not HARNESS:
-            # a cell from before the move still has DuckDB's table, which nothing may read or write
-            store.sc.execute("CREATE TABLE project_members (project VARCHAR, person_id VARCHAR, "
-                             "added_by VARCHAR, added_at TIMESTAMP, reason VARCHAR, "
-                             "PRIMARY KEY (project, person_id))")
-            store.sc.execute("INSERT INTO project_members (project, person_id, reason) VALUES (?, ?, ?)",
-                             list(stale))
-
-        def left_behind():
-            return [tuple(r) for r in store.sc.execute(
-                "SELECT project, person_id, reason FROM project_members").fetchall()]
-
         print("== a team project ==")
         ck("someone not on it is offered to join", await flags("kim", team) == (True, False),
            str(await flags("kim", team)))
@@ -191,12 +178,10 @@ async def licensed_cell():
         ck("and are offered nothing now", await flags("kim", team) == (False, False))
         ck("the row is in the session store's table", landed(team) == [(ids["kim"], "self")],
            str(landed(team)))
-        if not HARNESS:
-            ck("the table left in the data file is not written", left_behind() == [stale], str(left_behind()))
-            ck("nor read: a person only in it is not on the project",
-               not store.is_project_member(team, ids["reader"])
-               and store.members_by_project([team])[team][0]["person_id"] == ids["kim"]
-               and len(store.members_by_project([team])[team]) == 1, str(rows(team)))
+        ck("a person who is not a member is not on the project",
+           not store.is_project_member(team, ids["reader"])
+           and store.members_by_project([team])[team][0]["person_id"] == ids["kim"]
+           and len(store.members_by_project([team])[team]) == 1, str(rows(team)))
         r = await call("kim", "POST", join)
         ck("joining again answers 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
         ck("and changes nothing", rows(team) == first, str(rows(team)))
@@ -458,7 +443,7 @@ async def open_cell():
     project page of a private project someone is not on can be read."""
     from tares import daemon
     daemon.AUTH_TOKEN = ""
-    daemon.DB_PATH = own_folder("open")
+    daemon.DATA_DIR = own_folder("open")
     app = daemon.make_app()
 
     async def call(method, path, body=None):
@@ -510,7 +495,7 @@ async def single_cell():
     project's secrets however they came to be on it, so the page doesn't mark them as waiting."""
     from tares import daemon
     daemon.AUTH_TOKEN = TOKEN
-    daemon.DB_PATH = own_folder("single")
+    daemon.DATA_DIR = own_folder("single")
     app = daemon.make_app()
     root = {"Authorization": f"Bearer {TOKEN}"}
 

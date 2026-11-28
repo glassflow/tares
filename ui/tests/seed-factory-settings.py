@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
        "TARES_UI_DIST": dist, "TARES_EDITION": "factory", "TARES_OTLP_GRPC_PORT": "off"}
-for k in ("TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+for k in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     env.pop(k, None)
 base = f"http://127.0.0.1:{port}"
 sys.path.insert(0, os.getcwd())
@@ -24,7 +24,7 @@ QUESTION = "Which branch should the next wave of pull requests target?"
 
 # phase 1: the desk (79 questions, so the last one is a real D79) and the GitHub connection
 SAM_KEY = "e2e-sam-key-settings"
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 now = datetime.now(timezone.utc)
 for i in range(1, 80):
     q = QUESTION if i == 79 else f"Question number {i} for the desk?"
@@ -37,7 +37,7 @@ store.upsert_github_credential("main", "ghp_example", "token", "", "example-org"
 sam = store.create_person("Sam", email="sam@example.com")
 store.insert_api_key("k_sam", "sam", "nvf_sam", hashlib.sha256(SAM_KEY.encode()).hexdigest(),
                      ["admin", "read"], person_id=sam["id"])
-store.con.close()
+store.close()
 
 
 def call(path, body=None, method=None):

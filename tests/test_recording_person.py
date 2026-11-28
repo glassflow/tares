@@ -35,7 +35,7 @@ def H(tok):
 
 def start(db, port, auth):
     remove_db(db)
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port}
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
@@ -78,7 +78,7 @@ def tie(sid):
 
 async def auth_off():
     port = "8872"
-    proc = start("/tmp/recording_person_off.duckdb", port, False)
+    proc = start("/tmp/recording_person_off", port, False)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):

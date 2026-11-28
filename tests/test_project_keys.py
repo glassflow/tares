@@ -17,10 +17,10 @@ import tempfile
 # a folder per run: the session store is a file next to the database, and in a shared folder one
 # checkout's newer schema would stop every other checkout's run
 TMP = tempfile.mkdtemp(prefix="tares-project-keys-")
-DB = os.path.join(TMP, "keys.duckdb")
-OPEN_DB = os.path.join(TMP, "keys-open.duckdb")
+DB = os.path.join(TMP, "keys")
+OPEN_DB = os.path.join(TMP, "keys-open")
 ROOT = "root-token-project-keys"
-os.environ["TARES_DB"] = DB
+os.environ["TARES_HOME"] = DB
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
@@ -224,7 +224,7 @@ async def main():
 
     print("== an open instance: the tools pick the project by name ==")
     daemon.AUTH_TOKEN = ""
-    daemon.DB_PATH = OPEN_DB
+    daemon.DATA_DIR = OPEN_DB
     app2 = daemon.make_app()
     async with app2.router.lifespan_context(app2):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app2), base_url="http://t")

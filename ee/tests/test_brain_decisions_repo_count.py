@@ -30,7 +30,7 @@ licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-brain-decisions-count-")
 ROOT = "root-token-" + "brain-decisions-count"
-os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "t")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT

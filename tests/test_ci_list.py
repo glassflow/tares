@@ -78,7 +78,7 @@ ck("ci.yml has the jobs console, test, test-ee, wheel, e2e and secrets",
    {"console", "test", "test-ee", "wheel", "e2e", "secrets"} <= set(js), str(sorted(js)))
 test = js.get("test", "")
 RUN = "python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5"
-ck("job test: runs tests/ci_run.py per suite and shard", RUN in test and re.search(r"""suite: \$\{\{ fromJSON\(.*'\["duckdb"\]'.*'\["duckdb","postgres","mit"\]'\) \}\}""", test) and re.search(r"shard: \[1, 2, 3, 4, 5\]", test), test[:400])
+ck("job test: runs tests/ci_run.py per suite and shard", RUN in test and re.search(r"""suite: \$\{\{ fromJSON\(.*'\["sqlite"\]'.*'\["sqlite","postgres","mit"\]'\) \}\}""", test) and re.search(r"shard: \[1, 2, 3, 4, 5\]", test), test[:400])
 step = test[test.rfind("run: |", 0, max(test.find(RUN), 0)):test.find(RUN)]
 ck("job test: tests/check_ci_list.sh checks the list in the step before ci_run.py (a missing or empty list fails the job)",
    re.search(r"(?m)^\s*bash tests/check_ci_list\.sh tests/ci_list\.txt\s*$", step) is not None
@@ -94,7 +94,7 @@ ck("job test: the mit run deletes every ee directory before the console build",
 ck("job test: the mit run checks tares_ee is not importable",
    "find_spec('tares_ee') is None" in test and "matrix.suite }}\" = mit" in test)
 
-# The ee suites: ee/tests/ci_list.txt, run by the test-ee job (duckdb and postgres). The mit run has
+# The ee suites: ee/tests/ci_list.txt, run by the test-ee job (sqlite and postgres). The mit run has
 # no ee directory, so there is no ee list to check there.
 ee_list = ROOT / "ee" / "tests" / "ci_list.txt"
 has_ee = (ROOT / "ee").is_dir()
@@ -111,7 +111,7 @@ ck("job test-ee: checks the ee list, then runs the ee suite for each database",
    and "ee/tests/factory/ci_list.txt" not in test_ee
    and "python tests/ci_run.py --suite ee-postgres" in test_ee
    and re.search(r"(?m)^\s*python tests/ci_run\.py --suite ee\s*$", test_ee) is not None
-   and re.search(r"db: \[duckdb, postgres\]", test_ee) is not None, test_ee[:500])
+   and re.search(r"db: \[sqlite, postgres\]", test_ee) is not None, test_ee[:500])
 wheel = js.get("wheel", "")
 ck("job wheel: builds the wheel, installs it away from the checkout and imports tares_ee",
    "pip wheel . --no-deps" in wheel and "import tares_ee" in wheel and "RUNNER_TEMP/venv" in wheel, wheel[:400])
@@ -160,13 +160,13 @@ ck("ci_e2e.py: only listed names carry a weight", set(ci_e2e.WEIGHT) <= set(e2e)
 import sys
 sys.path.insert(0, str(ROOT / "tests"))
 import ci_run
-want = {"duckdb": py,
-        "postgres": [n for n in py if n not in ("test_state_postgres", "test_duckdb_memory")],
+want = {"sqlite": py,
+        "postgres": [n for n in py if n not in ci_run.SQLITE_ONLY],
         "mit": [n for n in py if n != "test_ee_packaging"],
         }
 if has_ee:
     want["ee"] = list(ee)
-    want["ee-postgres"] = [n for n in ee if n not in ci_run.DUCKDB_ONLY]
+    want["ee-postgres"] = [n for n in ee if n not in ci_run.SQLITE_ONLY]
 for suite, w in want.items():
     got = [t for i in range(1, 6) for t in ci_run.shard(ci_run.items(suite), i, 5)]
     ck(f"ci_run.py, suite {suite}: the 5 shards run every listed test once", sorted(got) == sorted(w) and len(got) == len(set(got)),

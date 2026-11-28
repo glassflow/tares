@@ -198,7 +198,7 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
   const dist = process.env.TARES_UI_DIST || path.join(UI_DIR, "dist");
   const env = { ...process.env, TARES_EDITION: "platform", TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
                 TARES_UI_DIST: dist, PYTHONPATH: REPO };   // the venv installs the main checkout; this runs the code under test
-  for (const k of ["TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL"]) delete env[k];
+  for (const k of ["TARES_AUTH_TOKEN", "TARES_CATALOG", "TARESD_URL"]) delete env[k];
   const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env });
   let browser;
   try {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -13,6 +14,8 @@ from .. import factory_api, session_ingest
 from .. import metrics as _metrics
 from ..deps import Deps
 from ..envelope import now_utc
+
+log = logging.getLogger("tares")
 
 
 def router(deps: Deps) -> APIRouter:
@@ -40,10 +43,16 @@ def router(deps: Deps) -> APIRouter:
             except json.JSONDecodeError:
                 _err(ValueError("body must be JSON or NDJSON"))
 
-    def _refuse_if_full() -> None:
+    async def _refuse_if_full() -> None:
         """507 Insufficient Storage when the store is at the pause mark: the producer gets a plain
-        reason and can retry later; the database keeps working for everything else."""
-        st = deps.storage()
+        reason and can retry later; the database keeps working for everything else. Measured off
+        the event loop (it can query the database). When the size cannot be read the batch goes on
+        to `store.append`, whose refusal answers 503 so the sender keeps its lines."""
+        try:
+            st = await asyncio.to_thread(deps.storage)
+        except Exception as e:
+            log.warning("ingest: the storage size could not be read (%s); the batch goes on", e)
+            return
         if st["paused"]:
             raise HTTPException(status_code=507, detail=st["detail"])
 
@@ -58,7 +67,7 @@ def router(deps: Deps) -> APIRouter:
         of the body, and they are stored under the session source."""
         from ..integrations import registry as integrations_registry
         from ..session_map import SOURCE as SESSION_SOURCE
-        _refuse_if_full()
+        await _refuse_if_full()
         body = await _parse_ingest_body(request)
         person = _current_person(request)   # from the credential, never from the body
         cls = integrations_registry.get("runtime", name)
@@ -115,7 +124,7 @@ def router(deps: Deps) -> APIRouter:
     async def ingest(token: str, request: Request):
         """A GitHub App's webhook delivery, on the key its hook URL carries (integration_keys).
         Any other key answers 404."""
-        _refuse_if_full()
+        await _refuse_if_full()
         try:
             keyed = await asyncio.to_thread(store.integration_key, token)
         except Exception:   # noqa: BLE001  (a store that cannot answer: the delivery is retried)

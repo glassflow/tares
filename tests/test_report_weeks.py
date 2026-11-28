@@ -383,7 +383,7 @@ def deleting(s):
 
 def placing():
     print("== architecture findings and their repo ==")
-    s = Store(os.path.join(tempfile.mkdtemp(), "placing.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "placing"))
     s.create_project("pc", "blank", "C", {})
     first, bare = (s.create_ticket("pc", "tares", n) for n in ("with a pull request", "without"))
 
@@ -420,7 +420,7 @@ def placing():
 
 def matching():
     print("== an architecture finding and the ticket of its review ==")
-    s = Store(os.path.join(tempfile.mkdtemp(), "matching.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "matching"))
     layer = "This module reaches into the internals of another layer"
 
     def reviewed_pair(project, minutes):
@@ -487,7 +487,7 @@ def costs(s) -> tuple[dict, dict, dict]:
 
 def ticket_costs():
     print("== ticket costs: which replies a ticket takes ==")
-    s = Store(os.path.join(tempfile.mkdtemp(), "costs.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "costs"))
     for pid in ("pa", "pb"):
         s.create_project(pid, "blank", pid, {})
     for session, station, role_, parent, home in (
@@ -588,7 +588,7 @@ def ticket_costs():
 
 def ticket_costs_access():
     print("== ticket costs: a reviewer's reply and a project with limited access ==")
-    s = Store(os.path.join(tempfile.mkdtemp(), "access.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "access"))
     s.create_project("po", "blank", "Open", {})
     s.create_project("pl", "blank", "Limited", {})
     s.set_project_scope("pl", "private")
@@ -642,7 +642,7 @@ def ticket_costs_access():
 
 def background():
     print("== the background pass ==")
-    s = Store(os.path.join(tempfile.mkdtemp(), "bg.duckdb"))   # a data dir has one session store
+    s = Store(os.path.join(tempfile.mkdtemp(), "bg"))   # a data dir has one session store
     s.create_project("p", "blank", "P", {})
     stages(s, "p", s.create_ticket("p", "tares", "t"), ("doing", at(6, 1)), ("merged", at(6, 2)))
     ck("no marker on a new cell", s.get_setting(report.BUILT_SETTING) is None)
@@ -683,7 +683,7 @@ def background():
     ck("a first build says so", "report weeks built (1 rows)" in said.getvalue(), said.getvalue())
 
 
-HEAD = "0026_drop_catalog_sources"  # the newest session store revision: an upgrade ends there
+HEAD = "0027_drop_move_bookkeeping"  # the newest session store revision: an upgrade ends there
 
 
 def migration():
@@ -745,7 +745,7 @@ async def route():
     print("== POST /api/factory/report/rebuild ==")
     root = "root-token-report-weeks"
     home = tempfile.mkdtemp()
-    os.environ.update({"TARES_DB": os.path.join(home, "api.duckdb"),
+    os.environ.update({"TARES_HOME": os.path.join(home, "api"),
                        "TARES_CATALOG": os.path.join(home, "catalog.yaml"),
                        "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": root,
                        "ANTHROPIC_API_KEY": "sk-ant-test-not-a-real-key"})
@@ -780,7 +780,7 @@ async def route():
 
 def main():
     rules()
-    s = Store(os.path.join(tmp, "t.duckdb"))
+    s = Store(os.path.join(tmp, "t"))
     ids = seed(s)
     figures(s)
     reading(s)

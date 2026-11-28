@@ -1,7 +1,7 @@
 """The crew engine's shared state: the crew home's files, read and written the way the old bash crew
 (removed in TR-975) did, so a crew started before the upgrade keeps working.
 
-Standard library only at import time (no duckdb, fastapi or tares.daemon): `import tares.crew`
+Standard library only at import time (no fastapi or tares.daemon): `import tares.crew`
 stays fast and safe in a plain script. `tares factory` calls dispatch.run, which runs the command.
 
   paths     where each file lives (CrewPaths)

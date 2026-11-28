@@ -32,7 +32,7 @@ os.environ.pop("TARESD_URL", None)
 os.environ.update(
     HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"),
     PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring", TARES_HOME=str(SCRATCH / "tares-home"),
-    TARES_DB=str(SCRATCH / "cell.duckdb"), TARES_CATALOG=str(SCRATCH / "none.yaml"),
+    TARES_CATALOG=str(SCRATCH / "none.yaml"),
     TARES_OTLP_GRPC_PORT="off", TARES_AUTH_TOKEN="root-token-codex-usage",
 )
 (SCRATCH / "home").mkdir()

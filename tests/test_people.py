@@ -1,10 +1,10 @@
 """People on the cell (TR-618): a list of people, keys that belong to one, and a credential that
 names the person calling. Root token = the system, no person; a key = its person (an unbound key is
-`local` while `local` is alone on the cell); auth off = `local`. Also the upgrade of a database that
-has keys but no people. Everything that needs a second person is in ee/tests/test_people_team.py.
+`local` while `local` is alone on the cell); auth off = `local`. Everything that needs a second
+person is in ee/tests/test_people_team.py.
 """
 import asyncio, os, subprocess, sys, tempfile
-import duckdb
+import shutil
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -41,10 +41,8 @@ def H(tok):
 
 
 def start(db, port, auth):
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
+    shutil.rmtree(db, ignore_errors=True)
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
@@ -53,7 +51,7 @@ def start(db, port, auth):
 
 async def auth_one_person():
     port = "8861"
-    proc = start(_db("people_on.duckdb"), port, True)
+    proc = start(_db("people_on"), port, True)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):
@@ -91,7 +89,7 @@ async def auth_one_person():
 
 async def auth_off():
     port = "8862"
-    proc = start(_db("people_off.duckdb"), port, False)
+    proc = start(_db("people_off"), port, False)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):
@@ -112,36 +110,12 @@ async def auth_off():
         proc.wait(timeout=10)
 
 
-def upgrade():
-    """A database from before people: its keys survive, `local` is made, person_id is added."""
-    from tares.store import Store
-    db = _db("people_old.duckdb")
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
-    con = duckdb.connect(db)
-    con.execute("CREATE TABLE api_keys (id TEXT PRIMARY KEY, name TEXT, prefix TEXT, hash TEXT, "
-                "scopes JSON, created_at TIMESTAMPTZ, last_used_at TIMESTAMPTZ, revoked_at TIMESTAMPTZ)")
-    con.execute("INSERT INTO api_keys VALUES ('k1', 'legacy', 'nvf_k1', 'h', '[\"read\"]', now(), NULL, NULL)")
-    con.close()
-    s = Store(db)
-    ck("upgrade: `local` is made", [p["id"] for p in s.list_people()] == ["local"])
-    k = s.get_api_key("k1")
-    ck("upgrade: the old key is kept, bound to nobody", k and k["person_id"] is None, str(k))
-    s.con.close()
-    s = Store(db)
-    ck("upgrade: reopening adds no second `local`", len(s.list_people()) == 1)
-    s.con.close()
-
-
 def threads():
     """Several threads create one person at once (the store, no HTTP): one row, no crash."""
     import threading
     from tares.store import Store
-    db = _db("people_race.duckdb")
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    db = _db("people_race")
+    shutil.rmtree(db, ignore_errors=True)
     s = Store(db)
 
     def race(fn):
@@ -165,12 +139,11 @@ def threads():
     ck("8 threads person_or_create one email: all get the same person",
        {k for k, _ in out} == {"ok"} and len({v for _, v in out}) == 1, str(out))
     ck("... one row", sum(1 for p in s.list_people() if p["email"] == "u@example.com") == 1)
-    s.con.close()
+    s.close()
 
 
 asyncio.run(auth_one_person())
 asyncio.run(auth_off())
-upgrade()
 threads()
 print(f"\n{P} passed, {F} failed")
 raise SystemExit(1 if F else 0)

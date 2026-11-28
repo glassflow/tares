@@ -46,7 +46,7 @@ def ck(label, cond, detail=""):
 
 REPO, N, HEAD = "acme/api", 7, "abc1234def5678"
 tmp = tempfile.mkdtemp(prefix="tares-ci-github-")
-store = Store(os.path.join(tmp, "t.duckdb"))
+store = Store(os.path.join(tmp, "t"))
 store.upsert_github_credential("main", "tok-main")
 
 # what GitHub says right now; each scenario replaces it
@@ -210,7 +210,7 @@ ck("another project is not affected", ci(project_uid="p4").state == "failure")
 store.clear_project_choice("p3", "ci")
 store.set_choice("ci", "github", {"no_ci": False}, "t")
 ck("setting off again: checks count", ci().state == "failure")
-fresh = Store(os.path.join(tmp, "fresh.duckdb"))
+fresh = Store(os.path.join(tmp, "fresh"))
 fresh.upsert_github_credential("main", "tok-main")
 ck("nothing chosen: the setting is off", asyncio.run(GithubCI(fresh).state(pr(), [])).state == "failure")
 
@@ -495,7 +495,7 @@ asyncio.run(fg.read_pr(store, REPO, N))
 ck("a PR with no head asks nothing about workflow runs", not [c for c in calls if c.endswith("/actions/runs")], calls)
 
 print("== the run that replaced it has not finished ==")
-partial_jobs = [real_run("test (duckdb)", 11, DRAFT), real_run(TEMPLATE, 12, DRAFT, conclusion="skipped"),
+partial_jobs = [real_run("test (sqlite)", 11, DRAFT), real_run(TEMPLATE, 12, DRAFT, conclusion="skipped"),
                 real_run("test (postgres)", 13, DRAFT, conclusion="cancelled")]
 for j in partial_jobs:
     j["html_url"] = f"https://github.com/{REPO}/actions/runs/1/job/{j['id']}"
@@ -507,20 +507,20 @@ for st in ("queued", "in_progress", "waiting", "requested", "pending"):
        (out.state, out.failing) == ("pending", []) and got["ci"] == "pending", out)
 ck("...and ci_checks lists it as a pending check, so the queue waits",
    {"name": "CI", "state": "pending", "waiting": True,
-    "jobs": sorted(["test (duckdb)", "test (postgres)", TEMPLATE])} in got["ci_checks"]
+    "jobs": sorted(["test (sqlite)", "test (postgres)", TEMPLATE])} in got["ci_checks"]
    and [c["name"] for c in got["ci_checks"] if c["state"] == "failure"] == [], got["ci_checks"])
 reset(runs=partial_jobs, wruns=[wrun(1), wrun(2)])
 ck("the replacing run finished: its checks are all there is, no pending entry",
    ci().state == "success" and not [c for c in asyncio.run(fg.read_pr(store, REPO, N))["ci_checks"] if c.get("waiting")])
 reset(runs=partial_jobs, wruns=[wrun(1), wrun(2, status="queued")])
-out = ci(required=["test (duckdb)"])
+out = ci(required=["test (sqlite)"])
 ck("required names: a required job that passed elsewhere does not hide the run still to come (T50 F4)",
    (out.state, out.failing) == ("pending", []), out)
-out = ci(required=["test (duckdb)", "test (postgres)"])
+out = ci(required=["test (sqlite)", "test (postgres)"])
 ck("...a required name whose cancel was dropped is pending too", (out.state, out.failing) == ("pending", []), out)
 reset(runs=partial_jobs, wruns=[wrun(1), wrun(2)])
 ck("...and once the replacing run has finished, the required name that passed is success",
-   ci(required=["test (duckdb)"]).state == "success")
+   ci(required=["test (sqlite)"]).state == "success")
 reset(runs=partial_jobs + [real_run("lint", 14, DRAFT, conclusion="failure")], wruns=[wrun(1), wrun(2, status="queued")])
 ck("...a required failure is still named while the run waits",
    (ci(required=["lint"]).state, ci(required=["lint"]).failing) == ("failure", ["lint"]))
@@ -536,23 +536,23 @@ reset(runs=partial_jobs, wruns=[wrun(2, status="queued"), wrun(1), wrun(3, workf
 ck("two workflows: only the one that replaced a run is waited for",
    [w["name"] for w in fg._waiting_runs([wrun(2, status="queued"), wrun(1), wrun(3, workflow=7, status="queued")], HEAD)] == ["CI"])
 
-preview_jobs = [real_run("test (duckdb)", 11, DRAFT), real_run("preview build", 31, DRAFT, conclusion="cancelled")]
+preview_jobs = [real_run("test (sqlite)", 11, DRAFT), real_run("preview build", 31, DRAFT, conclusion="cancelled")]
 preview_jobs[0]["html_url"] = f"https://github.com/{REPO}/actions/runs/1/job/11"
 preview_jobs[1]["html_url"] = f"https://github.com/{REPO}/actions/runs/7/job/31"
 preview_runs = [wrun(1), wrun(7, workflow=999, name="preview"), wrun(8, workflow=999, name="preview", status="queued")]
 reset(runs=preview_jobs, wruns=preview_runs)
-out = ci(required=["test (duckdb)"])
+out = ci(required=["test (sqlite)"])
 ck("required names: a rerun of an unrelated workflow still to start does not hold the gate",
    (out.state, out.failing) == ("success", []), out)
 ck("...and read_pr still lists it as waiting, with the jobs its runs held",
    {"name": "preview", "state": "pending", "waiting": True, "jobs": ["preview build"]}
    in asyncio.run(fg.read_pr(store, REPO, N))["ci_checks"])
 ck("...with no required names it still holds the gate", ci().state == "pending")
-ck("...a required job of that workflow holds it", ci(required=["test (duckdb)", "preview build"]).state == "pending")
-ck("...so does the workflow's own name when it is required", ci(required=["test (duckdb)", "preview"]).state == "pending")
+ck("...a required job of that workflow holds it", ci(required=["test (sqlite)", "preview build"]).state == "pending")
+ck("...so does the workflow's own name when it is required", ci(required=["test (sqlite)", "preview"]).state == "pending")
 ck("...and its cancel is dropped, not failing", ci(required=["preview build"]).failing == [])
 reset(runs=preview_jobs, wruns=[wrun(1), wrun(7, workflow=999, name="preview"), wrun(8, workflow=999, name="preview")])
-ck("...once it finished, the gate passes either way", ci(required=["test (duckdb)"]).state == "success")
+ck("...once it finished, the gate passes either way", ci(required=["test (sqlite)"]).state == "success")
 
 print("== _replaced_runs ==")
 ck("no runs, None, junk: nothing replaced",
@@ -763,8 +763,8 @@ try:
     ck("a server error raises", False)
 except RuntimeError as e:
     ck("a server error raises", True)
-# a folder of its own: credentials live in the session store (tares.sqlite) beside the DuckDB file
-empty = Store(os.path.join(tempfile.mkdtemp(prefix="tares-ci-github-empty-"), "empty.duckdb"))
+# a folder of its own: credentials live in the session store (tares.sqlite) in it
+empty = Store(os.path.join(tempfile.mkdtemp(prefix="tares-ci-github-empty-"), "empty"))
 try:
     asyncio.run(GithubCI(empty).state(pr(), []))
     ck("no credential raises", False)

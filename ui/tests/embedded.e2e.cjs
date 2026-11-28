@@ -54,7 +54,7 @@ async function waitFor(url, tries = 150) {
                     TARES_MCP_PORT: String(PORT + 20 + i), TARES_UI_DIST: dist,
                     PYTHONPATH: REPO };   // the venv installs the main checkout; this runs the code under test
       for (const k of ["TARES_SLACK_BOT_TOKEN", "TARES_SLACK_SIGNING_SECRET", "TARES_SLACK_CONNECT_URL", "TARES_AUTH_TOKEN",
-                       "TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]) delete env[k];
+                       "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]) delete env[k];
       daemons[e] = spawn(tares, ["up", "--port", String(PORT + i), "--data-dir", homes[e]], { cwd: REPO, stdio: "ignore", env, detached: true });
       console.log(`  daemon ${e}: pid ${daemons[e].pid}, port ${PORT + i}`);
     });

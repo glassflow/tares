@@ -27,7 +27,7 @@ for key in [k for k in os.environ
 
 TMP = tempfile.mkdtemp()
 TOKEN = "root-token"
-os.environ["TARES_DB"] = os.path.join(TMP, "tares.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "tares")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "catalog.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -48,7 +48,7 @@ from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import metadata  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0026_drop_catalog_sources"   # the newest revision: an upgrade ends there
+HEAD = "0027_drop_move_bookkeeping"   # the newest revision: an upgrade ends there
 P = F = 0
 
 

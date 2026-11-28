@@ -60,7 +60,7 @@ def _start(daemon=True):
     d = None
     if daemon:
         d = _spawn("from tares.cli import run_daemon; run_daemon()",
-                   {**base, "TARES_DB": os.path.join(tmp, "t.duckdb"), "TARES_PORT": DPORT})
+                   {**base, "TARES_HOME": os.path.join(tmp, "t"), "TARES_PORT": DPORT})
     m = _spawn("from tares.cli import run_mcp; run_mcp()",
                {**base, "TARES_MCP_TRANSPORT": "streamable-http", "TARES_MCP_HOST": "127.0.0.1",
                 "TARES_MCP_PORT": MPORT, "TARES_MCP_SURFACE_TTL": "0",

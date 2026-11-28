@@ -48,8 +48,8 @@ class Deps:
     projects: Projects
     # the root credential (TARES_AUTH_TOKEN) the daemon started with; "" means auth is off
     auth_token: str = ""
-    # the database file, for the storage figures
-    db_path: str = ""
+    # the data directory, for the storage figures (the volume it sits on)
+    data_dir: str = ""
     # how full the store is against its limit (daemon.storage_state for this store)
     storage: Callable[[], dict] = field(default=lambda: {})
     # what /health lists and says

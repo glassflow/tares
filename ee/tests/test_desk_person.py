@@ -25,7 +25,7 @@ import licensed   # scrubs the machine's TARES_* settings and puts the repo and 
 licensed.install_test_root()
 
 _TMP = tempfile.mkdtemp(prefix="tares-deskperson-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-deskperson"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"

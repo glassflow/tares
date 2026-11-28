@@ -75,9 +75,9 @@ _READS_AT_ONCE = 4
 
 
 def lines_from(read: list[str]) -> str:
-    """Where a response's lines came from (TR-1507): `table`, `archive`, `both`, or `events` (DuckDB).
-    One read says so itself; several say `events` when any of them fell back, `both` when they
-    differ, and `events` when nothing was read."""
+    """Where a response's lines came from (TR-1507): `table`, `archive` or `both`. One read says so
+    itself; several say `both` when they differ, and `events` when nothing was read (or a read said
+    `events`, which none does since the event store went)."""
     kinds = set(read)
     if not kinds or "events" in kinds:
         return "events"

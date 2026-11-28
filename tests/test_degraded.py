@@ -1,6 +1,6 @@
-"""Degraded mode — a DuckDB that won't open must not cost the user the console.
+"""Degraded mode — a store that won't open must not cost the user the console.
 
-Two real failures (an unreadable db file, and a second daemon on a db another daemon holds open):
+Two real failures (a data directory the daemon cannot read, and a state database out of reach):
 the daemon must still bind, still serve the SPA, answer /health with a non-ok status that says why,
 and 503 every data route instead of exiting before uvicorn binds (which the browser sees as
 ERR_CONNECTION_REFUSED — a blank page with nothing to explain it). Plus the other half of the same
@@ -17,15 +17,15 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-OK_DB, BAD_DB, LOCK_DB = "/tmp/degraded_ok.duckdb", "/tmp/degraded_bad.duckdb", "/tmp/degraded_lock.duckdb"
-STATE_DB = "/tmp/degraded_state.duckdb"
+OK_DB, BAD_DB = "/tmp/degraded_ok", "/tmp/degraded_bad"
+STATE_DB = "/tmp/degraded_state"
 PORT, PORT2 = "8811", "8812"
 
 
 def _boot(db, port, **extra):
     env = {k: v for k, v in clean_env().items()
            if k not in ("TARES_AUTH_TOKEN", "TARES_MAX_DB_SIZE")}
-    env |= {"TARES_DB": db, "TARES_PORT": port,
+    env |= {"TARES_HOME": db, "TARES_PORT": port,
             "TARES_OTLP_GRPC_PORT": "off", **extra}
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -49,12 +49,12 @@ async def _health(port, tries=80):
 def _rm(*paths):
     for p in paths:
         if os.path.exists(p):
-            os.chmod(p, 0o644)   # a run stopped half way leaves BAD_DB unreadable
+            os.chmod(p, 0o755)   # a run stopped half way leaves BAD_DB unreadable
     remove_db(*paths)
 
 
 async def main():
-    _rm(OK_DB, BAD_DB, LOCK_DB, STATE_DB)
+    _rm(OK_DB, BAD_DB, STATE_DB)
 
     # ── 1. healthy: /health proves the store answers, and reports usage on the 0-100 scale ──
     proc = _boot(OK_DB, PORT)
@@ -83,13 +83,14 @@ async def main():
     finally:
         proc.terminate(); proc.wait(timeout=10)
 
-    # ── 2. hard failure: the db file exists but cannot be opened ──
+    # ── 2. hard failure: the data directory holds a store but cannot be opened ──
     from tares.store import Store
-    Store(BAD_DB).con.close()                # a real, valid db file…
-    ck("seeded a db file to break", os.path.exists(BAD_DB))
+    Store(BAD_DB, state_dsn="").close()      # a real, valid store…
+    ck("seeded a store to break", os.path.exists(os.path.join(BAD_DB, "tares.sqlite")))
     os.chmod(BAD_DB, 0o000)
 
-    proc = _boot(BAD_DB, PORT)
+    # on SQLite: a cell on Postgres keeps nothing in its data directory to fail on
+    proc = _boot(BAD_DB, PORT, TARES_TEST_PG="")
     try:
         h = await _health(PORT)
         ck("daemon STARTS with an unopenable db (no ERR_CONNECTION_REFUSED)", h is not None)
@@ -110,29 +111,9 @@ async def main():
                r.status_code)
     finally:
         proc.terminate(); proc.wait(timeout=10)
-        os.chmod(BAD_DB, 0o644)
+        os.chmod(BAD_DB, 0o755)
 
-    # ── 3. lock contention: a second daemon on the same db degrades, the first is untouched ──
-    first = _boot(LOCK_DB, PORT)
-    second = None
-    try:
-        h = await _health(PORT)
-        ck("first daemon is ok", h and h["status"] == "ok", h)
-        second = _boot(LOCK_DB, PORT2)
-        h2 = await _health(PORT2)
-        ck("second daemon starts instead of crashing", h2 is not None)
-        ck("second daemon is not ok", h2 and h2["status"] != "ok", h2)
-        async with httpx.AsyncClient() as cx:
-            r = await cx.get(f"http://127.0.0.1:{PORT2}/api/projects", timeout=5)
-            ck("second daemon 503s its API", r.status_code == 503, r.status_code)
-        h = await _health(PORT)
-        ck("first daemon still ok", h and h["status"] == "ok", h)
-    finally:
-        for p in (first, second):
-            if p:
-                p.terminate(); p.wait(timeout=10)
-
-    # ── 4. state database out of reach: degraded, and /health says so to the liveness probe ──
+    # ── 3. state database out of reach: degraded, and /health says so to the liveness probe ──
     # A cell (TARES_STATE_DSN) that starts while its Postgres cannot be reached would otherwise
     # stay degraded until restarted by hand; a 503 from /health gets the probe to restart it.
     try:
@@ -168,7 +149,7 @@ async def main():
         finally:
             proc.terminate(); proc.wait(timeout=10)
 
-    _rm(OK_DB, BAD_DB, LOCK_DB, STATE_DB)
+    _rm(OK_DB, BAD_DB, STATE_DB)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

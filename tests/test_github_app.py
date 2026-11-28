@@ -16,11 +16,12 @@ Covers, against a fake GitHub that checks the App's JWT with a generated RSA key
 import asyncio
 import json
 import os
+import shutil
 import time
 from datetime import datetime, timedelta, timezone
 
 import tempfile
-os.environ["TARES_DB"] = os.path.join(tempfile.mkdtemp(), "tares-ghapp-test.duckdb")   # its own folder: settings live beside the file
+os.environ["TARES_HOME"] = os.path.join(tempfile.mkdtemp(), "tares-ghapp-test")   # its own folder: settings live beside the file
 os.environ["TARES_AUTH_TOKEN"] = "root-secret"
 os.environ["TARES_PUBLIC_URL"] = "https://cell.example.com"
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
@@ -282,19 +283,9 @@ async def unit():
     check("push to the default branch says so", push["labels"].get("on_default_branch") == "true",
           str(push["labels"]))
 
-    print("== the `in` filter ==")
-    from tares.store import _filter_sql
-    sql, params = _filter_sql([{"field": "repo", "op": "in", "value": ["acme/app", "acme/lib"]}])
-    check("in -> lower(label) IN (?, ?), case-insensitive",
-          "lower(" in sql and "IN (?, ?)" in sql and params == ["acme/app", "acme/lib"], f"{sql} {params}")
-    sql2, params2 = _filter_sql([{"field": "repo", "op": "in", "value": ["Acme/App"]}])
-    check("a typed repo in another case still matches", params2 == ["acme/app"], str(params2))
-
 
 async def daemon():
-    for p in (os.environ["TARES_DB"], os.environ["TARES_DB"] + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    shutil.rmtree(os.environ["TARES_HOME"], ignore_errors=True)
     from tares.daemon import make_app
     from tares.webhook_verify import sign
     from urllib.parse import parse_qs, urlsplit
@@ -419,13 +410,15 @@ async def daemon():
             r = await deliver("pull_request", fixture("pull_request_merged.json"), "d-2")
             check("signed PR merged -> stored", r.json()["ingested"] == 1, r.text)
             await asyncio.sleep(0.3)
-            rows = store.con.execute(
-                "SELECT key_value, event_type, text, labels FROM events WHERE source = 'github' "
-                "ORDER BY ingest_time").fetchall()
-            check("events keyed per PR, contract labels present",
-                  len(rows) == 2 and rows[1][0] == "acme/app#7"
-                  and json.loads(rows[1][3]).get("action") == "merged"
-                  and json.loads(rows[1][3]).get("base") == "main", str(rows))
+            from sqlalchemy import select
+            from tares.session_store.tables import pr_events
+            with store.sessions_db.read() as conn:
+                rows = conn.execute(select(pr_events.c.delivery_id, pr_events.c.repo,
+                                           pr_events.c.number, pr_events.c.action)
+                                    .order_by(pr_events.c.delivery_id)).all()
+            check("each stored PR delivery is kept in pr_events, by repo and number",
+                  [tuple(r) for r in rows] == [("d-1", "acme/app", 7, "opened"), ("d-2", "acme/app", 7, "merged")],
+                  str(rows))
 
             r = await anon.post(f"/ingest/{ingest_key}", content=b"{}", headers={
                 "X-GitHub-Event": "ping", "X-Hub-Signature-256": "sha256=éé".encode()})

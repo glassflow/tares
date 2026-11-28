@@ -39,10 +39,7 @@ MIXED = {"tares.store", "tares.config", "tares.daemon", "tares.cli", "tares.mcp_
 # Imports of a going module that stay until the ticket that removes their feature: (file, module) ->
 # that ticket. The ticket deletes the line from here; an entry that no longer matches fails the test,
 # so the list only shrinks.
-KNOWN = {
-    ("tares/session_ingest.py", "tares.session_move"): "TR-1815",
-    ("tares/session_ingest.py", "tares.session_drain"): "TR-1815",
-}
+KNOWN: dict = {}
 
 
 def going(mod: str) -> bool:

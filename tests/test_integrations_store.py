@@ -58,7 +58,7 @@ registry._loaded[("tickets", "faketix")] = FakeTickets
 registry._loaded[("tickets", "othertix")] = OtherTickets
 
 tmp = tempfile.mkdtemp(prefix="tares-integrations-store-")
-s = Store(os.path.join(tmp, "t.duckdb"))
+s = Store(os.path.join(tmp, "t"))
 
 
 def raises(fn, *a):
@@ -242,7 +242,7 @@ ck("the registry is read outside the state write lock", seen and not any(seen), 
 
 
 # ── survives a reopen ──────────────────────────────────────────────────────────
-path = os.path.join(tmp, "t.duckdb")
+path = os.path.join(tmp, "t")
 s2 = Store(path)
 ck("rows survive a reopen", s2.get_choice("tickets")["name"] == "faketix"
    and s2.get_project_choice("p1", "ci")["name"] == "x")

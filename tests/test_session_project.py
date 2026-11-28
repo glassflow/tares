@@ -24,7 +24,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "claude-plugin", "scripts"))
 
 _TMP = tempfile.mkdtemp(prefix="tares-session-project-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-sp"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -265,7 +265,7 @@ async def tares(shipped):
         ck("a session born in the table but not marked complete answers from the table (TR-1613)",
            r.json().get("lines_from") == "table", r.json().get("lines_from"))
         from tares import session_ingest
-        session_ingest.reconcile_sessions(store)
+        session_ingest.repair_table_sessions(store)
         r2 = await cx.get(f"/api/projects/{uid}/sessions/{SID}")
         ck("once the lines are complete the same session reads from the table, with the same text",
            r2.json().get("lines_from") == "table" and [x["text"] for x in r2.json()["lines"]] == texts,

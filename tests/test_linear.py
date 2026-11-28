@@ -20,7 +20,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _TMP = tempfile.mkdtemp(prefix="tares-linear-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-linear"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -208,9 +208,6 @@ async def main():
            and r.json()["linear"]["synced_at"] and r.json()["linear"]["error"] is None, r.text)
         ck("linking makes no source: the sync runner keeps the tickets in step (TR-1806)",
            not hasattr(app.state, "runtime"))
-        with store._lock:
-            n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear'").fetchone()[0]
-        ck("the sync's change events are not stored", n_created == 0, n_created)
         r = await cx.post(f"/api/projects/{uid}/tickets", json={"title": "x", "status": "done"})
         ck("a status is not set when a ticket is made: 409, Linear's to change", r.status_code == 409
            and "Linear" in r.json()["detail"], r.text)

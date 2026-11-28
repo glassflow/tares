@@ -5,7 +5,7 @@ cmd_revive, cmd_restart, cmd_retire, tell_tares_ended, cmd_down, cmd_halt, cmd_r
 and the part of stop_watch that cmd_down needs. Where this module and the bash differ, the bash is right;
 every difference is listed under "Differences from bash" below.
 
-Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
+Standard library plus the crew modules and psutil (no fastapi or daemon).
 
 What is not here: the pace (pace.py, TR-962). The watch itself is watch.py (TR-958); watch_pid and stop_watch call it.
 rearm_text reads the pace with pace.read.

@@ -41,13 +41,14 @@ def clean_env(**overrides) -> dict:
     return env
 
 
-def remove_db(*dbs: str) -> None:
-    """Remove each DuckDB file for a fresh start: the file, its .wal, and the tares.sqlite files in
-    the same folder, where the cell keeps its settings and projects (TR-1480). Call it only where a
-    test starts over, never between the two halves of a restart."""
-    for db in dbs:
-        side = os.path.join(os.path.dirname(db), "tares.sqlite")
-        for f in (db, db + ".wal", side, side + "-wal", side + "-shm"):
+def remove_db(*dirs: str) -> None:
+    """Remove each data directory's store for a fresh start: its tares.sqlite with the -wal and
+    -shm files, and the Postgres harness's schema note (tests/pg_harness), so the next store there
+    starts empty on either backend. Call it only where a test starts over, never between the two
+    halves of a restart."""
+    for d in dirs:
+        for name in ("tares.sqlite", "tares.sqlite-wal", "tares.sqlite-shm", ".pgschema"):
+            f = os.path.join(d, name)
             if os.path.exists(f):
                 os.remove(f)
 

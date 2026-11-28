@@ -32,10 +32,10 @@ licensed.install_test_root()
 ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
 
-os.environ["TZ"] = "UTC"      # the events scan answers times in the machine's zone, the table in UTC
+os.environ["TZ"] = "UTC"
 time.tzset()
 _TMP = tempfile.mkdtemp(prefix="tares-deleted-private-reads-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-deleted-private-reads"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -258,22 +258,8 @@ async def check_cost(app, world, before: dict):
 
 def check_records(store):
     """What is remembered of a deleted private project."""
-    if not hasattr(store, "_moved_sources"):   # run against code without it: fail, don't stop
-        ck("source", "the delete notes the sources it moved", False, "the store notes none")
-        return
     older, newer = (datetime(2026, 1, day, tzinfo=timezone.utc) for day in (1, 2))
-    got = store._moved_sources([{"sources": ["a"], "at": newer.isoformat()}, "a-digest-alone",
-                                {"sources": ["a"], "at": older.isoformat()}])
-    ck("source", "a source two deleted projects had alone is unread up to the later delete",
-       got == [("a", newer)], got)
-
-    # a record with the name's digest alone, as TR-1697 wrote it
     digest = hashlib.sha256(b"Onyx").hexdigest()
-    store._change_deleted_private(lambda d: d.update({"uc_onyx": digest}))
-    sql, params = store._exclude({"ids": ["uc_onyx"], "names": []})
-    ck("source", "a record with the digest alone still hides by the name",
-       store.deleted_private_projects().get("uc_onyx") == digest and digest in params, (sql, params))
-    store._change_deleted_private(lambda d: d.pop("uc_onyx"))
 
     # a delete that stopped half way had taken the source out of the project already
     store.create_project("uc_opal", "custom", "Opal", {})
@@ -405,7 +391,7 @@ def check_waiting(world, fx, when, owner_reads=False):
 
 
 async def main():
-    from tares import factory_api, session_ingest
+    from tares import factory_api
     fx = {}
     register = factory_api.register
 
@@ -417,21 +403,19 @@ async def main():
     from tares.daemon import make_app
     app = make_app()
     store = app.state.store
-    real = session_ingest.caught_up
-    paths = (("caught up", real), ("events scan", lambda s: False))
+    paths = (("the sessions table", None),)
 
     async def on_both_paths(check):
         for path_name, caught in paths:
-            session_ingest.caught_up = caught
+            pass
             try:
                 await check(path_name)
             finally:
-                session_ingest.caught_up = real
+                pass
 
     async with app.router.lifespan_context(app):
         world = await seed(app)
         world["late_tools"] = {}
-        ck("same", "the sessions table has caught up", real(store))
         crew = rows_of((await get(app, world, "root", "/api/crew")).json())
         world["crew"] = crew["shop-build-m1"]["crew_id"]
         vault = world["vault"]

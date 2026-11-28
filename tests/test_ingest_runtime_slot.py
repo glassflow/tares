@@ -68,7 +68,7 @@ def _stored(db_path: str, session: str) -> tuple[dict, list]:
 
 async def main():
     data = tempfile.mkdtemp(prefix="tares-intake-")
-    env = clean_env(TARES_DB=os.path.join(data, "t.duckdb"), TARES_CATALOG=os.path.join(data, "none.yaml"),
+    env = clean_env(TARES_HOME=os.path.join(data, "t"), TARES_CATALOG=os.path.join(data, "none.yaml"),
                     TARES_PORT=PORT, TARES_OTLP_GRPC_PORT="off", TARES_AUTH_TOKEN=AUTH, TARES_EDITION="factory")
     log = open(os.path.join(data, "daemon.log"), "w")
     proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
@@ -139,7 +139,7 @@ async def main():
             proc.kill()
 
     print("== stored ==")
-    got, stamped = _stored(os.path.join(data, "t.duckdb"), "cc-1")
+    got, stamped = _stored(os.path.join(data, "t"), "cc-1")
     ck("the Claude Code session is in the sessions table with its 2 lines",
        got.get("cc-1", (0, ""))[0] == 2 and got["cc-1"][1] == "claude_code", str(got))
     ck("the Codex session is stored under claude_code too", got.get("cx-1", (0, ""))[1] == "claude_code", str(got))

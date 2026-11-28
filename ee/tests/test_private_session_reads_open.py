@@ -2,7 +2,7 @@
 """Session reads with auth off, before and after a project is deleted (TR-1710).
 
 The sessions are those of test_private_session_reads; the one person, `local`, owns the cell's
-crews. Checked on a cell whose sessions table has caught up and on the events scan.
+crews.
 
 Run: .venv/bin/python ee/tests/test_private_session_reads_open.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_private_session_reads_open.py
@@ -21,7 +21,6 @@ WHO = {"local": {}}   # an open cell: no credential
 
 
 async def main():
-    from tares import session_ingest
     from tares.daemon import make_app
     app = make_app()
     store = app.state.store
@@ -31,14 +30,12 @@ async def main():
         p = store.get_project(vault)
         ck("same", "with auth off a private project led by `local` is made through the API",
            p["scope"] == "private" and p["lead_person_id"] == "local", p)
-        ck("same", "the sessions table has caught up", session_ingest.caught_up(store))
-        real = session_ingest.caught_up
-        paths = (("caught up", real), ("events scan", lambda s: False))
+        paths = (("the sessions table", None),)
         every = {**{f"hid-{c}": f"app-build-{c}" for c in STATIONS},
                  **{f"open-{c}": f"app-open-{c}" for c in (*TIES, "open")}}
         before = {}
         for path_name, caught in paths:
-            session_ingest.caught_up = caught
+            pass
             try:
                 label = f"local before the delete, {path_name}"
                 for case in TIES:
@@ -52,7 +49,7 @@ async def main():
                     ck("ask", f"{label}: asking for hid-{case} answers its session id",
                        posted == [200, f"hid-{case}", True], posted)
             finally:
-                session_ingest.caught_up = real
+                pass
 
         async with reads.client(app, {}) as cx:
             r = await cx.delete(f"/api/projects/{vault}")
@@ -60,7 +57,7 @@ async def main():
            r.status_code < 300 and store.get_project(vault) is None, (r.status_code, r.text))
 
         for path_name, caught in paths:
-            session_ingest.caught_up = caught
+            pass
             try:
                 label = f"local after the delete, {path_name}"
                 for case in STATIONS:
@@ -75,7 +72,7 @@ async def main():
                            got[read] == want[read], (want[read], got[read]))
                 await reads.check_hidden(app, world, "local", "plain", label)
             finally:
-                session_ingest.caught_up = real
+                pass
     return reads.report()
 
 

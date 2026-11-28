@@ -7,4 +7,4 @@ Use: sys.path.insert(0, os.path.dirname(__file__)); from _timing import SLACK
 # How much a measured time may exceed what it is held to. Postgres gets more: a round trip to the
 # database (a container here, a service on CI) varies from run to run. The page-times test gives it to
 # the routes in its OVER list only.
-SLACK = {"duckdb": 1.25, "postgres": 1.5}
+SLACK = {"sqlite": 1.25, "postgres": 1.5}

@@ -52,7 +52,7 @@ ROOT_TOKEN="e2e-$("$PY" -c 'import secrets; print(secrets.token_hex(16))')"
 dport=$(free_port); DAEMON="http://127.0.0.1:$dport"
 mkdir -p "$T/tares"
 start_daemon() {
-  env -u TARES_FACTORY_URL TARES_DB="$T/tares/tares.duckdb" TARES_CATALOG="$T/tares/none.yaml" TARES_OTLP_GRPC_PORT=off \
+  env -u TARES_FACTORY_URL TARES_HOME="$T/tares/tares" TARES_CATALOG="$T/tares/none.yaml" TARES_OTLP_GRPC_PORT=off \
     TARES_HOST=127.0.0.1 TARES_PORT="$dport" TARES_AUTH_TOKEN="$ROOT_TOKEN" HOME="$T/tares" \
     "$PY" -c "from tares.cli import run_daemon; run_daemon()" >>"$T/taresd.log" 2>&1 &
   DPID=$!
@@ -162,12 +162,12 @@ done
 # f. a sync asked for during a rate-limit backoff. The daemon holds the database, so stop it, put
 # the backoff on the project's link the way a rate-limited sync does, and start it again.
 stop_daemon
-TARES_DB="$T/tares/tares.duckdb" UID_P="$UID_P" "$PY" - <<'PY'
+TARES_HOME="$T/tares/tares" UID_P="$UID_P" "$PY" - <<'PY'
 import os
 from datetime import timedelta
 from tares.envelope import now_utc
 from tares.store import Store
-s = Store(os.environ["TARES_DB"]); uid = os.environ["UID_P"]
+s = Store(os.environ["TARES_HOME"]); uid = os.environ["UID_P"]
 s.set_project_github(uid, {**s.get_project_github(uid), "error": "GitHub rate limit reached",
                            "backoff_until": (now_utc() + timedelta(seconds=120)).isoformat()})
 PY

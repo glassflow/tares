@@ -5,10 +5,9 @@ A licensed factory cell with a team's worth of work: 25 projects of 10 tickets e
 3 of them handed to a crew, 40 crew sessions over 6 stations, and one person who signs in with a key
 (next to the cell's own `local` person, so the team parts of the pages run). That person reads the
 pages the console opens on: Home, the Projects list, one project, one ticket, and the two raw ticket
-routes (and Setup, its progress and the Crew page, counted only). A counting stand-in replaces the store's connections, so every statement a route runs is
-counted (DuckDB: `store.con`, which `store.sc` is too; Postgres state: `store.sc.execute`; a
-sessions database, when the store has one: SQLAlchemy's cursor events). A route that runs more than
-its BUDGET fails the test.
+routes (and Setup, its progress and the Crew page, counted only). Every statement a route runs is
+counted, through SQLAlchemy's cursor events on the session store (a SQLite transaction's BEGIN is a
+statement there). A route that runs more than its BUDGET fails the test.
 
 (The entities page went with entity counts, TR-1810; the event reads of the source catalog, and the
 check of what a deleted private project adds to them, with the catalog, TR-1811.)
@@ -53,11 +52,11 @@ def _licence() -> str:
                     "2099-01-01", "lic_ee_budget")
 
 
-os.environ["TZ"] = "UTC"      # DuckDB answers times in the machine's zone; the golden file is one zone's
+os.environ["TZ"] = "UTC"      # the golden file is one zone's
 time.tzset()
 
 _TMP = tempfile.mkdtemp(prefix="tares-query-budget-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_LICENSE"] = _licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-query-budget"
@@ -75,110 +74,23 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # moves a count updates BUDGET in its own PR and says why; only TR-1472 and TR-1503 lower it on
 # purpose.
 #
-# Statements per route for the cell seeded below, by the backend the state is on (DuckDB, or Postgres
-# when TARES_TEST_PG is set): the count measured plus 2 percent, rounded up (the ticket says 5, but
-# 5 percent of 105 is 5 statements and one query per project is 25: the definition of done wants that
-# caught, and the counts do not vary between runs). TR-1472 lowered home, projects and project from 449, 780
-# and 374, and TR-1474 lowered ticket, raw_tickets and raw_ticket from 46, 13 and 19 (home, projects,
-# project, ticket, raw_tickets, raw_ticket). Each backend
-# has its own entry so a change that moves one (a sessions database, a Postgres-only read) can move
-# only that one.
-# TR-1503 (the handlers read only the projects they show): home 108 to 107, projects 84 to 83.
-# TR-1499 (station and project sessions read the sessions table, in the same read as their rows, not a
-# second pass over events): home 107 to 105, projects 83 to 81, project 82 to 80, ticket 28 to 27.
-# TR-1535 (main's status words and whose turn a ticket is): the Projects list reads the open merge
-# queue once more, and the project page reads it twice more, plus its hand-over twice more and two
-# settings once more (home and ticket keep their counts): projects 81 to 82, project 80 to 85 on
-# Postgres, 85 to 88 on DuckDB. Reading each of them once per request is a saving for a later ticket.
-# TR-1708: each read that picks a station's or a reply's project reads the deleted project ids
-# first, one statement each. On Postgres home goes 105 to 108 (the station rows twice, the replies by
-# project once), projects 82 to 84 (the station rows twice) and project 85 to 87 (the station rows
-# and the station roles). On DuckDB only the two counts that pass their budget move: project 88 to
-# 90 and ticket 27 to 28 (the ticket's station sessions).
-# TR-1629 (Home reads the stations roll-up once, not twice: the team home takes the one the home read):
-# home 105 to 98 on Postgres, 127 to 117 on DuckDB (its counts are 96 and 115, plus 2 percent; the 127 is
-# TR-1480's, which the base brought in).
-# TR-1631 (Home, the Projects list, Crew, Setup and its progress keep the small reads they repeat for
-# the length of the request: who is on the cell, settings, the projects, their tickets and milestones;
-# and the Projects list reads the stations roll-up once). On Postgres, where each is a round trip:
-# home 97 to 51, projects 83 to 42, setup 86 to 52, setup progress 82 to 50, crew 44 to 28. On DuckDB:
-# home 186 to 94, projects 155 to 76, setup 128 to 94, setup progress 120 to 90, crew 85 to 53 (Setup
-# keeps its state-table reads there: they cost no round trip and their writes are not watched). The
-# budgets are those counts plus 2 percent. The project and ticket pages keep no reads yet.
-# TR-1719 (the joiner block of the home): a person other than the owner reads the cell's own crew
-# settings once, apart from the settings that lay their own values over them.
+# Statements per route for the cell seeded below, by the backend the store is on (SQLite, or Postgres
+# when TARES_TEST_PG is set): the count measured plus 2 percent, rounded up. Each backend has its own
+# entry, so a change that moves one can move only that one. The history of each count, ticket by
+# ticket from TR-1472 to TR-1725, is in this file's git log; since TR-1815 everything is in the session
+# store, so on SQLite every read is a transaction of its own and costs its BEGIN, and on Postgres a
+# statement is a round trip.
 _TODAY = {"home": 54, "projects": 44, "project": 90, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
 DONE_PROJECTS = 12
 DONE_EXTRA = 5
-# TR-1498: the session tables are read through the sessions database, and each of its SQLite
-# transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
-# times, projects 4, project 2. Postgres state keeps its counts.
-# TR-1480 (the settings table is read and written through the session store): on DuckDB each settings
-# read is now a SQLite transaction, so it costs its BEGIN IMMEDIATE too: home 115 to 127, projects 89 to
-# 95, project 88 to 94. Postgres state counts a settings read once, as before, so its counts stay.
-# TR-1608 (people, API keys and project members are read through the session store): on DuckDB each of
-# those reads is now a SQLite transaction too, so it costs its BEGIN as well. Most of them are the
-# per-request "is `local` the only person" check and the person lookups, which ran once each before:
-# home 117 to 145, projects 95 to 116, project 94 to 119, ticket 27 to 30, raw_tickets 9 to 11, raw_ticket
-# 14 to 16 (the counts are 142, 113, 116, 29, 10 and 15, plus 2 percent). Postgres state counts each
-# once, as before, so its counts stay. Reading each of them once per request is TR-1631's.
-# TR-1610 (projects, their objects and log, docs, skills, shared skills, catalog sources, GitHub
-# credentials and model usage are read through the session store): the same on DuckDB, each read of
-# one of them is a SQLite transaction with its BEGIN: home 145 to 164, projects 116 to 133, project 119
-# to 135, ticket 30 to 32, raw_tickets 11 to 14, raw_ticket 16 to 17 (the counts are 160, 130, 132, 31, 13
-# and 16, plus 2 percent). Postgres state counts each once, as before, so its counts stay, but for the
-# two pages that read the review queue: its join of the tickets with the projects (one statement when
-# both were in one database) is now a tickets read and a projects read, so projects 82 to 84 and
-# project 85 to 87 (the counts are 83 and 86, plus 2 percent).
-# TR-1612 (tickets, ticket history and ticket numbers are read through the session store): on DuckDB
-# each ticket read is now a SQLite transaction, so it costs its BEGIN; the queries themselves are one
-# for one: home 164 to 171, projects 133 to 140, project 135 to 142, ticket 32 to 39, raw_ticket 17
-# to 20 (the counts are 167, 137, 139, 38 and 19, plus 2 percent). With finished projects their
-# grouped ticket read has a BEGIN of its own too: DONE_EXTRA 4 to 5. Postgres state keeps its counts.
-# TR-1615 (milestones, checks, reviews, findings, challenger lines and rule proposals are read through
-# the session store): the same on DuckDB, the queries are one for one and each read costs its BEGIN:
-# home 171 to 177, projects 140 to 146, project 142 to 151, ticket 39 to 45, raw_tickets 14 to 17,
-# raw_ticket 20 to 24 (the counts are 173, 143, 148, 44, 16 and 23, plus 2 percent). Crew goes 78 to
-# 80, which its budget holds. Postgres state keeps its counts.
-# TR-1616 (the crew's tables: assumptions, decisions, the desk, hand-overs, grants, crews and the
-# rest are read through the session store): the same on DuckDB, the queries are one for one and each
-# read costs its BEGIN: home 177 to 190, projects 146 to 159, project 151 to 166, ticket 45 to 49,
-# raw_ticket 24 to 26 (the counts are 186, 155, 162, 48 and 25, plus 2 percent), and Crew 80 to 87
-# (85). Setup and its progress go 126 to 128 and 118 to 120, which their budgets hold. The hard cap
-# on Home and the Projects list at 25 projects goes 180 to 200, for the BEGINs alone. Postgres state
-# keeps its counts.
-# TR-1617 (the merge queue, merge method, required checks, secrets, guardrail rules and pairs, the
-# integration connections and choices and the waiting write-backs are read through the session store):
-# the same on DuckDB, each read costs its BEGIN. The integration reads TR-1631 kept on Postgres are
-# kept on DuckDB too now that their writes are watched. home 94 to 97, projects 76 to 79, project 162
-# to 166, ticket 48 to 50, setup 94 to 103, setup progress 90 to 99 (the budgets are those counts plus
-# 2 percent). Crew and the raw ticket pages keep their counts, and so does every page on Postgres.
-# TR-1725 (main merged into factory-perf/m2): the pages gain the reads main added, each a SQLite
-# transaction of its own on DuckDB, so a statement and its BEGIN. The deleted private projects
-# (TR-1708, TR-1716): one read on Home, the Projects list, a ticket, Setup and its progress, two on
-# a project's page. Crew reads them too, and the cell's `runtime` choice that its pace follows
-# (TR-1598). Counts on DuckDB: home 97 to 99, projects 79 to 81, project 166 to 170, ticket 50 to
-# 52, setup 95 to 97, setup progress 91 to 93, crew 53 to 57. On Postgres: home 51 to 52, projects
-# 42 to 43, project 86 to 88, ticket 26 to 27, setup 48 to 49, setup progress 46 to 47, crew 28 to
-# 30. The budgets are those counts plus 2 percent. The raw ticket pages keep their counts.
-_DUCKDB = {**_TODAY, "home": 101, "projects": 83, "project": 174, "ticket": 54, "raw_tickets": 17,
+_SQLITE = {**_TODAY, "home": 101, "projects": 83, "project": 174, "ticket": 54, "raw_tickets": 17,
            "raw_ticket": 26}
-# TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
-# the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
-# DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent. With
-# TR-1610's reads, each a SQLite transaction on DuckDB: 114 to 126 and 108 to 118, so 129 and 121.
-# TR-1633 (Crew's standup reads the handed-over projects, their hand-overs, tickets, milestones and
-# open desk items once for all of them, not once each; Crew had no entry before): on this cell, with 3
-# projects handed over, 102 to 75 on DuckDB and 62 to 44 on Postgres. The budgets are those counts plus
-# 2 percent. With TR-1612, Crew's three ticket reads (the tickets twice, their history once) are each a
-# SQLite transaction on DuckDB: 75 to 78, so 80.
-# TR-1717 (list_connections reads a slot's connections and its default in one query, so they are from
-# one state): one statement a slot where there were two. Setup 103 to 95 and its progress 99 to 91 on
-# DuckDB, 52 to 48 and 50 to 46 on Postgres. The budgets are those counts plus 2 percent.
-BUDGET = {"duckdb": {**_DUCKDB, "setup": 99, "setup_progress": 95, "crew": 59},
+# Setup, its progress and Crew had no entry before TR-1634 and TR-1633; their counts are kept the
+# same way.
+BUDGET = {"sqlite": {**_SQLITE, "setup": 99, "setup_progress": 95, "crew": 59},
           "postgres": {**_TODAY, "setup": 50, "setup_progress": 48, "crew": 31}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
@@ -213,7 +125,6 @@ def ck(label, cond, detail=""):
 
 # ── the counting stand-in ────────────────────────────────────────────────────────────────────
 _COUNTER: contextvars.ContextVar = contextvars.ContextVar("query_counter", default=None)
-_TEXTS: contextvars.ContextVar = contextvars.ContextVar("query_texts", default=None)
 
 
 def _hit(n: int = 1) -> None:
@@ -222,60 +133,14 @@ def _hit(n: int = 1) -> None:
         c[0] += n
 
 
-def _text(args) -> None:
-    """Keep the SQL of a statement on the DuckDB connection, where the events table is."""
-    texts = _TEXTS.get()
-    if texts is not None and args:
-        texts.append(str(args[0]))
-
-
-class CountingCon:
-    """Stands in for the DuckDB connection: counts execute and executemany, hands everything else
-    (cursor, close, fetch calls on a result) to the real one. The counter is a context variable, so
-    only the route being measured counts, whichever thread it runs a statement on (the daemon's
-    threads copy the context of the request that started them), and a background thread of the
-    daemon does not."""
-
-    def __init__(self, real):
-        self._real = real
-
-    def execute(self, *a, **kw):
-        _hit()
-        _text(a)
-        return self._real.execute(*a, **kw)
-
-    def executemany(self, *a, **kw):
-        _hit()
-        _text(a)
-        return self._real.executemany(*a, **kw)
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
-
-
 def install_counters(store) -> str:
-    """Count every statement the store runs from now on. Returns the backend: duckdb or postgres."""
-    shared = store.sc is store.con
-    store.con = CountingCon(store.con)
-    if shared:
-        store.sc = store.con          # one connection under one lock, counted once per call
-        backend = "duckdb"
-    else:
-        backend = "postgres"
-        pg = store.sc
-        for name in ("execute", "executemany"):
-            real = getattr(pg, name)
-
-            def counted(*a, _real=real, **kw):
-                _hit()
-                return _real(*a, **kw)
-            setattr(pg, name, counted)
-    sdb = getattr(store, "sessions_db", None)   # a database of its own for sessions (TR-1493), when there is one
-    if sdb is not None:
-        from sqlalchemy import event
-        engine = getattr(sdb, "engine", sdb)
-        event.listen(engine, "before_cursor_execute", lambda *a, **kw: _hit())
-    return backend
+    """Count every statement the store runs from now on. Returns the backend: sqlite or postgres.
+    The counter is a context variable, so only the route being measured counts, whichever thread
+    it runs a statement on (the daemon's threads copy the context of the request that started
+    them), and a background thread of the daemon does not."""
+    from sqlalchemy import event
+    event.listen(store.sessions_db.engine, "before_cursor_execute", lambda *a, **kw: _hit())
+    return "postgres" if store.sessions_db.dialect == "postgresql" else "sqlite"
 
 
 # ── a fixed clock, and bodies that read the same on every run ───────────────────────────────────

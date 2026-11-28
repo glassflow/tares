@@ -6,7 +6,7 @@ as one gzip JSON-lines file, the file is read back and checked, and only then ar
 from `session_lines`. Each file is a row in `session_archive_parts`: `(session, part)`, the
 `first_seq` to `last_seq` it holds, its line count, size and MD5, and its key. A line that arrives
 for an archived session is a row in `session_lines` again (`seq` only grows, so it never reuses a
-number), and the next pass writes it as part 2. DuckDB is never touched.
+number), and the next pass writes it as part 2.
 
 Where the archive lives (read once per pass, from the environment):
 
@@ -21,9 +21,9 @@ Where the archive lives (read once per pass, from the environment):
   Postgres does nothing: a cell without a place to put the lines keeps them.
 
 A file is named `<session>/<part>.jsonl.gz` under the prefix (the session is percent-encoded, so no
-id can leave its folder). The one-time move of older sessions (`session_move.move_old`) writes the
-same files as `<session>/<part>-<md5>.jsonl.gz`: the name holds the content's MD5, so it never
-writes over a file that other content is in. A failure of any step leaves the rows where they
+id can leave its folder). The one-time move of older sessions of an earlier version wrote the same
+files as `<session>/<part>-<md5>.jsonl.gz`: the name holds the content's MD5, so it never wrote over
+a file that other content is in; such parts are read like any other. A failure of any step leaves the rows where they
 are and prints one line; the next pass tries the session again.
 
 Unused files (TR-1664). A replace or a try that did not finish leaves files no part row names. On a
@@ -36,7 +36,7 @@ restored from earlier does not know the newer parts, and must not remove them. E
 
 A read (`session_read.py`, TR-1507) fetches a part, checks its size and MD5 against the part's row
 and its lines against the row's range, and `decode`s it a line at a time; any step that fails raises
-`ArchiveError` and the reader falls back to DuckDB.
+`ArchiveError`, and the reader answers with the lines it could read and says so.
 
 On Postgres a session is archived in one transaction that starts with
 `pg_try_advisory_xact_lock(hashtext('tares_session_archive:' || session))`: two cells (or two
@@ -70,7 +70,7 @@ from .session_store.tables import session_archive_parts, session_lines, sessions
 
 ARCHIVE_AFTER_DAYS = 7           # a session whose last line is older than this is archived
 EVERY = 3600.0                   # seconds between passes
-FIRST_AFTER = 300.0              # the first pass waits for the start-up reconcile to mark sessions
+FIRST_AFTER = 300.0              # the first pass waits this long after the start
 PER_PASS = 200                   # sessions moved by one pass
 SWEEP_AFTER_DAYS = 7             # a file no part names is kept this long after it was last written
 
@@ -320,7 +320,7 @@ def backend_of(store) -> Backend | None:
     """The backend the environment names for this store (see the module docstring), or None when
     there is none. An unusable URL raises `ArchiveError`."""
     # a store with no file (":memory:") has no data directory to default to
-    data_dir = "" if str(store.path) == ":memory:" else os.path.dirname(os.path.abspath(store.path))
+    data_dir = "" if str(store.data_dir) == ":memory:" else os.path.abspath(store.data_dir)
     return backend_for(os.environ.get("TARES_ARCHIVE_URL"), data_dir,
                        store.sessions_db.dialect == "postgresql")
 

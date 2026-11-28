@@ -33,7 +33,7 @@ from _env import scrub_os_environ
 scrub_os_environ()
 
 _TMP = tempfile.mkdtemp(prefix="tares-integrations-carry-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "carry.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "carry")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-integrations-carry"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"

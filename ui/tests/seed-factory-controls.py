@@ -9,7 +9,7 @@ import os, sys
 sys.path.insert(0, os.getcwd())
 from tares.store import Store  # noqa: E402
 
-store = Store(os.path.join(sys.argv[1], "tares.duckdb"))
+store = Store(sys.argv[1])
 uid = "uc_atlas"
 store.create_project(uid, "custom", "Atlas", {}, goal="Publish the answers library on the docs site.")
 store.set_project_kind(uid, "software_factory")

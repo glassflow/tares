@@ -8,7 +8,7 @@ retry side of a move (TR-964): cc_backoff, cc_delay, cc_retry_in, cc_retrying, c
 cmd_crew_update (`crew update` and `crew restart`). Where this module and the bash differ, the bash is right;
 every difference is listed under "Differences from bash" below.
 
-Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
+Standard library plus the crew modules and psutil (no fastapi or daemon).
 
 How a move goes
   * A new Claude Code is installed by swapping a symlink, and a running station keeps the version it started

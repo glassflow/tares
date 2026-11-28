@@ -19,11 +19,11 @@ from _env import scrub_os_environ
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-factory-startup-")
-os.environ["TARES_DB"] = os.path.join(TMP, "startup.duckdb")
+os.environ["TARES_HOME"] = os.path.join(TMP, "startup")
 os.environ.pop("TARES_AUTH_TOKEN", None)
 
 EXPECTED = [
-    "session_reconcile", "session_move", "session_digest",
+    "session_reconcile",
     "provider_models", "event_loop_watch", "pr_sync", "morning_status", "licence", "waiting_slack",
     "session_archive", "report", "integration_sync",
 ]

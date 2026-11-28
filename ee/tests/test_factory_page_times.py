@@ -69,7 +69,7 @@ TARGET = 0.300                                       # seconds, the median of a 
 # SLACK (imported above) is how much the median of an OVER route may exceed its entry, per backend.
 # Postgres gets more: a round trip to the database (a container here, a service on CI) varies from run
 # to run in a way `calibrate()` cannot see. A route with no OVER entry gets none of this: its limit is TARGET.
-LIMIT_SPEED_CAP = {"duckdb": 1.33, "postgres": 1.11}  # the most SPEED widens an OVER route's limit
+LIMIT_SPEED_CAP = {"sqlite": 1.33, "postgres": 1.11}  # the most SPEED widens an OVER route's limit
 RUNS = 5                                             # timed calls per route, after one warm-up
 CALIBRATION_REF = 0.021                               # seconds `calibrate()` takes on the machine the OVER medians come from
 SPEED_TRIES = 3                                       # `calibrate()` runs at the start; the fastest sets SPEED
@@ -77,12 +77,12 @@ ROUNDS = 3                                            # a route over its limit i
 STALE_SPEED_CAP = 1.25                                # the note on an old entry never divides by more than this
 BUSY = 1.5                                            # CPU probe samples that differ by more than this mean a busy machine
 DB_BUSY = 4.0                                         # database probe samples that differ by more than this do (a quiet one varies about 2 times)
-DB_PROBE_FLOOR = 0.010                                # seconds; below this a database probe says nothing (in-process DuckDB)
+DB_PROBE_FLOOR = 0.010                                # seconds; below this a database probe says nothing (in-process SQLite)
 
 # Routes over TARGET today, by backend: (the slowest median in seconds that was measured, the ticket
 # that brings it down). A route absent from here must meet TARGET.
 OVER = {
-    "duckdb": {},
+    "sqlite": {},
     "postgres": {
         "project": (0.418, "TR-1727"),
         "project_tickets": (0.448, "TR-1727"),
@@ -432,11 +432,9 @@ async def fixtures(cx, made: dict) -> dict:
 
 def caches() -> list:
     """Every in-process cache a page read can hit, as (name, the function that empties it). The home
-    cache is `factory_home`'s; the sessions' caught-up flag is a flag on the store that the next read
-    sets again from `session_ingest_marks`; the 7-day usage keep exists once TR-1627 has merged."""
+    cache is `factory_home`'s; the 7-day usage keep exists once TR-1627 has merged."""
     from tares import factory_home as fh
     out = [("factory_home.clear_cache", fh.clear_cache)]
-    out.append(("store._sessions_caught_up", lambda: setattr(STORE, "_sessions_caught_up", False)))
     try:
         from tares import claude_usage
         if hasattr(claude_usage, "clear_week_by_project"):
@@ -464,7 +462,7 @@ def _licence() -> str:
 os.environ["TZ"] = "UTC"
 time.tzset()
 _TMP = tempfile.mkdtemp(prefix="tares-page-times-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_LICENSE"] = _licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-page-times"
@@ -502,11 +500,13 @@ def calibrate() -> float:
 
 
 def db_probe() -> float:
-    """Seconds 100 trivial statements take on the state database: a round trip to Postgres, or a call
-    into DuckDB. It tells a busy database from a busy CPU; it never sets a limit."""
+    """Seconds 100 trivial statements take on the session store: a round trip to Postgres, or a call
+    into SQLite. It tells a busy database from a busy CPU; it never sets a limit."""
+    from sqlalchemy import text
     t = time.perf_counter()
     for _ in range(100):
-        STORE.sc.execute("SELECT 1").fetchall()
+        with STORE.sessions_db.read() as c:
+            c.execute(text("SELECT 1")).fetchall()
     return time.perf_counter() - t
 
 
@@ -572,7 +572,7 @@ async def main():
     fs.freeze_clock()
     app = make_app()
     STORE = app.state.store
-    backend = "postgres" if os.environ.get("TARES_TEST_PG") else "duckdb"
+    backend = "postgres" if os.environ.get("TARES_TEST_PG") else "sqlite"
     over = OVER[backend]
     slack = SLACK[backend]
     samples: list = []                                 # (cpu, database) probes taken during the run

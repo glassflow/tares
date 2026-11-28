@@ -29,7 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-crew-convo-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-convo"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -176,7 +176,7 @@ async def main():
             r = await cx.get(f"/api/crew/{ST}/tool/t-log")
             ck("the tool answer says table too", r.json().get("lines_from") == "table", r.text[:200])
         from tares import session_ingest
-        session_ingest.reconcile_sessions(app.state.store)       # the lines are now complete in the table
+        session_ingest.repair_table_sessions(app.state.store)    # the lines are now complete in the table
         async with mk() as cx:
             t = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200})).json()
             ck("once complete, lines_from says table, and the conversation and the recent lines are the same",

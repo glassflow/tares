@@ -53,7 +53,7 @@ Differences from bash
     `cd` complain. Either way the start fails with "could not start <station>".
   * kit_version skips symbolic links the way `find -type f` does, and reads every other file as bytes.
 
-Standard library only, plus what tares.crew.client needs (httpx). No duckdb, fastapi, tares.daemon or
+Standard library only, plus what tares.crew.client needs (httpx). No fastapi, tares.daemon or
 tares.store. Imported on demand (`tares.crew.launch`), not by `tares.crew`.
 """
 from __future__ import annotations

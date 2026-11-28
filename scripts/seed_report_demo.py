@@ -668,7 +668,7 @@ def open_store(data_dir: str) -> Store | None:
     """The data dir's store, or None, with the reason printed, when it cannot be opened."""
     try:
         os.makedirs(data_dir, exist_ok=True)
-        return Store(os.path.join(data_dir, "tares.duckdb"))
+        return Store(data_dir)
     except (OSError, StoreUnavailable) as e:
         lines = str(e).splitlines()
         print(f"Could not open the data dir {data_dir}. If a Tares daemon is running on it, stop "
@@ -711,7 +711,6 @@ def refresh_crew(data_dir: str) -> int:
         return 0
     finally:
         store.close()
-        store.con.close()
 
 
 def seed(data_dir: str, into_existing: bool = False) -> int:
@@ -753,7 +752,6 @@ def seed(data_dir: str, into_existing: bool = False) -> int:
         return 0
     finally:
         store.close()
-        store.con.close()
 
 
 def main(argv: list[str] | None = None) -> int:

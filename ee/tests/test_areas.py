@@ -48,10 +48,9 @@ def H(tok):
 
 
 def start(name, auth):
-    # a folder of its own: the settings live in a tares.sqlite beside the DuckDB file (TR-1480)
-    os.makedirs(os.path.join(TMP, name), exist_ok=True)
-    db, port = os.path.join(TMP, name, "tares.duckdb"), free_port()
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+    # a data directory of its own: the cells must not share their settings
+    db, port = os.path.join(TMP, name), free_port()
+    env = {**clean_env(), "TARES_HOME": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_LICENSE": licensed.test_licence()}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
@@ -69,7 +68,7 @@ def unit():
     from tares_ee import areas
     from tares.store import Store
     os.makedirs(os.path.join(TMP, "unit"), exist_ok=True)
-    s = Store(os.path.join(TMP, "unit", "tares.duckdb"))
+    s = Store(os.path.join(TMP, "unit", "tares"))
     kiran = s.create_person("Kiran", "kiran@x.dev")
     ck("no areas: nobody owns a repo", areas.owner(s, "glassflow/tares") is None)
     areas.save(s, [{"repo": "GlassFlow/Tares-Cloud", "person_id": kiran["id"], "note": "infra"}])
@@ -99,7 +98,7 @@ def unit():
         except ValueError:
             ok = True
         ck(f"not a GitHub repo: {bad} refused", ok)
-    s.con.close()
+    s.close()
 
 
 async def auth_on():

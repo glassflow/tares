@@ -1,96 +1,43 @@
-"""What each Claude Code session's lines add up to, kept in the `sessions` table (P-TR-295, TR-1471).
+"""What each Claude Code session's lines add up to, kept in the session store (P-TR-295, TR-1471).
 
-A page that lists sessions used to count over the events table, and that table grows with every
-line. Here each line is counted once, as it is stored, into one row per session. The readers
-`Store.session_activity`, `Store.project_sessions`, `FactoryStore.station_sessions` and
-`FactoryStore.coordination_calls` read the row (TR-1499) once the table has caught up (see
-`caught_up`), and scan events until then (TR-1520), so a cell just upgraded shows right numbers
-at once. Two writers keep the row right:
+Every claude_code line is written here as it is stored, and nowhere else (Tares 2.0, TR-1815):
+`Store.append` calls `record_first`, which writes a batch's counts, lines, facts and turns in one
+transaction.
 
-- `record`, which counts a batch of claude_code lines committed to DuckDB (`Store.append` calls
-  `record_first`, before DuckDB, see below). It
-  adds the batch to each session's row in one transaction (`ON CONFLICT ... DO UPDATE`), so
-  concurrent batches lose nothing.
-- `reconcile_sessions`, run in a background thread at start. It reads the absolute counts from
-  DuckDB for the sessions with lines newer than the last pass, and keeps the larger of what is
-  stored and what DuckDB says. Lines written by an image that did not call `record`, or a batch
-  whose `record` failed, are counted this way. Both writers only ever undercount, so the larger
-  value is the right one, and a second pass changes nothing. When a pass has finished all its
-  chunks it sets the `sessions_caught_up` row in `session_ingest_marks`; a pass that raised does
-  not, so the readers stay on the scan and the next start tries again.
+- `sessions`: one row per session, the lines counted into it as they are stored (`ON CONFLICT ... DO
+  UPDATE`, so concurrent batches lose nothing). The readers `Store.session_activity`,
+  `Store.project_sessions`, `FactoryStore.station_sessions` and `FactoryStore.coordination_calls`
+  read it (TR-1499).
+- `session_lines` (TR-1478): every line as it was stored, numbered within its session by `seq`.
+  `record_first` takes `seq` from the `line_count` the `sessions` upsert returns and inserts the lines
+  in that transaction, so `seq` is dense and unique per session on SQLite and Postgres. A line sent
+  twice is stored twice. The hourly archive (`session_archive.py`, TR-1506) moves the rows of
+  sessions idle for a week into files, recorded in `session_archive_parts`, and `session_read.py`
+  (TR-1507) reads a session from the table and the parts. `tares_session_lines_rows` and
+  `tares_session_lines_bytes` say how big the table is.
+- the facts the factory reads (TR-1477): the crew's protocol messages in `session_messages` and the
+  shell commands sessions ran, with what they printed, in `session_commands`. `message_facts`,
+  `command_facts` and `result_facts` are the rules, one tool_use or tool_result line at a time. A row
+  is made by its tool_use id, so a resumed session that copies old lines or a batch written twice
+  adds nothing. A result sets the fields of the row of the call it answers and makes none.
+- `session_turns` (what a person typed), `session_said` (the last three things each session's
+  assistant said) and `session_files` (the files a session edited or wrote, TR-1505). `turn_fact`,
+  `said_fact` and `files_facts` are the rules, and `turns_of` folds a batch of lines into rows.
 
-The session store is written FIRST (TR-1665, `record_first`): counts, lines,
-facts and turns in one transaction. When the store takes no write, `LinesNotStored` goes up,
-DuckDB gets nothing and `/ingest` answers 503, so the sender sends the same lines again. When the
-store is up but will not take a session's lines, the session is counted and marked
-`lines_complete` false, DuckDB keeps the lines, and the M1 drain (`session_drain.py`) copies them
-over later; the request is acknowledged, so one bad line blocks nothing behind it. When even the
-session's counts and mark cannot be written, the batch is refused like the first case (TR-1647). A
-DuckDB write that fails after the store's takes the store's back (`take_back`).
+When the store takes no write, `LinesNotStored` goes up, nothing is stored and `/ingest` answers 503,
+so the sender sends the same lines again. When the store is up but will not take one session's lines
+(TR-1647), that session is counted and marked `lines_complete` false, its lines are not kept and one
+line says so; the request is acknowledged, so one bad line blocks nothing behind it. When even the
+session's counts and mark cannot be written, the batch is refused like the first case.
 
-With an archive, the cell does not write DuckDB at all for the sessions `holdable` names
-(TR-1479, TR-1647); the readers of DuckDB `events` read those from here (`session_events.py`).
+`sessions.lines_complete` is true when `session_lines` and the archive hold the session's
+`line_count` lines. The archive moves only complete sessions. Nothing here reads `session_lines` at
+start: the ten minute pass (`start_reconcile`) puts `lines_complete` right once (`repair_table_sessions`)
+and keeps the gauges of the table.
 
-Once the one-time move out of DuckDB is complete (`session_move.complete`:
-planned, no session `pending`), `reconcile_sessions` reads nothing from DuckDB, nor do `fill_facts`
-and `fill_turns` once each has finished one pass (TR-1613), and the usage and challenger fills of
-`Store._upgrade` read it once (`filled_once`).
-
-The readers know the table has caught up from one row in `session_ingest_marks`, `CAUGHT_UP`. It
-is set by the first complete `reconcile_sessions`, or at once by `Store.__init__` on a cell whose
-events hold no claude_code line (nothing to catch up on). It is never unset.
-
-Nothing here changes DuckDB: `Store.append` alone decides what is written there.
-
-The same two writers keep the facts the factory reads (TR-1477): the crew's protocol messages in
-`session_messages` and the shell commands sessions ran, with what they printed, in
-`session_commands`. `message_facts`, `command_facts` and `result_facts` are the extraction rules, one
-tool_use or tool_result line at a time; `record` writes what they find in a transaction after the
-counts' (so a line the facts cannot take never loses a batch's counts), and `fill_facts` runs them over the events a first start has not seen (the watermark
-`session_facts`). A row is made by its tool_use id, so a resumed session that copies old lines, a
-batch written twice or a fill that runs twice adds nothing. A result sets the fields of the row of
-the call it answers and makes none: a result that comes before its call is written by the next fill.
-
-The same two writers keep three more tables the factory reads (TR-1505): `session_turns` (what a
-person typed), `session_said` (the last three things each session's assistant said) and
-`session_files` (the files a session edited or wrote, with when it last did). `turn_fact`,
-`said_fact` and `files_facts` are the rules, one line at a time, and `turns_of` folds a batch of
-lines into rows. `record` writes them in a third transaction of its own, after the facts, so a
-failure there loses neither the counts nor the facts. `fill_turns` reads them back from DuckDB for
-the lines a first start has not seen (the watermark `session_turns`): every user line newer than
-the mark, the 60 newest assistant lines and the 400 newest file-editing tool_use lines of each
-session touched. A turn and a said line are made by (session, line key), a file by (session, path),
-so a repeat adds nothing. The readers `FactoryStore.person_turns`, `Store.said_lately`,
-`Store.last_said` and `Store.files_touched` read these tables and no longer scan events.
-
-The same writers keep `session_lines` (TR-1478): every claude_code line as it was stored, numbered
-within its session by `seq`. `record` takes `seq` from the `line_count` the `sessions` upsert returns
-and inserts the lines in that transaction, so `seq` is dense and unique per session on SQLite and
-Postgres. DuckDB does not deduplicate a line, so `session_lines` does not either, and the two counts
-can be compared: `sessions.lines_complete` is true when a session has as many rows in
-`session_lines` as lines in DuckDB. A row `record` makes is born in the table (`lines_origin =
-'table'`, TR-1606) and starts true: its lines go in with its counts, and it is complete when the
-table and the archive hold `line_count` lines, with no DuckDB read; the start-up pass
-`repair_table_sessions` recomputes that for every such session. A row the reconcile makes has a null
-origin, starts false, and is set by comparing with DuckDB (every 10 minutes, and at start). A
-`record` that could not write a session's lines sets it false. The hourly archive (`session_archive.py`, TR-1506) moves the rows of sessions idle for
-a week into files and records each file in `session_archive_parts`; the count compared with DuckDB's
-is the rows of `session_lines` plus the `lines` of the parts. `session_read.py` (TR-1507) reads a
-complete session from the table and the parts instead of DuckDB. The table is filled from old events
-once, by `session_move.py` (TR-1609, TR-1611): a background job at the first start rebuilds every
-session from DuckDB's lines and the lines only the table or the archive
-holds, into the table when its last line is inside the archive window and straight into archive
-parts when it is older, and verifies each. `tares_session_lines_rows` and
-`tares_session_lines_bytes` say how big the table is.
-
-Two things to know when reading the table:
-
-- A row holds the `source` of the session's first line, and the readers ask for the one source
-  `cc_source` names, as the events scan did. A session whose lines come from two sources is
-  counted under the first one that wrote it.
-- The reconcile's mark is the newest `ingest_time` it read, and a line's `ingest_time` is set when
-  its envelope is built, not when it is committed. The 10 minute margin before the mark covers a batch
-  that commits late.
+A row holds the `source` of the session's first line, and the readers ask for the one source
+`cc_source` names. A session whose lines come from two sources is counted under the first one that
+wrote it.
 """
 from __future__ import annotations
 
@@ -100,27 +47,17 @@ import re
 import threading
 import time
 import weakref
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from sqlalchemy import Text, bindparam, delete, exists, func, insert, literal, select, text, update
+from sqlalchemy import Text, bindparam, delete, func, insert, select, text, update
 
 from . import metrics
 from .envelope import now_utc
 from .factory import is_coordination
 from .session_store.tables import (session_archive_parts, session_commands, session_files,
-                                   session_ingest_marks, session_lines, session_messages,
+                                   session_lines, session_messages,
                                    session_said, session_turns, sessions)
 
-MARK = "sessions_reconcile"          # the fill's row in session_ingest_marks
-CAUGHT_UP = "sessions_caught_up"     # its row when a pass has finished (TR-1520): readers use the table
-MARGIN = timedelta(minutes=10)       # a pass starts this long before the last one's newest line
-CHUNK = 200                          # sessions read from DuckDB under one hold of the lock
-FACTS_MARK = "session_facts"         # the facts fill's row in session_ingest_marks (TR-1477)
-TURNS_MARK = "session_turns"         # the turns fill's row in session_ingest_marks (TR-1505)
-USAGE_FILLED = "claude_usage_filled"     # the factory's usage fill read DuckDB (TR-1613)
-CHALLENGES_FILLED = "challenges_filled"  # the factory's challenger fill read DuckDB (TR-1613)
-FACTS_FILLED = "session_facts_filled"    # a facts fill finished on this factory cell (TR-1613)
-TURNS_FILLED = "session_turns_filled"    # a turns fill finished on this factory cell (TR-1613)
 SAID_KEEP = 3                        # the assistant messages kept per session
 SAID_READ = 60                       # the newest assistant lines per session a fill reads
 FILES_READ = 400                     # the newest file-editing tool_use lines per session a fill reads
@@ -128,10 +65,7 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 OUTPUT_TAIL = 20000                  # characters of a command's output kept: a test run's summary is at the end
 MESSAGE_TEXT = 4000                  # characters of a protocol message kept
 TABLE = "table"                      # `sessions.lines_origin` of a session born in session_lines (TR-1606)
-CYCLE = 600.0                        # seconds between the reconcile passes after the first (TR-1478)
-# names in session_ingest_marks, each followed by a session id (TR-1665, `session_drain`)
-DRAIN_TODO = "session_drain_todo:"   # a session the drain still has to refill, or to write facts of
-DRAIN_GAVE_UP = "session_drain_gave_up:"   # the drain could not store all its lines: not tried again
+CYCLE = 600.0                        # seconds between the passes of the ten minute cycle (TR-1478)
 PROBE_SESSION = "tares:write-probe"  # the row a probe writes and removes in one transaction
 
 # the rendered text names each tool as "→ name(": a cheap filter before the payload is parsed
@@ -169,9 +103,9 @@ def claude_code_sources(store) -> set[str]:
 
 def holds_session(store, sid) -> bool:
     """False for a session id the sessions database cannot hold: Postgres takes no NUL in text, so
-    such a session can never have a row there. DuckDB alone keeps its lines, and the rest of a batch
-    or of a fill is stored as usual (TR-1647, TR-1703). A posted line has lost its NULs before it
-    gets here (`ClaudeCodeConnector.map_payload`); DuckDB may hold ids from before that."""
+    such a session can never have a row there, and its lines are not kept; the rest of a batch is
+    stored as usual (TR-1647, TR-1703). A posted line has lost its NULs before it gets here
+    (`ClaudeCodeConnector.map_payload`)."""
     return store.sessions_db.dialect != "postgresql" or "\x00" not in str(sid)
 
 
@@ -185,35 +119,6 @@ def claude_code_lines(store, envelopes) -> list:
         return cands          # the default name: no catalog lookup for the common case
     ours = claude_code_sources(store)
     return [e for e in cands if e.source in ours]
-
-
-def holdable(store, lines: list) -> list:
-    """The claude_code `lines` the session store may hold alone, without a copy in DuckDB
-    (TR-1479): those of a session with no row yet, or whose row was born in the table and is
-    complete. A session from before `lines_origin` (null), one the reconcile made, one a failed
-    write left incomplete, or one with the drain's todo mark keeps getting its lines in DuckDB too:
-    it is judged against DuckDB's count, and a read of it falls back to DuckDB, so a line held back
-    would be missing there.
-    `session_lines` keeps no source of a line: a stored line's source is its session's (TR-1647),
-    so a line of another claude_code source than the session's keeps going to DuckDB.
-    Called under `Store._sess_lock`, so no `record` changes a row meanwhile."""
-    own: dict = {}                      # a session with no row yet takes its first line's source
-    for e in lines:
-        own.setdefault(e.key_value, e.source)
-    sids = sorted(own)
-    ok = set(sids)
-    c = sessions.c
-    todo = exists(select(session_ingest_marks.c.name).where(
-        session_ingest_marks.c.name == literal(DRAIN_TODO) + c.session))
-    with store.sessions_db.read() as conn:
-        for i in range(0, len(sids), 500):
-            for sid, source, origin, done, waits in conn.execute(
-                    select(c.session, c.source, c.lines_origin, c.lines_complete, todo.label("todo"))
-                    .where(c.session.in_(sids[i:i + 500]))).all():
-                own[sid] = source
-                if waits or not (origin == TABLE and done):
-                    ok.discard(sid)
-    return [e for e in lines if e.key_value in ok and e.source == own[e.key_value]]
 
 
 def _utc(t: datetime) -> datetime:
@@ -410,7 +315,7 @@ def _write_facts(conn, db, facts: dict) -> None:
 
 # ── the turns, last words and touched files the factory reads (TR-1505) ──────────────────────
 def _obj(v) -> dict:
-    """A JSON object given as one (at ingest) or as its text (from DuckDB); {} for anything else."""
+    """A JSON object given as one or as its text; {} for anything else."""
     if isinstance(v, (str, bytes)):
         try:
             v = json.loads(v) if v else {}
@@ -420,7 +325,7 @@ def _obj(v) -> dict:
 
 
 def _jx(obj: dict, *path) -> str | None:
-    """DuckDB's json_extract_string(obj, '$.a.b') for the values these filters read: a JSON true
+    """SQL's json_extract_string(obj, '$.a.b') for the values these filters read: a JSON true
     or false reads as 'true' or 'false', a string as itself, a number as its text, null, a missing
     key and a step into something that is not an object as None (SQL NULL); an object or array as
     its JSON text."""
@@ -627,8 +532,7 @@ def render_flags(store, sources) -> dict:
 
 def _line_rows(store, envelopes) -> dict:
     """{session: [the rows of `session_lines` the session's lines make, in batch order]}, without
-    `seq` (`_add` numbers them). `payload` and `labels` are the text DuckDB stores for the line
-    (`Store._append` dumps them the same way), so the table holds what the events table holds."""
+    `seq` (`_add` numbers them). `payload` and `labels` are the line's JSON text."""
     render = render_flags(store, {e.source for e in envelopes})
     out: dict = {}
     for e in envelopes:
@@ -637,17 +541,6 @@ def _line_rows(store, envelopes) -> dict:
             "type": _text(e.event_type), "labels": json.dumps(e.labels),
             "render": render[e.source], "payload": json.dumps(e.payload)})
     return out
-
-
-def _lines_incomplete(store, sids) -> None:
-    """Say a session's lines are not all in `session_lines`: set `lines_complete` false for each
-    session (one that has no row yet starts false)."""
-    sids = sorted(sids)
-    db = store.sessions_db
-    with db.begin() as conn:
-        for i in range(0, len(sids), 500):
-            conn.execute(update(sessions).where(sessions.c.session.in_(sids[i:i + 500]))
-                         .values(lines_complete=False))
 
 
 def _add_facts(store, facts: dict) -> None:
@@ -660,60 +553,9 @@ def _add_facts(store, facts: dict) -> None:
         _write_facts(conn, db, facts)
 
 
-def record(store, envelopes) -> bool:
-    """Count a batch of claude_code lines (already committed to DuckDB, or held back from it, see
-    `Store.append`) into `sessions`. A failure logs one line and counts in
-    tares_session_ingest_failures_total; it never reaches the caller, because the lines are stored
-    and the next start's reconcile counts them. Returns whether the lines went into
-    `session_lines`: a caller that kept them out of DuckDB writes them there when it did not."""
-    if not envelopes:
-        return True
-    t0 = time.perf_counter()
-    ok = True
-    lines_ok = False
-    folded: dict = {}
-    try:
-        folded = _fold(envelopes)
-        _add(store, folded, _line_rows(store, envelopes))
-        lines_ok = True
-    except Exception as e:
-        ok = False
-        print(f"taresd: counting {len(envelopes)} claude_code line(s) into sessions failed "
-              f"({type(e).__name__}: {e}); caught up at the next start", flush=True)
-        # the counts must not be lost to a line `session_lines` cannot take: count again without
-        # the lines, and say their sessions are missing some
-        try:
-            _add(store, folded)
-        except Exception:
-            pass
-        try:
-            _lines_incomplete(store, folded)
-        except Exception:
-            pass
-    try:
-        _add_facts(store, facts_of(
-            (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
-            for e in envelopes))
-    except Exception as e:
-        ok = False
-        print(f"taresd: writing the facts of {len(envelopes)} claude_code line(s) failed "
-              f"({type(e).__name__}: {e}); written at the next start", flush=True)
-    try:
-        _add_turns(store, turns_of(
-            (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload, e.labels)
-            for e in envelopes))
-    except Exception as e:
-        ok = False
-        print(f"taresd: writing the turns of {len(envelopes)} claude_code line(s) failed "
-              f"({type(e).__name__}: {e}); written at the next start", flush=True)
-    metrics.session_ingest(time.perf_counter() - t0, ok)
-    return lines_ok
-
-
 # ── the session store is written first (TR-1665) ──────────────────────────────────────────────
-# The factory's pages read only the session store, so a claude_code line is not acknowledged until
-# the store has it, or has a durable mark that says it is missing. `Store.append` calls
-# `record_first` before it writes DuckDB.
+# A claude_code line is not acknowledged until the store has it, or has a durable mark that says it
+# is missing. `Store.append` calls `record_first`.
 class LinesNotStored(RuntimeError):
     """The sessions database takes no write: the lines are not acknowledged, and nothing of them is
     stored, so the sender sends them again."""
@@ -767,8 +609,8 @@ def _write_whole(store, envelopes, written: Written) -> None:
 
 def _write_refused(store, sid: str, envelopes, written: Written) -> None:
     """A session whose lines the store will not take: its counts, with the durable mark that its
-    lines are missing (`lines_complete` false, which `session_drain` reads), in one transaction;
-    then its facts and turns, as far as they go. DuckDB keeps the lines.
+    lines are missing (`lines_complete` false), in one transaction; then its facts and turns, as far
+    as they go. The lines are not kept.
 
     When that transaction does not go through either, nothing would ever say the lines are missing,
     so they are not acknowledged: `LinesNotStored`, and the sender sends them again (TR-1647)."""
@@ -776,8 +618,6 @@ def _write_refused(store, sid: str, envelopes, written: Written) -> None:
 
     def mark(conn):
         conn.execute(update(sessions).where(sessions.c.session == sid).values(lines_complete=False))
-        conn.execute(delete(session_ingest_marks).where(     # a new miss: the drain tries again
-            session_ingest_marks.c.name == DRAIN_GAVE_UP + sid))
     written.refused.add(sid)
     for last_try in (False, True):
         try:
@@ -803,17 +643,17 @@ def _write_refused(store, sid: str, envelopes, written: Written) -> None:
             write()
         except Exception as e:
             print(f"taresd: writing the {what} of {len(envelopes)} claude_code line(s) failed "
-                  f"({type(e).__name__}: {e}); the background repair tries again", flush=True)
+                  f"({type(e).__name__}: {e})", flush=True)
 
 
 def record_first(store, envelopes) -> Written:
-    """Write a batch of claude_code lines to the session store BEFORE DuckDB has it (factory).
+    """Write a batch of claude_code lines to the session store.
 
     The batch goes in one transaction. When that fails: a store that takes no write raises
     `LinesNotStored` and nothing is stored. Otherwise each session is tried again on its own (a
-    passing error succeeds then), and one that still fails is counted, marked incomplete and left to
-    `session_drain`, so a line that can never be stored does not make the sender send it for ever.
-    Called under `Store._sess_lock`."""
+    passing error succeeds then), and one that still fails is counted and marked incomplete, and its
+    lines are not kept, so a line that can never be stored does not make the sender send it for
+    ever. Called under `Store._sess_lock`."""
     written = Written()
     if not envelopes:
         return written
@@ -834,8 +674,8 @@ def record_first(store, envelopes) -> Written:
                     why = f"{type(e).__name__}: {e}"
                     _write_refused(store, sid, mine, written)
                     print(f"taresd: the sessions database refused {len(mine)} claude_code line(s) "
-                          f"of session {sid} ({why}); counted, and copied from DuckDB by the "
-                          "background repair", flush=True)
+                          f"of session {sid} ({why}); counted and marked incomplete, the lines "
+                          "are not kept", flush=True)
         except LinesNotStored:
             take_back(store, written)
             metrics.session_ingest(time.perf_counter() - t0, False)
@@ -867,171 +707,6 @@ def take_back(store, written: Written) -> None:
               "again, they are stored there twice", flush=True)
 
 
-def mark_drain_todo(store, sids) -> None:
-    """Leave `sids` for `session_drain` to refill, whatever their `lines_complete` says."""
-    db = store.sessions_db
-    stmt = db.upsert(session_ingest_marks).on_conflict_do_nothing(index_elements=["name"])
-    now = now_utc()
-    with db.begin() as conn:
-        conn.execute(stmt, [{"name": DRAIN_TODO + sid, "at": now} for sid in sorted(sids)])
-
-
-# ── fills the factory runs once ──────────────────────────────────────────────────────────────
-def filled_once(store, name: str) -> bool:
-    """True when the fill `name` has finished before, so it reads DuckDB's events no more
-    (TR-1613)."""
-    with store.sessions_db.read() as conn:
-        return conn.execute(select(session_ingest_marks.c.at).where(
-            session_ingest_marks.c.name == name)).first() is not None
-
-
-def set_filled(store, name: str) -> None:
-    """Record that the fill `name` finished. Call it after the fill wrote."""
-    db = store.sessions_db
-    stmt = db.upsert(session_ingest_marks).values(name=name, at=now_utc())
-    with db.begin() as conn:
-        conn.execute(stmt.on_conflict_do_nothing(index_elements=["name"]))
-
-
-# ── catching up from DuckDB ──────────────────────────────────────────────────────────────────
-def _mark(store):
-    with store.sessions_db.read() as conn:
-        return conn.execute(select(session_ingest_marks.c.at).where(
-            session_ingest_marks.c.name == MARK)).scalar_one_or_none()
-
-
-def _set_mark(store, at: datetime) -> None:
-    db = store.sessions_db
-    stmt = db.upsert(session_ingest_marks).values(name=MARK, at=at)
-    stmt = stmt.on_conflict_do_update(index_elements=["name"], set_={"at": stmt.excluded.at})
-    with db.begin() as conn:
-        conn.execute(stmt)
-
-
-def caught_up(store) -> bool:
-    """True once the `sessions` table holds every session's counts: the first complete reconcile
-    ran, or the cell had no claude_code line to count. One primary-key lookup. Only a True answer
-    is kept on the store (the row is never unset, and losing the answer changes nothing)."""
-    if getattr(store, "_sessions_caught_up", False):
-        return True
-    with store.sessions_db.read() as conn:
-        at = conn.execute(select(session_ingest_marks.c.at).where(
-            session_ingest_marks.c.name == CAUGHT_UP)).first()
-    if at is None:
-        return False
-    store._sessions_caught_up = True
-    return True
-
-
-def _set_caught_up(store) -> None:
-    db = store.sessions_db
-    stmt = db.upsert(session_ingest_marks).values(name=CAUGHT_UP, at=now_utc())
-    stmt = stmt.on_conflict_do_nothing(index_elements=["name"])
-    with db.begin() as conn:
-        conn.execute(stmt)
-    store._sessions_caught_up = True
-
-
-def mark_caught_up_if_empty(store) -> bool:
-    """The one-time shortcut at `Store.__init__`: a cell with no caught-up row whose DuckDB events
-    hold no claude_code line has nothing to catch up on, so it counts as caught up at once. A cell
-    that has such lines stays on the scan until its reconcile finishes. Returns the state."""
-    if caught_up(store):
-        return True
-    sources = sorted(claude_code_sources(store))
-    marks = ", ".join("?" for _ in sources)
-    with store._lock:
-        has = store.con.execute(
-            f"SELECT 1 FROM events WHERE source IN ({marks}) LIMIT 1", sources).fetchone()
-    if has is not None:
-        return False
-    _set_caught_up(store)
-    return True
-
-
-def reconcile_sessions(store, chunk: int = CHUNK) -> int:
-    """Bring `sessions` up to what DuckDB holds, for the sessions with lines newer than the last
-    pass (every session on the first pass). Each counter becomes the larger of the stored value and
-    the one DuckDB computes; the mark then moves to the newest `ingest_time` read. Reads DuckDB in
-    chunks of `chunk` sessions, taking and letting go of the store's lock for each, and writes
-    under the same lock that `Store.append` holds across its commit and `record`, so a line is
-    never counted by both. Sets the caught-up row when every chunk has been written (even when it
-    found no session). Returns how many sessions it looked at.
-
-    Once the one-time move is complete (`session_move.events_done`), DuckDB
-    is not read: the caught-up row is set and the mark is left where it was."""
-    from . import session_move          # session_move imports this module
-    if session_move.events_done(store):
-        if not caught_up(store):
-            _set_caught_up(store)
-        return 0
-    sources = sorted(claude_code_sources(store))
-    marks = ", ".join("?" for _ in sources)
-    mark = _mark(store)
-    since = mark - MARGIN if mark is not None else None
-    with store._lock:
-        found = store.con.execute(
-            f"SELECT key_value, max(ingest_time) FROM events WHERE source IN ({marks}) "
-            "AND key_value IS NOT NULL AND key_value <> '' "
-            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) GROUP BY key_value",
-            [*sources, since, since]).fetchall()
-    newest = max((r[1] for r in found), default=None)
-    sids = sorted(r[0] for r in found if holds_session(store, r[0]))
-    for i in range(0, len(sids), chunk):
-        _reconcile_chunk(store, sources, sids[i:i + chunk])
-    if newest is not None:
-        _set_mark(store, _utc(newest))
-    _set_caught_up(store)          # only here: a pass that raised above leaves the readers on the scan
-    return len(sids)
-
-
-def _reconcile_chunk(store, sources: list, sids: list) -> None:
-    marks = ", ".join("?" for _ in sources)
-    keys = ", ".join("?" for _ in sids)
-    args = [*sources, *sids]
-    with store._sess_lock:
-        with store._lock:
-            counts = store.con.execute(
-                "SELECT key_value, any_value(source), min(event_time), max(event_time), count(*), "
-                "count(*) FILTER (WHERE event_type = 'tool_use') FROM events "
-                f"WHERE source IN ({marks}) AND key_value IN ({keys}) GROUP BY key_value",
-                args).fetchall()
-            hints = " OR ".join("text LIKE ?" for _ in _COORD_HINTS)
-            lines = store.con.execute(
-                "SELECT key_value, text, payload FROM events "
-                f"WHERE source IN ({marks}) AND key_value IN ({keys}) AND event_type = 'tool_use' "
-                f"AND ({hints})", [*args, *[f"%{h}%" for h in _COORD_HINTS]]).fetchall()
-        coord: dict = {}
-        for sid, text, payload in lines:
-            n = coordination_in(text, payload)
-            if n:
-                coord[sid] = coord.get(sid, 0) + n
-        computed = {sid: (src, _utc(first), _utc(last), int(n), int(tools), coord.get(sid, 0))
-                    for sid, src, first, last, n, tools in counts}
-        if not computed:
-            return
-        db = store.sessions_db
-        now = now_utc()
-        stmt = db.upsert(sessions)
-        ex = stmt.excluded
-        # the larger of what is stored and what DuckDB says: either one can only undercount
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["session"],
-            set_={"line_count": db.greatest(sessions.c.line_count, ex.line_count),
-                  "tool_calls": db.greatest(sessions.c.tool_calls, ex.tool_calls),
-                  "coordination_calls": db.greatest(sessions.c.coordination_calls,
-                                                    ex.coordination_calls),
-                  "started_at": db.least(sessions.c.started_at, ex.started_at),
-                  "last_line_at": db.greatest(sessions.c.last_line_at, ex.last_line_at),
-                  "updated_at": ex.updated_at})
-        rows = [{"session": sid, "source": c[0], "started_at": c[1], "last_line_at": c[2],
-                 "line_count": c[3], "tool_calls": c[4], "coordination_calls": c[5],
-                 "updated_at": now} for sid, c in sorted(computed.items())]
-        with db.begin() as conn:
-            conn.execute(stmt, rows)
-            _set_lines_complete(conn, {sid: c[3] for sid, c in computed.items()})
-
-
 def _held_lines():
     """The count of the lines `session_lines` and the archive hold for `sessions.session`: rows of
     the table plus the `lines` of the archived parts (TR-1506). One statement with the session row,
@@ -1043,35 +718,12 @@ def _held_lines():
     return kept + archived
 
 
-def _set_lines_complete(conn, wanted: dict) -> None:
-    """`lines_complete` of each session of `wanted` ({session: lines DuckDB holds}). A session born
-    in the table (`lines_origin = 'table'`, TR-1606) is complete when the table and the archive hold
-    `sessions.line_count` lines, and DuckDB's count is not looked at. Any other session is complete
-    when they hold as many lines as DuckDB does. DuckDB's count was read under the lock that
-    `Store.append` holds from its commit to the end of `record`, so neither side moves meanwhile."""
-    sids = sorted(wanted)
-    have: dict = {}
-    held = _held_lines()
-    for i in range(0, len(sids), 500):
-        have.update({r[0]: r[1:] for r in conn.execute(select(
-            sessions.c.session, sessions.c.lines_origin, sessions.c.line_count, held).where(
-            sessions.c.session.in_(sids[i:i + 500]))).all()})
-    flags: dict = {True: [], False: []}
-    for sid in sids:
-        origin, count, n = have.get(sid, (None, 0, 0))
-        flags[n == (count if origin == TABLE else wanted[sid])].append(sid)
-    for flag, mine in flags.items():
-        for i in range(0, len(mine), 500):
-            conn.execute(update(sessions).where(sessions.c.session.in_(mine[i:i + 500]))
-                         .values(lines_complete=flag))
-
-
 def repair_table_sessions(store) -> int:
     """Recompute `lines_complete` of every session born in the table (TR-1606): complete when the
-    table and the archive hold `line_count` lines. Run at start: it puts right a session that 1.61.0
-    marked false against DuckDB's count after a rollback, or that a failed write left false and a
-    later pass filled. Two statements, one per direction, that touch only the rows that change.
-    Returns how many rows changed."""
+    table and the archive hold `line_count` lines. Run once per process, on the ten minute cycle's
+    first pass, never at start: it puts right a session an older version marked against another
+    count, or that a failed write left false. Two statements, one per direction, that touch only the
+    rows that change. Returns how many rows changed."""
     whole = _held_lines() == sessions.c.line_count
     n = 0
     with store.sessions_db.begin() as conn:
@@ -1106,158 +758,6 @@ def refresh_lines_gauges(store) -> None:
         pass
 
 
-def _facts_mark(store):
-    with store.sessions_db.read() as conn:
-        return conn.execute(select(session_ingest_marks.c.at).where(
-            session_ingest_marks.c.name == FACTS_MARK)).scalar_one_or_none()
-
-
-def _set_facts_mark(store, at: datetime) -> None:
-    db = store.sessions_db
-    stmt = db.upsert(session_ingest_marks).values(name=FACTS_MARK, at=at)
-    stmt = stmt.on_conflict_do_update(index_elements=["name"], set_={"at": stmt.excluded.at})
-    with db.begin() as conn:
-        conn.execute(stmt)
-
-
-def fill_facts(store, chunk: int = CHUNK) -> int:
-    """Write the facts of the lines DuckDB holds that this table has not seen: every tool_use and
-    tool_result line of a claude_code source newer than the `session_facts` mark minus the margin
-    (all of them on the first pass). The same functions `record` runs, written as an upsert, so a
-    line `record` already wrote, or a pass that runs twice, changes nothing. Reads DuckDB for
-    `chunk` sessions at a time, taking and letting go of the store's lock for each; the mark moves
-    to the newest `ingest_time` read once every chunk is written, so a pass that raised is read
-    again from the same place. Returns how many sessions it looked at.
-
-    Once the one-time move is complete and this fill has finished before
-    (`FACTS_FILLED`), nothing is read: `record` writes what arrives. A cell where it never finished
-    reads once more, so a session whose fill failed during the move is covered."""
-    from . import session_move          # session_move imports this module
-    if session_move.events_done(store) and filled_once(store, FACTS_FILLED):
-        return 0
-    sources = sorted(claude_code_sources(store))
-    marks = ", ".join("?" for _ in sources)
-    mark = _facts_mark(store)
-    since = mark - MARGIN if mark is not None else None
-    with store._lock:
-        found = store.con.execute(
-            f"SELECT key_value, max(ingest_time) FROM events WHERE source IN ({marks}) "
-            "AND event_type IN ('tool_use', 'tool_result') "
-            "AND key_value IS NOT NULL AND key_value <> '' "
-            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) GROUP BY key_value",
-            [*sources, since, since]).fetchall()
-    newest = max((r[1] for r in found), default=None)
-    sids = sorted(r[0] for r in found if holds_session(store, r[0]))
-    for i in range(0, len(sids), chunk):
-        _fill_chunk(store, sources, sids[i:i + chunk], since)
-    if newest is not None:
-        _set_facts_mark(store, _utc(newest))
-    set_filled(store, FACTS_FILLED)
-    return len(sids)
-
-
-def _fill_chunk(store, sources: list, sids: list, since) -> None:
-    marks = ", ".join("?" for _ in sources)
-    keys = ", ".join("?" for _ in sids)
-    with store._lock:
-        # the tool_use lines that name a tool the facts come from: a cheap filter before the parse
-        lines = store.con.execute(
-            "SELECT source, key_value, event_time, event_type, text, payload FROM events "
-            f"WHERE source IN ({marks}) AND key_value IN ({keys}) "
-            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) "
-            "AND (event_type = 'tool_result' OR (event_type = 'tool_use' "
-            "AND (text LIKE '%SendMessage%' OR text LIKE '%Bash(%'))) ORDER BY event_time",
-            [*sources, *sids, since, since]).fetchall()
-    facts = facts_of(lines)
-    if not any(facts.values()):
-        return
-    db = store.sessions_db
-    with db.begin() as conn:
-        _write_facts(conn, db, facts)
-
-
-def _turns_mark(store):
-    with store.sessions_db.read() as conn:
-        return conn.execute(select(session_ingest_marks.c.at).where(
-            session_ingest_marks.c.name == TURNS_MARK)).scalar_one_or_none()
-
-
-def _set_turns_mark(store, at: datetime) -> None:
-    db = store.sessions_db
-    stmt = db.upsert(session_ingest_marks).values(name=TURNS_MARK, at=at)
-    stmt = stmt.on_conflict_do_update(index_elements=["name"], set_={"at": stmt.excluded.at})
-    with db.begin() as conn:
-        conn.execute(stmt)
-
-
-def fill_turns(store, chunk: int = CHUNK) -> int:
-    """Write the turns, last words and touched files of the lines DuckDB holds that these tables
-    have not seen: the sessions of a claude_code source with a user, assistant or tool_use line
-    newer than the `session_turns` mark minus the margin (all of them on the first pass). The same
-    functions `record` runs, written so a line `record` already wrote, or a pass that runs twice,
-    changes nothing. Reads DuckDB for `chunk` sessions at a time, taking and letting go of the
-    store's lock for each, so one chunk is in memory at once; the mark moves to the newest
-    `ingest_time` read once every chunk is written, so a pass that raised is read again from the
-    same place. Returns how many sessions it looked at.
-
-    Once the one-time move is complete and this fill has finished before
-    (`TURNS_FILLED`), nothing is read: `record` writes what arrives. A cell where it never finished
-    reads once more, so a session whose fill failed during the move is covered."""
-    from . import session_move          # session_move imports this module
-    if session_move.events_done(store) and filled_once(store, TURNS_FILLED):
-        return 0
-    sources = sorted(claude_code_sources(store))
-    marks = ", ".join("?" for _ in sources)
-    mark = _turns_mark(store)
-    since = mark - MARGIN if mark is not None else None
-    with store._lock:
-        found = store.con.execute(
-            f"SELECT key_value, max(ingest_time) FROM events WHERE source IN ({marks}) "
-            "AND event_type IN ('user', 'assistant', 'tool_use') "
-            "AND key_value IS NOT NULL AND key_value <> '' "
-            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) GROUP BY key_value",
-            [*sources, since, since]).fetchall()
-    newest = max((r[1] for r in found), default=None)
-    sids = sorted(r[0] for r in found if holds_session(store, r[0]))
-    for i in range(0, len(sids), chunk):
-        _fill_turns_chunk(store, sources, sids[i:i + chunk], since)
-    if newest is not None:
-        _set_turns_mark(store, _utc(newest))
-    set_filled(store, TURNS_FILLED)
-    return len(sids)
-
-
-def _fill_turns_chunk(store, sources: list, sids: list, since) -> None:
-    marks = ", ".join("?" for _ in sources)
-    keys = ", ".join("?" for _ in sids)
-    base = f"FROM events WHERE source IN ({marks}) AND key_value IN ({keys}) "
-    args = [*sources, *sids]
-    cols = "source, key_value, event_time, event_type, text, payload, labels "
-    with store._lock:
-        # every user line newer than the mark: a turn is written once, so a repeat is skipped
-        lines = store.con.execute(
-            f"SELECT {cols}{base}AND event_type = 'user' "
-            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) ORDER BY event_time",
-            [*args, since, since]).fetchall()
-        # the newest assistant lines of each session, whatever the mark: only the last few count
-        lines += store.con.execute(
-            f"SELECT {cols}{base}AND event_type = 'assistant' "
-            "QUALIFY row_number() OVER (PARTITION BY source, key_value "
-            f"ORDER BY event_time DESC) <= {SAID_READ}", args).fetchall()
-        # the newest lines that edit a file (the cheap text filter of `files_facts`), same
-        lines += store.con.execute(
-            f"SELECT {cols}{base}AND event_type = 'tool_use' "
-            "AND (text LIKE '%Edit(%' OR text LIKE '%Write(%') "
-            "QUALIFY row_number() OVER (PARTITION BY source, key_value "
-            f"ORDER BY event_time DESC) <= {FILES_READ}", args).fetchall()
-    rows = turns_of(lines)
-    if not any(rows.values()):
-        return
-    db = store.sessions_db
-    with db.begin() as conn:
-        _write_turns(conn, db, rows)
-
-
 def _repair_pass(store) -> None:
     try:
         n = repair_table_sessions(store)
@@ -1268,43 +768,21 @@ def _repair_pass(store) -> None:
               "tried again at the next start", flush=True)
 
 
-def _reconcile_pass(store, t0: float) -> None:
-    # one pass at a time: the start-up pass can still be running when the first cycle comes round
-    with store.__dict__.setdefault("_reconcile_pass_lock", threading.Lock()):
-        try:
-            n = reconcile_sessions(store)
-            if n:          # a start with nothing to catch up on prints nothing
-                print(f"taresd: sessions table caught up for {n} session(s) in "
-                      f"{time.perf_counter() - t0:.1f}s", flush=True)
-        except Exception as e:
-            print(f"taresd: sessions table catch-up failed ({type(e).__name__}: {e}); "
-                  "tried again at the next start", flush=True)
-        refresh_lines_gauges(store)
-
-
-def _drain_pass(store, stop: threading.Event | None = None) -> None:
-    """Repair the factory's marked sessions (`session_drain`, TR-1665)."""
-    from . import session_drain          # it imports this module
-    try:
-        session_drain.drain(store, stop=stop)
-    except Exception as e:
-        print(f"taresd: M1 drain failed ({type(e).__name__}: {e}); tried again at the next pass",
-              flush=True)
-
-
 def _cycle(ref, stop: threading.Event) -> None:
-    """After the first pass: `reconcile_sessions` again every `CYCLE` seconds, so a session that
-    `record` wrote in full becomes `lines_complete` within minutes, and the gauges of
-    `session_lines` follow. Ends when `Store.close` sets `stop`, or when the store is gone: the
-    thread holds a weak reference, so a process that exits without closing its store (the daemon)
-    is not kept from freeing its DuckDB connection by a thread parked in `stop.wait`."""
+    """Every `CYCLE` seconds: the gauges of `session_lines`, the hourly usage totals and, on the
+    first pass only, the `lines_complete` repair. Ends when `Store.close` sets `stop`, or when the
+    store is gone: the thread holds a weak reference, so a process that exits without closing its
+    store (the daemon) is not kept from freeing it by a thread parked in `stop.wait`."""
+    repaired = False
     while not stop.wait(CYCLE):
         store = ref()
         if store is None:
             return
-        _reconcile_pass(store, time.perf_counter())
+        if not repaired:
+            _repair_pass(store)
+            repaired = True
+        refresh_lines_gauges(store)
         _usage_hourly_pass(store)       # a no-op once the hourly totals are built (TR-1632)
-        _drain_pass(store, stop)
         del store
 
 
@@ -1324,33 +802,11 @@ def _usage_hourly_pass(store) -> None:
 
 
 def start_reconcile(store) -> threading.Thread:
-    """Run `reconcile_sessions`, `fill_facts` and then `fill_turns` in a background thread, once
-    (the thread returned), and `reconcile_sessions` again every ten minutes in another. A failure
-    prints one line: the next pass tries again, and the tables only undercount until then."""
-    def run():
-        _repair_pass(store)
-        _reconcile_pass(store, time.perf_counter())
-        t1 = time.perf_counter()
-        try:
-            n = fill_facts(store)
-            if n:
-                print(f"taresd: session facts filled for {n} session(s) in "
-                      f"{time.perf_counter() - t1:.1f}s", flush=True)
-        except Exception as e:
-            print(f"taresd: session facts fill failed ({type(e).__name__}: {e}); "
-                  "tried again at the next start", flush=True)
-        t2 = time.perf_counter()
-        try:
-            n = fill_turns(store)
-            if n:
-                print(f"taresd: session turns filled for {n} session(s) in "
-                      f"{time.perf_counter() - t2:.1f}s", flush=True)
-        except Exception as e:
-            print(f"taresd: session turns fill failed ({type(e).__name__}: {e}); "
-                  "tried again at the next start", flush=True)
-        _usage_hourly_pass(store)
-        _drain_pass(store)
-    th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
+    """Build the hourly usage totals in a background thread, once (the thread returned), and run
+    the ten minute cycle (`_cycle`) in another. Nothing here reads `session_lines` at start. A
+    failure prints one line: the next pass tries again."""
+    th = threading.Thread(target=_usage_hourly_pass, args=(store,), name="sessions-reconcile",
+                          daemon=True)
     th.start()
     store._reconcile_thread = th    # `Store.close` waits for it before the connections go
     stop = getattr(store, "_reconcile_stop", None)

@@ -24,7 +24,7 @@ free_port() { "$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1",
 ROOT_TOKEN="e2e-$("$PY" -c 'import secrets; print(secrets.token_hex(16))')"
 dport=$(free_port); DAEMON="http://127.0.0.1:$dport"
 mkdir -p "$T/tares"
-env -u TARES_FACTORY_URL TARES_DB="$T/tares/tares.duckdb" TARES_CATALOG="$T/tares/none.yaml" TARES_OTLP_GRPC_PORT=off \
+env -u TARES_FACTORY_URL TARES_HOME="$T/tares/tares" TARES_CATALOG="$T/tares/none.yaml" TARES_OTLP_GRPC_PORT=off \
   TARES_HOST=127.0.0.1 TARES_PORT="$dport" TARES_AUTH_TOKEN="$ROOT_TOKEN" HOME="$T/tares" \
   "$PY" -c "from tares.cli import run_daemon; run_daemon()" >"$T/taresd.log" 2>&1 &
 PIDS="$PIDS $!"

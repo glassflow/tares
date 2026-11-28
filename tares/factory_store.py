@@ -1,8 +1,8 @@
 """Storage for the software factory on Tares (P-TR-176, M2 onward), mixed into Store.
 
-Validation lives in tares/factory.py; these methods trust what they are handed. Every method takes
-the store's lock, like the rest of Store. Tables are created after Store's own schema and
-migrations (FACTORY_SCHEMA), so they can refer to columns those add.
+Validation lives in tares/factory.py; these methods trust what they are handed. The tables are in
+the session store (session_store/tables.py); a write takes the store's `_swrite`, like the rest of
+Store.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from sqlalchemy import (Integer, Text, and_, bindparam, case, cast, delete, fals
 from sqlalchemy import text as sql_text
 
 from . import claude_usage_hourly as hourly
-from . import metrics, session_ingest
+from . import metrics
 from .envelope import now_utc
 from .integrations import SLOTS
 from .request_memo import kept
@@ -107,23 +107,6 @@ def challenge_json(text):
     raise ValueError("nested too deeply")
 
 
-FACTORY_SCHEMA = [
-    # Which station a Claude Code session plays (TR-418, TR-420), from the plugin's
-    # `session_station` line: the station's stable name, its role, the station that started it
-    # (builders and helpers), and the project it was started for (TARES_PROJECT, builders).
-    # A station is played over time by a chain of sessions; the newest live one is current.
-    """CREATE TABLE IF NOT EXISTS session_stations (
-      session     TEXT PRIMARY KEY,
-      station     TEXT,
-      role        TEXT,
-      parent      TEXT,
-      project     TEXT,
-      seen_at     TIMESTAMPTZ
-    )""",
-    # The crew (TR-628) the station line belongs to: a row of `crews` (session_store/tables.py).
-    "ALTER TABLE session_stations ADD COLUMN IF NOT EXISTS crew_id TEXT",
-]
-
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
 PROJECT_SLOTS = ("tickets", "review", "ci")
 
@@ -156,7 +139,7 @@ class MapChanged(Exception):
 
 
 class FactoryStore:
-    """Methods Store gains for the factory. Expects self.con and self._lock."""
+    """Methods Store gains for the factory. Expects self.sessions_db and self._swrite."""
 
     # ── the person behind a record (TR-619) ───────────────────────────────────
     def _person_refs(self, ids) -> dict[str, dict]:
@@ -644,28 +627,19 @@ class FactoryStore:
         activity first."""
         ss, st, sx = session_stations, session_states, sessions_table
         named = self._named_project(self.deleted_private_projects())
-        # once the sessions table has caught up (TR-1520) the lines come from it in the same read
-        # (TR-1499); before, from a scan of events below
-        table = session_ingest.caught_up(self)
-        lines = ((sx.c.started_at, sx.c.last_line_at, sx.c.line_count) if table
-                 else (null(), null(), null()))
-        j = ss.outerjoin(st, st.c.session == ss.c.session)
-        if table:
-            j = j.outerjoin(sx, and_(sx.c.session == ss.c.session, sx.c.source == source,
-                                     sx.c.line_count > 0))
+        # the lines come from the sessions table in the same read (TR-1499)
+        j = (ss.outerjoin(st, st.c.session == ss.c.session)
+             .outerjoin(sx, and_(sx.c.session == ss.c.session, sx.c.source == source,
+                                 sx.c.line_count > 0)))
         q = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project, ss.c.seen_at,
-                    st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id, *lines,
-                    ss.c.runtime, ss.c.model)
+                    st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id, sx.c.started_at,
+                    sx.c.last_line_at, sx.c.line_count, ss.c.runtime, ss.c.model)
              .select_from(j))
         with self.sessions_db.read() as conn:
             rows = conn.execute(q).all()
-        act = None if table else self.session_activity(source, [r[0] for r in rows])
         out = []
         for r in rows:
-            if act is None:
-                first, last, n = r[11], r[12], int(r[13] or 0)
-            else:
-                first, last, n = act.get(r[0], (None, None, 0))
+            first, last, n = r[11], r[12], int(r[13] or 0)
             out.append({"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
                         "project": r[4] or r[9], "seen_at": r[5], "started_at": first or r[5],
                         "last_at": last or r[5], "lines": n, "state": r[6],
@@ -750,15 +724,12 @@ class FactoryStore:
         sessions the caller must not read (`_hidden_session`, TR-1704); `cur` is the newest
         session all the same, and `cur_hidden` says it is one of those, for the caller of this to
         blank. `projects` covers every session.
-        Once the sessions table has caught up (TR-1520) these are grouped queries, so the answer
-        stays the size of the stations; before, the same is built from the full list.
+        These are grouped queries, so the answer stays the size of the stations.
         `totals` False reads only who runs (TR-1634): `crew_id`, `station`, `cur` and `projects`,
         no earlier session and no total."""
         if not totals:
             keep = 0
-        if not session_ingest.caught_up(self):
-            return self._rollup_from_rows(source, keep, hidden, own, totals)
-        ss, sx, u = session_stations, sessions_table, session_usage
+        ss, sx = session_stations, sessions_table
         j, named, last = self._station_join(source)
         unread = case((self._hidden_session(hidden, own), 1), else_=0)
         every = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project,
@@ -826,15 +797,6 @@ class FactoryStore:
                     out.setdefault(sid, set()).add(project)
         return {k: sorted(v) for k, v in out.items()}
 
-    @staticmethod
-    def _newest_first(rows: list[dict]) -> list[dict]:
-        """station_sessions rows by last activity, newest first, ties by session id (the order the
-        grouped queries give)."""
-        rows = sorted(rows, key=lambda r: r["session"], reverse=True)
-        rows.sort(key=lambda r: r["last_at"].timestamp() if r["last_at"] else float("-inf"),
-                  reverse=True)
-        return rows
-
     def _station_spend(self, hidden):
         """A query of (crew id, station, then `_total_cols`' seven sums) over the sessions each
         station played, the replies that count for a project in `hidden` left out."""
@@ -862,11 +824,6 @@ class FactoryStore:
             q = q.select_from(ss.join(t, t.c.session == ss.c.session))
         return q.group_by(ss.c.crew_id, ss.c.station)
 
-    def _unread_sessions(self, rows: list[dict], hidden, own) -> set[str]:
-        """`_hidden_session` for station_sessions rows: the sessions of `rows` the caller must
-        not read."""
-        return self.sessions_in([r["session"] for r in rows if r["crew_id"] not in own], hidden)
-
     def unread_among(self, sessions: list[str], hidden, own) -> set[str]:
         """`_hidden_session` for session ids, a station's or not (TR-1710): those of `sessions`
         the caller must not read. A session that is no station's has no crew, so none of `own`
@@ -880,35 +837,6 @@ class FactoryStore:
                 found -= set(conn.execute(select(t.c.session).where(
                     t.c.session.in_(ids[i:i + 500]), t.c.crew_id.in_(sorted(own)))).scalars())
         return found
-
-    def _rollup_from_rows(self, source: str, keep: int, hidden=frozenset(),
-                          own=frozenset(), totals: bool = True) -> list[dict]:
-        """`station_rollup` for a cell whose sessions table has not caught up: from every row."""
-        rows = self._newest_first(self.station_sessions(source))
-        spent = self.usage_by_session([r["session"] for r in rows], hidden) if totals else {}
-        coord = self.coordination_calls(source, [r["session"] for r in rows]) if totals else {}
-        unread = self._unread_sessions(rows, hidden, own)
-        with self.sessions_db.read() as conn:
-            worked = conn.execute(self._station_projects()).all()
-        projects: dict[tuple, set] = {}
-        for cid, name, project in worked:
-            if project:
-                projects.setdefault((cid, name), set()).add(project)
-        by: dict[tuple, list[dict]] = {}
-        for r in rows:   # newest first
-            by.setdefault((r["crew_id"], r["station"]), []).append(r)
-        out = []
-        for (cid, name), ss in by.items():
-            mine = [spent[r["session"]] for r in ss if r["session"] in spent]
-            read = [r for r in ss if r["session"] not in unread]
-            earlier = [r for r in read if r is not ss[0]]
-            out.append({"crew_id": cid, "station": name, "cur": ss[0],
-                        "cur_hidden": ss[0]["session"] in unread, "earlier": earlier[:keep],
-                        "earlier_count": len(earlier),
-                        "projects": sorted(projects.get((cid, name), ())),
-                        "usage": {k: sum(x[k] for x in mine) for k in mine[0]} if mine else None,
-                        "coordination_calls": sum(coord.get(r["session"], 0) for r in read)})
-        return out
 
     def station_earlier(self, source: str, crew_id: str | None, station: str, limit: int = 50,
                         before=None, hidden=frozenset(), own=frozenset()) -> dict | None:
@@ -928,25 +856,6 @@ class FactoryStore:
                 session_states.c.state, session_states.c.reason, session_states.c.state_at,
                 named, ss.c.crew_id, sx.c.started_at, sx.c.last_line_at, sx.c.line_count)
         order = (last.desc().nulls_last(), ss.c.session.desc())
-        if not session_ingest.caught_up(self):
-            rows = [r for r in self._newest_first(self.station_sessions(source))
-                    if r["station"] == station and r["crew_id"] == crew_id]
-            if not rows:
-                return None
-            rows = rows[1:]
-            with self.sessions_db.read() as conn:
-                projects = sorted(p for *_, p in conn.execute(self._station_projects().where(mine)) if p)
-            unread = self._unread_sessions(rows, hidden, own)
-            rows = [r for r in rows if r["session"] not in unread]
-            total = len(rows)
-            if before is not None:
-                rows = [r for r in rows if r["last_at"] is not None and r["last_at"] < before]
-            page = rows[:limit]
-            while len(rows) > len(page) and rows[len(page)]["last_at"] == page[-1]["last_at"]:
-                page.append(rows[len(page)])
-            return {"earlier_count": total, "projects": projects,
-                    "sessions": page,
-                    "next_before": page[-1]["last_at"] if len(rows) > len(page) else None}
         with self.sessions_db.read() as conn:
             n = conn.execute(select(func.count()).select_from(ss).where(mine)).scalar_one()
             if not n:
@@ -1213,11 +1122,8 @@ class FactoryStore:
 
     def coordination_calls(self, source: str, sessions: list[str]) -> dict[str, int]:
         """Per session, how many tool calls only coordinate the crew (TR-683, factory.is_coordination),
-        read from the sessions table, where each line was counted as it was stored (session_ingest),
-        once the table has caught up (TR-1520); before, from a scan of events. Sessions with none
-        are left out."""
-        if not session_ingest.caught_up(self):
-            return self._coordination_calls_scan(source, sessions)
+        read from the sessions table, where each line was counted as it was stored (session_ingest).
+        Sessions with none are left out."""
         t = sessions_table
         out: dict[str, int] = {}
         for i in range(0, len(sessions), 500):
@@ -1229,32 +1135,6 @@ class FactoryStore:
             with self.sessions_db.read() as conn:
                 out.update((sid, int(n)) for sid, n in conn.execute(q))
         return out
-
-    def _coordination_calls_scan(self, source: str, sessions: list[str]) -> dict[str, int]:
-        """`coordination_calls` from the events table: what a cell not yet caught up has to use, a
-        parse of each asked session's calls on every read (nothing is kept between reads)."""
-        from .factory import is_coordination
-        if not sessions:
-            return {}
-        marks = ", ".join("?" for _ in sessions)
-        with self._lock:
-            # the rendered text names each tool as "→ name(": a cheap filter before the parse
-            rows = self.con.execute(
-                f"SELECT key_value, payload FROM events WHERE source = ? AND key_value IN ({marks}) "
-                "AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' OR text LIKE '%→ SendMessage(%' "
-                "OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' OR text LIKE '%→ Cron%')",
-                [source, *sessions]).fetchall()
-        found: dict[str, int] = {}
-        for sid, pj in rows:
-            try:
-                o = json.loads(pj) if pj else {}
-            except (TypeError, ValueError):
-                continue
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if isinstance(b, dict) and b.get("type") == "tool_use" and is_coordination(b.get("name")):
-                    found[sid] = found.get(sid, 0) + 1
-        return found
 
     # ── assumptions (TR-433) ──────────────────────────────────────────────────
     @staticmethod
@@ -1601,44 +1481,6 @@ class FactoryStore:
         log.warning("%d challenger line(s) lost, the sessions database did not take them (%s): %s",
                     len(rows), type(ex).__name__, "; ".join(named))
 
-    def _challenges_fill(self) -> None:
-        """Copy challenger lines stored before `challenges` existed, or while a write to it
-        failed. One scan of the events at open, then only the lines `append` records. It scans once
-        and records it (`challenges_filled`, TR-1613)."""
-        if session_ingest.filled_once(self, session_ingest.CHALLENGES_FILLED):
-            return
-        rows = self.con.execute(
-            "SELECT source, coalesce(key_value, ''), event_time, event_type, "
-            "coalesce(json_extract_string(labels, '$.branch'), ''), "
-            "json_extract_string(labels, '$.tares_project'), payload FROM events "
-            "WHERE event_type IN ('challenge_commit', 'challenge_waived', 'challenge_plan')"
-            ).fetchall()
-        rows = self._challenges_without_nul(
-            [r for r in rows if session_ingest.holds_session(self, r[1])])
-        if rows:
-            self._record_challenges(rows)
-        session_ingest.set_filled(self, session_ingest.CHALLENGES_FILLED)
-
-    def _challenges_without_nul(self, rows: list[tuple]) -> list[tuple]:
-        """The fill's rows (`_record_challenges`' shape) with the branch and project a posted line
-        has now: without NULs. DuckDB may hold lines from before they were dropped (TR-1707), and
-        Postgres takes none in text. On SQLite an older version could keep a line under its branch
-        as it was: that one is not kept a second time."""
-        db, t = self.sessions_db, challenges_table.c
-        out = []
-        for source, key, at, typ, branch, project, payload in rows:
-            if "\x00" in branch + (project or ""):
-                if "\x00" in branch and db.dialect == "sqlite":
-                    with db.read() as conn:
-                        if conn.execute(select(t.branch).where(
-                                t.source == source, t.key_value == key, t.event_time == at,
-                                t.event_type == typ, t.branch == branch)).first():
-                            continue
-                branch = branch.replace("\x00", "")
-                project = (project or "").replace("\x00", "") or None
-            out.append((source, key, at, typ, branch, project, payload))
-        return out
-
     def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000, ends: bool = False) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it
         printed and whether it failed, oldest first: what a builder's claimed checks are
@@ -1776,8 +1618,8 @@ class FactoryStore:
 
     # ── the desk (TR-449..452) ────────────────────────────────────────────────
     def _dk_row(self, r) -> dict:
-        # `closed_at` keeps the zone it had in DuckDB, this machine's: /api/desk/answered and the
-        # crew's idle wake compare it as text with a time they kept before the move (TR-1616)
+        # `closed_at` reads in this machine's zone on SQLite, as it was written before TR-1616:
+        # /api/desk/answered and the crew's idle wake compare it as text with a time they kept
         closed = r.closed_at
         if closed is not None and self.sessions_db.dialect == "sqlite":
             closed = closed.astimezone()

@@ -47,7 +47,7 @@ Differences from bash
 Untested on real Windows (TR-946 is deferred): the long-path copy and removal, the read-only handling and the
 Windows branch of `watch.restart_self`.
 
-Standard library plus the crew modules (no duckdb, fastapi or daemon).
+Standard library plus the crew modules (no fastapi or daemon).
 """
 from __future__ import annotations
 

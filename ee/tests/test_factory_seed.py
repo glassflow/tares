@@ -2,7 +2,7 @@
 """The factory seed (TR-1604): a licensed factory store with as many rows as the real factory has.
 
 Seeds one licensed cell with `factory_seed.seed`, then checks that every table holds exactly the count
-SHAPE names (the events by source too), that it took under 4 minutes, and that Home, the Projects
+SHAPE names, that it took under 4 minutes, and that Home, the Projects
 list, the Crew pages, a project and two ticket pages answer 200 on it. TR-1607's time-target test builds on the same
 seed.
 
@@ -37,7 +37,7 @@ def _licence() -> str:
 os.environ["TZ"] = "UTC"
 time.tzset()
 _TMP = tempfile.mkdtemp(prefix="tares-factory-seed-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_LICENSE"] = _licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-factory-seed"
@@ -69,7 +69,7 @@ async def main():
                                                  "person": {"email": "sam-seed@example.com", "name": "Sam"}})
             assert r.status_code in (200, 201), r.text
             sam = {"Authorization": f"Bearer {r.json()['secret']}"}
-        print(f"== seeding ({'postgres' if os.environ.get('TARES_TEST_PG') else 'duckdb'}) ==")
+        print(f"== seeding ({'postgres' if os.environ.get('TARES_TEST_PG') else 'sqlite'}) ==")
         t = time.time()
         made = fs.seed(store)
         took = time.time() - t

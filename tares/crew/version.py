@@ -6,7 +6,7 @@ file is the one to use). `check_plugin_compat` returns one line to show when the
 older, and an empty string in every other case. It never raises: a missing or broken file, or a
 version it cannot read, counts as nothing to say.
 
-Standard library only (no duckdb, fastapi or tares.daemon), like the rest of tares.crew.
+Standard library only (no fastapi or tares.daemon), like the rest of tares.crew.
 """
 from __future__ import annotations
 

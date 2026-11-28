@@ -13,7 +13,7 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
-DB, PORT = "/tmp/keys.duckdb", "8806"
+DB, PORT = "/tmp/keys", "8806"
 AUTH = "root-token"
 
 
@@ -35,7 +35,7 @@ def H(tok):
 
 async def main():
     remove_db(DB)
-    env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": PORT, "TARES_AUTH_TOKEN": AUTH}
+    env = {**clean_env(), "TARES_HOME": DB, "TARES_PORT": PORT, "TARES_AUTH_TOKEN": AUTH}
     proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     B = f"http://127.0.0.1:{PORT}"

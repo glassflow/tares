@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
        "TARES_UI_DIST": dist, "TARES_EDITION": "factory", "TARES_OTLP_GRPC_PORT": "off"}
-for k in ("TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL"):
+for k in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "TARESD_URL"):
     env.pop(k, None)
 base = f"http://127.0.0.1:{port}"
 
@@ -91,7 +91,7 @@ from sqlalchemy import update  # noqa: E402
 from tares.session_store.tables import docs as docs_table, usecases  # noqa: E402
 from tares.store import Store  # noqa: E402
 
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 today = date.today()
 stamp = lambda days, who: f"({(today - timedelta(days=days)).isoformat()}, {who})"
 
@@ -114,5 +114,5 @@ for key, days, who in (("project-x-spec", 20, "crew-orchestrator"), ("project-x-
     with store.sessions_db.begin() as c:
         c.execute(update(docs_table).where(docs_table.c.id == ids[key]).values(
             updated_at=datetime.now(timezone.utc) - timedelta(days=days), updated_by=who))
-store.con.close()
+store.close()
 print(json.dumps(ids))

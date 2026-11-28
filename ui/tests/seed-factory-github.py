@@ -14,7 +14,7 @@ from tares import factory as factory_mod  # noqa: E402
 from tares.store import Store, now_utc  # noqa: E402
 
 home = sys.argv[1]
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 ids = {}
 API, WEB = "example-org/api", "example-org/web"
 

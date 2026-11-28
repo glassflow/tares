@@ -3,7 +3,7 @@
 Ports bash's cmd_spawn (claude-plugin/bin/factory) and station_name. The other lifecycle commands (revive,
 restart, retire, down, halt) come in TR-955; they reuse what is here.
 
-Standard library only, plus the crew modules (no duckdb, fastapi or daemon).
+Standard library only, plus the crew modules (no fastapi or daemon).
 """
 from __future__ import annotations
 

@@ -67,12 +67,10 @@ def rollup_while_a_station_appears(s, new):
 
 
 def station_appears_mid_rollup():
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     s.set_session_station("s1", "builder-1", "builder", "", None, SEEN, crew_id="crew")
     s.set_session_station("s2", "builder-2", "builder", "", None, SEEN, crew_id="crew")
-    from tares import session_ingest
     print("  on " + s.sessions_db.dialect)
-    ck("the rollup reads the sessions table", session_ingest.caught_up(s))
     base = names(s.station_rollup("claude_code"))
     ck("two stations before", base == [("crew", "builder-1"), ("crew", "builder-2")], base)
 
@@ -90,7 +88,7 @@ def station_appears_mid_rollup():
 
 
 def empty_cell():
-    s = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(), "t"))
     ck("a cell with no station answers an empty list", s.station_rollup("claude_code") == [])
     s.close()
 

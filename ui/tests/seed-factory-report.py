@@ -40,7 +40,7 @@ from datetime import datetime, timedelta, timezone
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
        "TARES_UI_DIST": dist, "TARES_EDITION": "factory", "TARES_OTLP_GRPC_PORT": "off"}
-for k in ("TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+for k in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     env.pop(k, None)
 
 
@@ -71,7 +71,7 @@ from session_helpers import seed_station, seed_usage  # noqa: E402
 from tares import factory, merge_ledger, report  # noqa: E402
 from tares.store import Store  # noqa: E402
 
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 today = datetime.now(timezone.utc).date()
 monday = today - timedelta(days=today.weekday())
 ids = {name: store.create_person(name, f"{name.lower()}@example.com")["id"] for name in ("Ada", "Bo")}
@@ -247,7 +247,7 @@ queued(b, third, 3, level="L3-review", ci_state="success", outside=True, merged_
 queued(b, older[0], 4)     # no record: it counts at the time the queue last wrote on it, now
 ids["merged"] = [factory.label(store.get_ticket(uid, tid))
                  for uid, tid in ((b, older[0]), (a, second), (a, first), (b, third))]
-store.con.close()
+store.close()
 
 
 def open_offers():
@@ -257,11 +257,11 @@ def open_offers():
 
 
 offers = with_daemon(open_offers)
-store = Store(os.path.join(home, "tares.duckdb"))
+store = Store(home)
 offer = next(o for o in offers if o["repo"] == REPO and o["kind"] == "missing test")
 store.decide_rule_proposal(offer["id"], "accepted", offer["text"], now)
 report.rebuild_all(store)
-store.con.close()
+store.close()
 
 ids["monday"] = monday.isoformat()
 ids["old_monday"] = (monday - timedelta(weeks=20)).isoformat()

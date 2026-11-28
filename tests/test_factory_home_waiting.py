@@ -25,7 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-factory-home-waiting-")
-os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_HOME"] = os.path.join(_TMP, "api")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-waiting"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
@@ -71,12 +71,8 @@ async def main():
             with store.sessions_db.begin() as conn:
                 conn.execute(update(tickets_t).where(tickets_t.c.id == key).values({col: ago(**kw)}))
             return
-        if table == "docs":                      # in the session store (TR-1610)
-            with store.sessions_db.begin() as conn:
-                conn.execute(text(sql), {"at": ago(**kw), "key": key})
-            return
-        with store._swrite:
-            store.sc.execute(sql.replace(":at", "?").replace(":key", "?"), [ago(**kw), key])
+        with store.sessions_db.begin() as conn:  # every other table is in the session store too
+            conn.execute(text(sql), {"at": ago(**kw), "key": key})
 
     def project(name, factory=True, goal="A project for the test"):
         uid = f"uc_{name.replace('-', '')}"

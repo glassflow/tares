@@ -1,8 +1,7 @@
-"""The session store: a second store, beside DuckDB, for session data (P-TR-295).
+"""The session store: the cell's one database (P-TR-295, Tares 2.0).
 
-SQLAlchemy Core (no ORM) and Alembic. SQLite (`tares.sqlite` next to the DuckDB file) locally,
-the cell's state Postgres when TARES_STATE_DSN is set. Later tickets add the tables, one Alembic
-revision each; a table that has moved out of DuckDB is listed in `tables.MOVED_TABLES`.
+SQLAlchemy Core (no ORM) and Alembic. SQLite (`tares.sqlite` in the data directory) locally, the
+cell's Postgres when TARES_STATE_DSN is set. Each table is made by an Alembic revision.
 """
 from __future__ import annotations
 

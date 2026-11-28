@@ -1,5 +1,5 @@
 # Build the console, run the backend tests against it, and scan for secrets: on every PR, on a push to main and on a
-# release tag (TR-1235). A push to main runs the light Linux set only (console, test duckdb, wheel, secrets): the tree
+# release tag (TR-1235). A push to main runs the light Linux set only (console, test sqlite, wheel, secrets): the tree
 # it merges already ran the full set on its PR. A tag `v*` (rc included) runs the full Linux set; the heavy
 # cross-platform suites (windows-crew.yml, parity-macos.yml) run on a tag, a manual run, or a PR that asks by label.
 name: CI
@@ -64,7 +64,7 @@ jobs:
         working-directory: ui
 
   # The tests named in tests/ci_list.txt, split into shards that run
-  # in parallel (tests/ci_run.py balances them). Once with each cell's state in DuckDB, once with it in
+  # in parallel (tests/ci_run.py balances them). Once with each cell's state in SQLite, once with it in
   # Postgres as a cloud cell keeps it: tests/pg_harness gives each Store its own schema.
   test:
     name: test (${{ matrix.suite }} ${{ matrix.shard }}/5)
@@ -72,11 +72,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # A draft PR and a push to main run duckdb only; postgres and mit come with ready_for_review, on every later
+        # A draft PR and a push to main run sqlite only; postgres and mit come with ready_for_review, on every later
         # push to the PR and on a release tag.
-        suite: ${{ fromJSON((github.event.pull_request.draft || github.ref == 'refs/heads/main') && '["duckdb"]' || '["duckdb","postgres","mit"]') }}
+        suite: ${{ fromJSON((github.event.pull_request.draft || github.ref == 'refs/heads/main') && '["sqlite"]' || '["sqlite","postgres","mit"]') }}
         shard: [1, 2, 3, 4, 5]
-    # test_state_postgres moves a store into it; the postgres suite keeps every store in it
+    # the postgres suite keeps every store in it
     services:
       postgres:
         image: postgres:16-alpine
@@ -154,7 +154,7 @@ jobs:
         run: python tests/factory/parity.py --shard=${{ matrix.shard }}/12
 
   # The enterprise code's own tests, ee/tests/ci_list.txt (tests/ci_run.py --suite ee), with the
-  # state in DuckDB and in Postgres. They run with a test licence the test root signed.
+  # state in SQLite and in Postgres. They run with a test licence the test root signed.
   test-ee:
     name: test-ee (${{ matrix.db }})
     if: ${{ !github.event.pull_request.draft && github.ref != 'refs/heads/main' }}
@@ -162,7 +162,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        db: [duckdb, postgres]
+        db: [sqlite, postgres]
     services:
       postgres:
         image: postgres:16-alpine

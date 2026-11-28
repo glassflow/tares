@@ -48,7 +48,7 @@ HERE = Path(__file__).resolve().parent
 
 # Tests the Windows job does not run, with the reason. Anything not listed here and named test_crew_*.py runs.
 SKIP = {
-    "test_crew_standup.py": "starts the daemon and needs DuckDB, FastAPI and httpx, which the Windows job does not install",
+    "test_crew_standup.py": "starts the daemon and needs FastAPI, SQLAlchemy and httpx, which the Windows job does not install",
 }
 
 # Tests outside tests/test_crew_*.py that the Windows job runs as well (TR-976): test_ci_windows.py runs this

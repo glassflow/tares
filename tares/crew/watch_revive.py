@@ -19,7 +19,7 @@ How it differs from the bash loop
 A restart or revive that fails is reported and tried again next round, and never ends the round: the other
 stations are still looked at.
 
-Standard library plus the crew modules (no duckdb, fastapi or daemon).
+Standard library plus the crew modules (no fastapi or daemon).
 """
 from __future__ import annotations
 

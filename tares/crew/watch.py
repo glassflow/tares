@@ -6,7 +6,7 @@ an updated plugin) is not here: those steps are separate tickets, and each regis
 lands (revive, regrant and idle_wake have: `tares/crew/watch_revive.py`, `regrant.py`, `idle_wake.py`; the Claude Code
 move of the updates step has: `cc_update.py`). Every step not yet registered falls back to nothing.
 
-Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
+Standard library plus the crew modules and psutil (no fastapi or daemon).
 
 How the watch runs
   * start() launches it detached, so closing the terminal or quitting the app does not end it: a new session on
