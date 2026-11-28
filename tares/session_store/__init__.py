@@ -170,8 +170,9 @@ class SessionStore:
             if current in OLD_REVISIONS:
                 raise OldStore(
                     f"this database was written by Tares 1.x (revision {current}); Tares 2.0 starts "
-                    "only on a converted one. Run the 2.0 migration script on it first (TR-1821), or "
-                    "keep running Tares 1.61")
+                    "only on a converted one. Run the 2.0 migration script on it first "
+                    "(scripts/migrate_to_2.py in the Tares repo, see scripts/MIGRATE_TO_2.md), "
+                    "or keep running Tares 1.61")
             if current is not None and current not in known:
                 log.warning("session store is at revision %s, which this version does not know; "
                             "leaving it as it is", current)
